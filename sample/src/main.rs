@@ -51,8 +51,8 @@ fn main() -> Result<()> {
         qt.creat_button(
             &window,
             &instance,
-            0,
-            0,
+            20,
+            30,
             w!("Example"),
             &appearance,
             None,
@@ -63,12 +63,24 @@ fn main() -> Result<()> {
         qt.creat_button(
             &window,
             &instance,
-            0,
-            100,
+            50,
+            90,
             w!("Hello"),
             &appearance,
             None,
             &button::Shape::Rounded,
+            &button::Size::Medium,
+            MouseEvent::default(),
+        )?;
+        qt.creat_button(
+            &window,
+            &instance,
+            80,
+            130,
+            w!("Hello"),
+            &appearance,
+            None,
+            &button::Shape::Circular,
             &button::Size::Medium,
             MouseEvent::default(),
         )?;

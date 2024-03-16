@@ -81,13 +81,14 @@ struct Context {
     text_format: IDWriteTextFormat,
     render_target: ID2D1HwndRenderTarget,
     stroke_style: ID2D1StrokeStyle,
-    frame_brush: ID2D1SolidColorBrush,
-    text_brush: ID2D1SolidColorBrush,
     animation_manager: IUIAnimationManager2,
     animation_timer: IUIAnimationTimer,
     transition_library: IUIAnimationTransitionLibrary2,
     background_color_variable: IUIAnimationVariable2,
+    border_color_variable: IUIAnimationVariable2,
+    text_color_variable: IUIAnimationVariable2,
     mouse_within: bool,
+    mouse_clicking: bool,
 }
 
 impl QT {
@@ -108,7 +109,7 @@ impl QT {
         let window_class: WNDCLASSEXW = WNDCLASSEXW {
             cbSize: size_of::<WNDCLASSEXW>() as u32,
             lpszClassName: class_name,
-            style: CS_PARENTDC,
+            style: CS_OWNDC,
             lpfnWndProc: Some(window_proc),
             ..Default::default()
         };
@@ -215,16 +216,15 @@ unsafe fn on_create(window: HWND, state: State) -> Result<Context> {
     let height = get_height(&state, scaling_factor);
     let corner_diameter = match &state.shape {
         Shape::Circular => width.min(height),
-        Shape::Rounded => tokens.border_radius_medium,
-        Shape::Square => tokens.border_radius_none,
-    } * scaling_factor
-        * 2f32;
+        Shape::Rounded => tokens.border_radius_medium * 2f32,
+        Shape::Square => tokens.border_radius_none * 2f32,
+    } * scaling_factor;
 
     let region = CreateRoundRectRgn(
         0,
         0,
-        width as i32,
-        height as i32,
+        width as i32 + 1,
+        height as i32 + 1,
         corner_diameter as i32,
         corner_diameter as i32,
     );
@@ -237,7 +237,7 @@ unsafe fn on_create(window: HWND, state: State) -> Result<Context> {
         tokens.font_weight_semibold,
         DWRITE_FONT_STYLE_NORMAL,
         DWRITE_FONT_STRETCH_NORMAL,
-        tokens.font_size_base300,
+        tokens.font_size_base300 * scaling_factor,
         w!(""),
     )?;
     text_format.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER)?;
@@ -251,9 +251,6 @@ unsafe fn on_create(window: HWND, state: State) -> Result<Context> {
         &factory,
     )?;
     let stroke_style = create_style(&factory)?;
-    let frame_brush = render_target.CreateSolidColorBrush(&tokens.color_neutral_stroke1, None)?;
-    let text_brush =
-        render_target.CreateSolidColorBrush(&tokens.color_neutral_foreground1, None)?;
 
     let animation_timer: IUIAnimationTimer =
         CoCreateInstance(&UIAnimationTimer, None, CLSCTX_INPROC_SERVER)?;
@@ -273,19 +270,32 @@ unsafe fn on_create(window: HWND, state: State) -> Result<Context> {
         background_color.g as f64,
         background_color.b as f64,
     ])?;
+    let border_color = &tokens.color_neutral_stroke1;
+    let border_color_variable = animation_manager.CreateAnimationVectorVariable(&[
+        border_color.r as f64,
+        border_color.g as f64,
+        border_color.b as f64,
+    ])?;
+    let text_color = &tokens.color_neutral_foreground1;
+    let text_color_variable = animation_manager.CreateAnimationVectorVariable(&[
+        text_color.r as f64,
+        text_color.g as f64,
+        text_color.b as f64,
+    ])?;
     let context = Context {
         state,
         factory,
         text_format,
         render_target,
         stroke_style,
-        frame_brush,
-        text_brush,
-        mouse_within: false,
         animation_manager,
         animation_timer,
         transition_library,
         background_color_variable,
+        border_color_variable,
+        text_color_variable,
+        mouse_within: false,
+        mouse_clicking: false
     };
     Ok(context)
 }
@@ -334,10 +344,10 @@ unsafe fn on_paint(window: HWND, context: &Context) -> Result<()> {
         Appearance::Transparent => {}
         _ => {
             let rect = D2D_RECT_F {
-                left: tokens.stroke_width_thin * 0.5,
-                top: tokens.stroke_width_thin * 0.5,
-                right: width - tokens.stroke_width_thin * 0.5,
-                bottom: height - tokens.stroke_width_thin * 0.5,
+                left: tokens.stroke_width_thin * 0.5 * scaling_factor,
+                top: tokens.stroke_width_thin * 0.5 * scaling_factor,
+                right: width - tokens.stroke_width_thin * 0.5 * scaling_factor,
+                bottom: height - tokens.stroke_width_thin * 0.5 * scaling_factor,
             };
             let rounded_rect = D2D1_ROUNDED_RECT {
                 rect,
@@ -360,9 +370,30 @@ unsafe fn on_paint(window: HWND, context: &Context) -> Result<()> {
             context
                 .render_target
                 .FillRoundedRectangle(&rounded_rect, &background_brush);
+            context
+                .border_color_variable
+                .GetVectorValue(&mut vector_variable)?;
+            let border_color = D2D1_COLOR_F {
+                r: vector_variable[0] as f32,
+                g: vector_variable[1] as f32,
+                b: vector_variable[2] as f32,
+                a: 1.0,
+            };
+            context
+                .text_color_variable
+                .GetVectorValue(&mut vector_variable)?;
+            let border_brush = context.render_target.CreateSolidColorBrush(&border_color, None)?;
+            let text_color = D2D1_COLOR_F {
+                r: vector_variable[0] as f32,
+                g: vector_variable[1] as f32,
+                b: vector_variable[2] as f32,
+                a: 1.0,
+            };
+            let text_brush =
+                context.render_target.CreateSolidColorBrush(&text_color, None)?;
             context.render_target.DrawRoundedRectangle(
                 &rounded_rect,
-                &context.frame_brush,
+                &border_brush,
                 tokens.stroke_width_thin * scaling_factor,
                 &context.stroke_style,
             );
@@ -377,7 +408,7 @@ unsafe fn on_paint(window: HWND, context: &Context) -> Result<()> {
                 state.text.as_wide(),
                 &context.text_format,
                 &text_rect,
-                &context.text_brush,
+                &text_brush,
                 D2D1_DRAW_TEXT_OPTIONS_NONE,
                 DWRITE_MEASURING_MODE_NATURAL,
             );
@@ -389,48 +420,32 @@ unsafe fn on_paint(window: HWND, context: &Context) -> Result<()> {
     Ok(())
 }
 
-unsafe fn on_mouse_enter(window: HWND, context: &Context) -> Result<()> {
+unsafe fn change_color(context: &Context) -> Result<()> {
     let qt = &(*context.state.qt_ptr);
     let tokens = &qt.tokens;
-    let mut tme = TRACKMOUSEEVENT {
-        cbSize: size_of::<TRACKMOUSEEVENT>() as u32,
-        dwFlags: TME_LEAVE,
-        hwndTrack: window,
-        dwHoverTime: 0,
+
+    let background_color = if context.mouse_clicking {
+        &tokens.color_neutral_background1_pressed
+    } else if context.mouse_within {
+        &tokens.color_neutral_background1_hover
+    } else {
+        &tokens.color_neutral_background1
     };
-    TrackMouseEvent(&mut tme)?;
-
-    let background_color_hover = &tokens.color_neutral_background1_hover;
-    let background_color_transition_to_hover = context
-        .transition_library
-        .CreateCubicBezierLinearVectorTransition(
-            tokens.duration_faster,
-            &[
-                background_color_hover.r as f64,
-                background_color_hover.g as f64,
-                background_color_hover.b as f64,
-            ],
-            tokens.curve_easy_ease[0],
-            tokens.curve_easy_ease[1],
-            tokens.curve_easy_ease[2],
-            tokens.curve_easy_ease[3],
-        )?;
-
-    let storyboard = context.animation_manager.CreateStoryboard()?;
-    storyboard.AddTransition(
-        &context.background_color_variable,
-        &background_color_transition_to_hover,
-    )?;
-    let seconds_now = context.animation_timer.GetTime()?;
-    storyboard.Schedule(seconds_now, None)?;
-    Ok(())
-}
-
-unsafe fn on_mouse_leave(window: HWND, context: &Context) -> Result<()> {
-    let qt = &(*context.state.qt_ptr);
-    let tokens = &qt.tokens;
-    let background_color = &tokens.color_neutral_background1;
-    let background_color_hover_transition_back = context
+    let border_color = if context.mouse_clicking {
+        &tokens.color_neutral_stroke1_pressed
+    } else if context.mouse_within {
+        &tokens.color_neutral_stroke1_hover
+    } else {
+        &tokens.color_neutral_stroke1
+    };
+    let text_color = if context.mouse_clicking {
+        &tokens.color_neutral_foreground1_pressed
+    } else if context.mouse_within {
+        &tokens.color_neutral_foreground1_hover
+    } else {
+        &tokens.color_neutral_foreground1
+    };
+    let background_color_transition = context
         .transition_library
         .CreateCubicBezierLinearVectorTransition(
             tokens.duration_faster,
@@ -444,14 +459,70 @@ unsafe fn on_mouse_leave(window: HWND, context: &Context) -> Result<()> {
             tokens.curve_easy_ease[2],
             tokens.curve_easy_ease[3],
         )?;
+    let border_color_transition = context
+        .transition_library
+        .CreateCubicBezierLinearVectorTransition(
+            tokens.duration_faster,
+            &[
+                border_color.r as f64,
+                border_color.g as f64,
+                border_color.b as f64,
+            ],
+            tokens.curve_easy_ease[0],
+            tokens.curve_easy_ease[1],
+            tokens.curve_easy_ease[2],
+            tokens.curve_easy_ease[3],
+        )?;
+    let text_color_transition = context
+        .transition_library
+        .CreateCubicBezierLinearVectorTransition(
+            tokens.duration_faster,
+            &[
+                text_color.r as f64,
+                text_color.g as f64,
+                text_color.b as f64,
+            ],
+            tokens.curve_easy_ease[0],
+            tokens.curve_easy_ease[1],
+            tokens.curve_easy_ease[2],
+            tokens.curve_easy_ease[3],
+        )?;
+
     let storyboard = context.animation_manager.CreateStoryboard()?;
     storyboard.AddTransition(
         &context.background_color_variable,
-        &background_color_hover_transition_back,
+        &background_color_transition,
     )?;
-
+    storyboard.AddTransition(
+        &context.border_color_variable,
+        &border_color_transition,
+    )?;
+    storyboard.AddTransition(
+        &context.text_color_variable,
+        &text_color_transition,
+    )?;
     let seconds_now = context.animation_timer.GetTime()?;
-    storyboard.Schedule(seconds_now, None)?;
+    storyboard.Schedule(seconds_now, None)
+}
+
+unsafe fn on_mouse_enter(window: HWND, context: &Context) -> Result<()> {
+    let mut tme = TRACKMOUSEEVENT {
+        cbSize: size_of::<TRACKMOUSEEVENT>() as u32,
+        dwFlags: TME_LEAVE,
+        hwndTrack: window,
+        dwHoverTime: 0,
+    };
+    TrackMouseEvent(&mut tme)?;
+    _ = change_color(context);
+    Ok(())
+}
+
+unsafe fn on_mouse_leave(window: HWND, context: &Context) -> Result<()> {
+    _ = change_color(context);
+    Ok(())
+}
+unsafe fn on_mouse_click(window: HWND, context: &Context) -> Result<()> {
+    _ = change_color(context);
     Ok(())
 }
 
@@ -514,6 +585,7 @@ extern "system" fn window_proc(
                     } else {
                         if (*raw).mouse_within {
                             (*raw).mouse_within = false;
+                            (*raw).mouse_clicking = false;
                             let _ = on_mouse_leave(window, context);
                         }
                     }
@@ -526,9 +598,24 @@ extern "system" fn window_proc(
             let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
             let context = &*raw;
             (*raw).mouse_within = false;
+            (*raw).mouse_clicking = false;
             let _ = on_mouse_leave(window, context);
             LRESULT(0)
         },
+        WM_LBUTTONDOWN => unsafe {
+            let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
+            let context = &*raw;
+            (*raw).mouse_clicking = true;
+            let _ = change_color(context);
+            LRESULT(0)
+        },
+        WM_LBUTTONUP => unsafe {
+            let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
+            let context = &*raw;
+            (*raw).mouse_clicking = false;
+            let _ = on_mouse_click(window, context);
+            LRESULT(0)
+        }
         _ => unsafe { DefWindowProcW(window, message, w_param, l_param) },
     }
 }
