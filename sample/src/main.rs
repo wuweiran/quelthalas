@@ -47,26 +47,13 @@ fn main() -> Result<()> {
         ShowWindow(window, SW_SHOWDEFAULT);
 
         let qt = QT::new()?;
-        let appearance = button::Appearance::Secondary;
         qt.creat_button(
             &window,
             &instance,
             20,
             30,
-            w!("Example"),
-            &appearance,
-            None,
-            &button::Shape::Square,
-            &button::Size::Medium,
-            MouseEvent::default(),
-        )?;
-        qt.creat_button(
-            &window,
-            &instance,
-            50,
-            90,
-            w!("Hello"),
-            &appearance,
+            w!("Rounded"),
+            &button::Appearance::Secondary,
             None,
             &button::Shape::Rounded,
             &button::Size::Medium,
@@ -75,12 +62,48 @@ fn main() -> Result<()> {
         qt.creat_button(
             &window,
             &instance,
-            80,
             130,
-            w!("Hello"),
-            &appearance,
+            30,
+            w!("Circular"),
+            &button::Appearance::Secondary,
             None,
             &button::Shape::Circular,
+            &button::Size::Medium,
+            MouseEvent::default(),
+        )?;
+        qt.creat_button(
+            &window,
+            &instance,
+            240,
+            30,
+            w!("Square"),
+            &button::Appearance::Secondary,
+            None,
+            &button::Shape::Square,
+            &button::Size::Medium,
+            MouseEvent::default(),
+        )?;
+        qt.creat_button(
+            &window,
+            &instance,
+            130,
+            80,
+            w!("Primary"),
+            &button::Appearance::Primary,
+            None,
+            &button::Shape::Rounded,
+            &button::Size::Medium,
+            MouseEvent::default(),
+        )?;
+        qt.creat_button(
+            &window,
+            &instance,
+            240,
+            80,
+            w!("Outline"),
+            &button::Appearance::Outline,
+            None,
+            &button::Shape::Rounded,
             &button::Size::Medium,
             MouseEvent::default(),
         )?;

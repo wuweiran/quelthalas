@@ -218,7 +218,7 @@ unsafe fn on_create(window: HWND, state: State) -> Result<Context> {
         Shape::Circular => width.min(height),
         Shape::Rounded => tokens.border_radius_medium * 2f32,
         Shape::Square => tokens.border_radius_none * 2f32,
-    } * scaling_factor;
+    };
 
     let region = CreateRoundRectRgn(
         0,
@@ -334,7 +334,7 @@ unsafe fn on_paint(window: HWND, context: &Context) -> Result<()> {
         Shape::Circular => width.min(height) / 2f32,
         Shape::Rounded => tokens.border_radius_medium,
         Shape::Square => tokens.border_radius_none,
-    } * scaling_factor;
+    };
 
     BeginPaint(window, &mut ps);
 
@@ -522,6 +522,7 @@ unsafe fn on_mouse_leave(window: HWND, context: &Context) -> Result<()> {
     Ok(())
 }
 unsafe fn on_mouse_click(window: HWND, context: &Context) -> Result<()> {
+    (context.state.mouse_event.on_click)();
     _ = change_color(context);
     Ok(())
 }

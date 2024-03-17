@@ -7,7 +7,7 @@ use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use qt::theme::Tokens;
 
 pub struct MouseEvent {
-    on_click: fn(),
+    pub on_click: fn(),
 }
 
 impl Default for MouseEvent {
