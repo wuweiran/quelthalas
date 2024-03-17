@@ -2,34 +2,34 @@ use std::mem::size_of;
 
 use windows::core::*;
 use windows::Win32::Foundation::*;
-use windows::Win32::Graphics::Direct2D::Common::{D2D1_COLOR_F, D2D_RECT_F, D2D_SIZE_U};
 use windows::Win32::Graphics::Direct2D::{
-    D2D1CreateFactory, ID2D1Factory1, ID2D1HwndRenderTarget, ID2D1SolidColorBrush,
-    ID2D1StrokeStyle, D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_FACTORY_OPTIONS,
-    D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_HWND_RENDER_TARGET_PROPERTIES,
-    D2D1_RENDER_TARGET_PROPERTIES, D2D1_ROUNDED_RECT, D2D1_STROKE_STYLE_PROPERTIES,
+    D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_FACTORY_OPTIONS, D2D1_FACTORY_TYPE_SINGLE_THREADED,
+    D2D1_HWND_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_PROPERTIES, D2D1_ROUNDED_RECT,
+    D2D1_STROKE_STYLE_PROPERTIES, D2D1CreateFactory,
+    ID2D1Factory1, ID2D1HwndRenderTarget, ID2D1StrokeStyle,
 };
+use windows::Win32::Graphics::Direct2D::Common::{D2D1_COLOR_F, D2D_RECT_F, D2D_SIZE_U};
 use windows::Win32::Graphics::DirectWrite::{
-    DWriteCreateFactory, IDWriteFactory, IDWriteTextFormat, DWRITE_FACTORY_TYPE_SHARED,
-    DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_MEASURING_MODE_NATURAL,
-    DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_CENTER,
+    DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_MEASURING_MODE_NATURAL,
+    DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_CENTER, DWriteCreateFactory,
+    IDWriteFactory, IDWriteTextFormat,
 };
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, CreateRectRgn, CreateRoundRectRgn, DeleteObject, EndPaint, GetWindowRgn,
-    InvalidateRect, PtInRegion, SetWindowRgn, PAINTSTRUCT,
+    InvalidateRect, PAINTSTRUCT, PtInRegion, SetWindowRgn,
 };
-use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
+use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
 use windows::Win32::UI::Animation::{
     IUIAnimationManager2, IUIAnimationTimer, IUIAnimationTimerEventHandler_Impl,
     IUIAnimationTransitionLibrary2, IUIAnimationVariable2, UIAnimationTimer,
     UIAnimationTransitionLibrary2,
 };
 use windows::Win32::UI::Animation::{
-    IUIAnimationTimerEventHandler, IUIAnimationTimerUpdateHandler, UIAnimationManager2,
-    UI_ANIMATION_IDLE_BEHAVIOR_DISABLE,
+    IUIAnimationTimerEventHandler, IUIAnimationTimerUpdateHandler, UI_ANIMATION_IDLE_BEHAVIOR_DISABLE,
+    UIAnimationManager2,
 };
 use windows::Win32::UI::Controls::WM_MOUSELEAVE;
-use windows::Win32::UI::Input::KeyboardAndMouse::{TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT};
+use windows::Win32::UI::Input::KeyboardAndMouse::{TME_LEAVE, TrackMouseEvent, TRACKMOUSEEVENT};
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 use qt::{get_scaling_factor, MouseEvent};
@@ -77,7 +77,6 @@ struct State {
 
 struct Context {
     state: State,
-    factory: ID2D1Factory1,
     text_format: IDWriteTextFormat,
     render_target: ID2D1HwndRenderTarget,
     stroke_style: ID2D1StrokeStyle,
@@ -180,11 +179,6 @@ unsafe fn get_height(state: &State, scaling_factor: f32) -> f32 {
         + tokens.stroke_width_thin * 2f32
 }
 
-unsafe fn create_factory() -> Result<ID2D1Factory1> {
-    let options = D2D1_FACTORY_OPTIONS::default();
-    D2D1CreateFactory::<ID2D1Factory1>(D2D1_FACTORY_TYPE_SINGLE_THREADED, Some(&options))
-}
-
 fn create_render_target(
     window: &HWND,
     size: D2D_SIZE_U,
@@ -229,7 +223,8 @@ unsafe fn on_create(window: HWND, state: State) -> Result<Context> {
         corner_diameter as i32,
     );
     SetWindowRgn(window, region, TRUE);
-    let factory = create_factory()?;
+    let factory =
+        D2D1CreateFactory::<ID2D1Factory1>(D2D1_FACTORY_TYPE_SINGLE_THREADED, Some(&D2D1_FACTORY_OPTIONS::default()))?;
     let direct_write_factory = DWriteCreateFactory::<IDWriteFactory>(DWRITE_FACTORY_TYPE_SHARED)?;
     let text_format = direct_write_factory.CreateTextFormat(
         tokens.font_family_name,
@@ -264,7 +259,10 @@ unsafe fn on_create(window: HWND, state: State) -> Result<Context> {
     let timer_event_handler: IUIAnimationTimerEventHandler =
         AnimationTimerEventHandler { window }.into();
     animation_timer.SetTimerEventHandler(&timer_event_handler)?;
-    let background_color = &tokens.color_neutral_background1;
+    let background_color = match state.appearance {
+        Appearance::Primary => &tokens.color_brand_background,
+        _ => &tokens.color_neutral_background1
+    };
     let background_color_variable = animation_manager.CreateAnimationVectorVariable(&[
         background_color.r as f64,
         background_color.g as f64,
@@ -276,7 +274,10 @@ unsafe fn on_create(window: HWND, state: State) -> Result<Context> {
         border_color.g as f64,
         border_color.b as f64,
     ])?;
-    let text_color = &tokens.color_neutral_foreground1;
+    let text_color = match state.appearance {
+        Appearance::Primary => &tokens.color_neutral_foreground_on_brand,
+        _ => &tokens.color_neutral_foreground1
+    };
     let text_color_variable = animation_manager.CreateAnimationVectorVariable(&[
         text_color.r as f64,
         text_color.g as f64,
@@ -284,7 +285,6 @@ unsafe fn on_create(window: HWND, state: State) -> Result<Context> {
     ])?;
     let context = Context {
         state,
-        factory,
         text_format,
         render_target,
         stroke_style,
@@ -295,7 +295,7 @@ unsafe fn on_create(window: HWND, state: State) -> Result<Context> {
         border_color_variable,
         text_color_variable,
         mouse_within: false,
-        mouse_clicking: false
+        mouse_clicking: false,
     };
     Ok(context)
 }
@@ -370,33 +370,43 @@ unsafe fn on_paint(window: HWND, context: &Context) -> Result<()> {
             context
                 .render_target
                 .FillRoundedRectangle(&rounded_rect, &background_brush);
-            context
-                .border_color_variable
-                .GetVectorValue(&mut vector_variable)?;
-            let border_color = D2D1_COLOR_F {
-                r: vector_variable[0] as f32,
-                g: vector_variable[1] as f32,
-                b: vector_variable[2] as f32,
-                a: 1.0,
-            };
+
+            match state.appearance {
+                Appearance::Primary => {}
+                _ => {
+                    context
+                        .border_color_variable
+                        .GetVectorValue(&mut vector_variable)?;
+                    let border_color = D2D1_COLOR_F {
+                        r: vector_variable[0] as f32,
+                        g: vector_variable[1] as f32,
+                        b: vector_variable[2] as f32,
+                        a: 1.0,
+                    };
+                    let border_brush = context
+                        .render_target
+                        .CreateSolidColorBrush(&border_color, None)?;
+                    context.render_target.DrawRoundedRectangle(
+                        &rounded_rect,
+                        &border_brush,
+                        tokens.stroke_width_thin * scaling_factor,
+                        &context.stroke_style,
+                    );
+                }
+            }
+
             context
                 .text_color_variable
                 .GetVectorValue(&mut vector_variable)?;
-            let border_brush = context.render_target.CreateSolidColorBrush(&border_color, None)?;
             let text_color = D2D1_COLOR_F {
                 r: vector_variable[0] as f32,
                 g: vector_variable[1] as f32,
                 b: vector_variable[2] as f32,
                 a: 1.0,
             };
-            let text_brush =
-                context.render_target.CreateSolidColorBrush(&text_color, None)?;
-            context.render_target.DrawRoundedRectangle(
-                &rounded_rect,
-                &border_brush,
-                tokens.stroke_width_thin * scaling_factor,
-                &context.stroke_style,
-            );
+            let text_brush = context
+                .render_target
+                .CreateSolidColorBrush(&text_color, None)?;
             let spacing = get_spacing(state, scaling_factor);
             let text_rect = D2D_RECT_F {
                 left: tokens.spacing_horizontal_m + tokens.stroke_width_thin,
@@ -423,27 +433,24 @@ unsafe fn on_paint(window: HWND, context: &Context) -> Result<()> {
 unsafe fn change_color(context: &Context) -> Result<()> {
     let qt = &(*context.state.qt_ptr);
     let tokens = &qt.tokens;
+    let storyboard = context.animation_manager.CreateStoryboard()?;
 
+    let appearance = &context.state.appearance;
     let background_color = if context.mouse_clicking {
-        &tokens.color_neutral_background1_pressed
+        match appearance {
+            Appearance::Primary => &tokens.color_brand_background_pressed,
+            _ => &tokens.color_neutral_background1_pressed
+        }
     } else if context.mouse_within {
-        &tokens.color_neutral_background1_hover
+        match appearance {
+            Appearance::Primary => &tokens.color_brand_background_hover,
+            _ => &tokens.color_neutral_background1_hover
+        }
     } else {
-        &tokens.color_neutral_background1
-    };
-    let border_color = if context.mouse_clicking {
-        &tokens.color_neutral_stroke1_pressed
-    } else if context.mouse_within {
-        &tokens.color_neutral_stroke1_hover
-    } else {
-        &tokens.color_neutral_stroke1
-    };
-    let text_color = if context.mouse_clicking {
-        &tokens.color_neutral_foreground1_pressed
-    } else if context.mouse_within {
-        &tokens.color_neutral_foreground1_hover
-    } else {
-        &tokens.color_neutral_foreground1
+        match appearance {
+            Appearance::Primary => &tokens.color_brand_background,
+            _ => &tokens.color_neutral_background1
+        }
     };
     let background_color_transition = context
         .transition_library
@@ -459,20 +466,47 @@ unsafe fn change_color(context: &Context) -> Result<()> {
             tokens.curve_easy_ease[2],
             tokens.curve_easy_ease[3],
         )?;
-    let border_color_transition = context
-        .transition_library
-        .CreateCubicBezierLinearVectorTransition(
-            tokens.duration_faster,
-            &[
-                border_color.r as f64,
-                border_color.g as f64,
-                border_color.b as f64,
-            ],
-            tokens.curve_easy_ease[0],
-            tokens.curve_easy_ease[1],
-            tokens.curve_easy_ease[2],
-            tokens.curve_easy_ease[3],
-        )?;
+    storyboard.AddTransition(&context.background_color_variable, &background_color_transition)?;
+
+    match appearance {
+        Appearance::Primary => {}
+        _ => {
+
+            let border_color = if context.mouse_clicking {
+                &tokens.color_neutral_stroke1_pressed
+            } else if context.mouse_within {
+                &tokens.color_neutral_stroke1_hover
+            } else {
+                &tokens.color_neutral_stroke1
+            };
+            let border_color_transition = context
+                .transition_library
+                .CreateCubicBezierLinearVectorTransition(
+                    tokens.duration_faster,
+                    &[
+                        border_color.r as f64,
+                        border_color.g as f64,
+                        border_color.b as f64,
+                    ],
+                    tokens.curve_easy_ease[0],
+                    tokens.curve_easy_ease[1],
+                    tokens.curve_easy_ease[2],
+                    tokens.curve_easy_ease[3],
+                )?;
+            storyboard.AddTransition(&context.border_color_variable, &border_color_transition)?;
+        }
+    }
+
+    let text_color = match appearance {
+        Appearance::Primary => &tokens.color_neutral_foreground_on_brand,
+        _ => if context.mouse_clicking {
+            &tokens.color_neutral_foreground1_pressed
+        } else if context.mouse_within {
+            &tokens.color_neutral_foreground1_hover
+        } else {
+            &tokens.color_neutral_foreground1
+        }
+    };
     let text_color_transition = context
         .transition_library
         .CreateCubicBezierLinearVectorTransition(
@@ -487,20 +521,8 @@ unsafe fn change_color(context: &Context) -> Result<()> {
             tokens.curve_easy_ease[2],
             tokens.curve_easy_ease[3],
         )?;
+    storyboard.AddTransition(&context.text_color_variable, &text_color_transition)?;
 
-    let storyboard = context.animation_manager.CreateStoryboard()?;
-    storyboard.AddTransition(
-        &context.background_color_variable,
-        &background_color_transition,
-    )?;
-    storyboard.AddTransition(
-        &context.border_color_variable,
-        &border_color_transition,
-    )?;
-    storyboard.AddTransition(
-        &context.text_color_variable,
-        &text_color_transition,
-    )?;
     let seconds_now = context.animation_timer.GetTime()?;
     storyboard.Schedule(seconds_now, None)
 }
@@ -616,7 +638,7 @@ extern "system" fn window_proc(
             (*raw).mouse_clicking = false;
             let _ = on_mouse_click(window, context);
             LRESULT(0)
-        }
+        },
         _ => unsafe { DefWindowProcW(window, message, w_param, l_param) },
     }
 }
