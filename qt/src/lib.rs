@@ -3,6 +3,7 @@ extern crate self as qt;
 use windows::core::Result;
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
+use windows::Win32::UI::WindowsAndMessaging::USER_DEFAULT_SCREEN_DPI;
 
 use qt::theme::Tokens;
 
@@ -29,7 +30,7 @@ impl QT {
 }
 
 pub(crate) fn get_scaling_factor(window: &HWND) -> f32 {
-    unsafe { GetDpiForWindow(*window) as f32 / 96.0f32 }
+    unsafe { GetDpiForWindow(*window) as f32 / USER_DEFAULT_SCREEN_DPI as f32 }
 }
 
 pub mod component;

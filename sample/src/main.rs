@@ -7,6 +7,7 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 use quelthalas::component::button;
@@ -16,7 +17,6 @@ fn main() -> Result<()> {
     unsafe {
         let instance = HINSTANCE::from(GetModuleHandleW(None)?);
         CoInitializeEx(None, COINIT_MULTITHREADED).ok()?;
-        SetProcessDPIAware();
 
         //Register the window class
         let class_name = w!("Sample windows class");
@@ -46,6 +46,8 @@ fn main() -> Result<()> {
 
         ShowWindow(window, SW_SHOWDEFAULT);
 
+        let scaling_factor = GetDpiForWindow(window) / USER_DEFAULT_SCREEN_DPI;
+
         let qt = QT::new()?;
         qt.creat_button(
             &window,
@@ -62,7 +64,7 @@ fn main() -> Result<()> {
         qt.creat_button(
             &window,
             &instance,
-            130,
+            20 + 110 * scaling_factor as i32,
             30,
             w!("Circular"),
             &button::Appearance::Secondary,
@@ -74,7 +76,7 @@ fn main() -> Result<()> {
         qt.creat_button(
             &window,
             &instance,
-            240,
+            20 + 220 * scaling_factor as i32,
             30,
             w!("Square"),
             &button::Appearance::Secondary,
@@ -86,8 +88,8 @@ fn main() -> Result<()> {
         qt.creat_button(
             &window,
             &instance,
-            130,
-            80,
+             20 + 110 * scaling_factor as i32,
+            30 + 50 * scaling_factor as i32,
             w!("Primary"),
             &button::Appearance::Primary,
             None,
@@ -98,8 +100,8 @@ fn main() -> Result<()> {
         qt.creat_button(
             &window,
             &instance,
-            240,
-            80,
+            20 + 220 * scaling_factor as i32,
+            30 + 50 * scaling_factor as i32,
             w!("Outline"),
             &button::Appearance::Outline,
             None,

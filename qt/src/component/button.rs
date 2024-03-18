@@ -124,8 +124,8 @@ impl QT {
                 mouse_event,
             });
             let scaling_factor = get_scaling_factor(parent_window);
-            let width = get_width(boxed.as_ref(), scaling_factor) as i32;
-            let height = get_height(boxed.as_ref(), scaling_factor) as i32;
+            let width = (get_width(boxed.as_ref()) as f32 * scaling_factor) as i32;
+            let height = (get_height(boxed.as_ref()) as f32 * scaling_factor) as i32;
             let window = CreateWindowExW(
                 WINDOW_EX_STYLE::default(),
                 class_name,
@@ -145,38 +145,35 @@ impl QT {
     }
 }
 
-fn get_width(state: &State, scaling_factor: f32) -> f32 {
-    (match &state.size {
+fn get_width(state: &State) -> i32 {
+    match &state.size {
         Size::Small => 96,
         Size::Medium => 96,
         Size::Large => 64,
-    }) as f32
-        * scaling_factor
+    }
 }
 
-fn get_line_height(state: &State, scaling_factor: f32) -> f32 {
-    (match &state.size {
+fn get_line_height(state: &State) -> i32 {
+    match &state.size {
         Size::Small => 16,
         Size::Medium => 20,
         Size::Large => 22,
-    }) as f32
-        * scaling_factor
+    }
 }
 
-fn get_spacing(state: &State, scaling_factor: f32) -> f32 {
-    (match &state.size {
+fn get_spacing(state: &State) -> i32 {
+    match &state.size {
         Size::Small => 3,
         Size::Medium => 5,
         Size::Large => 8,
-    }) as f32
-        * scaling_factor
+    }
 }
 
-unsafe fn get_height(state: &State, scaling_factor: f32) -> f32 {
+unsafe fn get_height(state: &State) -> i32 {
     let tokens = &(*state.qt_ptr).tokens;
-    get_line_height(state, scaling_factor)
-        + get_spacing(state, scaling_factor) * 2f32
-        + tokens.stroke_width_thin * 2f32
+    get_line_height(state)
+        + get_spacing(state) * 2
+        + (tokens.stroke_width_thin * 2f32) as i32
 }
 
 fn create_render_target(
@@ -206,10 +203,10 @@ unsafe fn on_create(window: HWND, state: State) -> Result<Context> {
     let qt = &(*state.qt_ptr);
     let tokens = &qt.tokens;
     let scaling_factor = get_scaling_factor(&window);
-    let width = get_width(&state, scaling_factor);
-    let height = get_height(&state, scaling_factor);
+    let width = get_width(&state);
+    let height = get_height(&state);
     let corner_diameter = match &state.shape {
-        Shape::Circular => width.min(height),
+        Shape::Circular => width.min(height) as f32,
         Shape::Rounded => tokens.border_radius_medium * 2f32,
         Shape::Square => tokens.border_radius_none * 2f32,
     };
@@ -217,10 +214,10 @@ unsafe fn on_create(window: HWND, state: State) -> Result<Context> {
     let region = CreateRoundRectRgn(
         0,
         0,
-        width as i32 + 1,
-        height as i32 + 1,
-        corner_diameter as i32,
-        corner_diameter as i32,
+        (width as f32 * scaling_factor) as i32 + 1,
+        (height as f32 * scaling_factor) as i32 + 1,
+        (corner_diameter * scaling_factor) as i32,
+        (corner_diameter * scaling_factor) as i32,
     );
     SetWindowRgn(window, region, TRUE);
     let factory =
@@ -232,7 +229,7 @@ unsafe fn on_create(window: HWND, state: State) -> Result<Context> {
         tokens.font_weight_semibold,
         DWRITE_FONT_STYLE_NORMAL,
         DWRITE_FONT_STRETCH_NORMAL,
-        tokens.font_size_base300 * scaling_factor,
+        tokens.font_size_base300,
         w!(""),
     )?;
     text_format.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER)?;
@@ -240,8 +237,8 @@ unsafe fn on_create(window: HWND, state: State) -> Result<Context> {
     let render_target = create_render_target(
         &window,
         D2D_SIZE_U {
-            width: width as u32,
-            height: height as u32,
+            width: (width as f32 * scaling_factor) as u32,
+            height: (height as f32 * scaling_factor) as u32,
         },
         &factory,
     )?;
@@ -328,10 +325,10 @@ unsafe fn on_paint(window: HWND, context: &Context) -> Result<()> {
     let mut ps = PAINTSTRUCT::default();
     let scaling_factor = get_scaling_factor(&window);
 
-    let width = get_width(state, scaling_factor);
-    let height = get_height(state, scaling_factor);
+    let width = get_width(state);
+    let height = get_height(state);
     let corner_radius = match state.shape {
-        Shape::Circular => width.min(height) / 2f32,
+        Shape::Circular => width.min(height) as f32 / 2f32,
         Shape::Rounded => tokens.border_radius_medium,
         Shape::Square => tokens.border_radius_none,
     };
@@ -343,14 +340,13 @@ unsafe fn on_paint(window: HWND, context: &Context) -> Result<()> {
     match state.appearance {
         Appearance::Transparent => {}
         _ => {
-            let rect = D2D_RECT_F {
-                left: tokens.stroke_width_thin * 0.5 * scaling_factor,
-                top: tokens.stroke_width_thin * 0.5 * scaling_factor,
-                right: width - tokens.stroke_width_thin * 0.5 * scaling_factor,
-                bottom: height - tokens.stroke_width_thin * 0.5 * scaling_factor,
-            };
             let rounded_rect = D2D1_ROUNDED_RECT {
-                rect,
+                rect: D2D_RECT_F {
+                    left: 0f32,
+                    top: 0f32,
+                    right: width as f32,
+                    bottom: height as f32,
+                },
                 radiusX: corner_radius,
                 radiusY: corner_radius,
             };
@@ -386,10 +382,20 @@ unsafe fn on_paint(window: HWND, context: &Context) -> Result<()> {
                     let border_brush = context
                         .render_target
                         .CreateSolidColorBrush(&border_color, None)?;
+                    let rounded_rect = D2D1_ROUNDED_RECT {
+                        rect: D2D_RECT_F {
+                            left: tokens.stroke_width_thin * 0.5,
+                            top: tokens.stroke_width_thin * 0.5,
+                            right: width as f32 - tokens.stroke_width_thin * 0.5,
+                            bottom: height as f32 - tokens.stroke_width_thin * 0.5,
+                        },
+                        radiusX: corner_radius,
+                        radiusY: corner_radius,
+                    };
                     context.render_target.DrawRoundedRectangle(
                         &rounded_rect,
                         &border_brush,
-                        tokens.stroke_width_thin * scaling_factor,
+                        tokens.stroke_width_thin,
                         &context.stroke_style,
                     );
                 }
@@ -407,12 +413,12 @@ unsafe fn on_paint(window: HWND, context: &Context) -> Result<()> {
             let text_brush = context
                 .render_target
                 .CreateSolidColorBrush(&text_color, None)?;
-            let spacing = get_spacing(state, scaling_factor);
+            let spacing = get_spacing(state);
             let text_rect = D2D_RECT_F {
                 left: tokens.spacing_horizontal_m + tokens.stroke_width_thin,
-                top: spacing + tokens.stroke_width_thin,
-                right: width - tokens.spacing_horizontal_m - tokens.stroke_width_thin,
-                bottom: height - spacing - tokens.stroke_width_thin,
+                top: spacing as f32 + tokens.stroke_width_thin,
+                right: width as f32 - tokens.spacing_horizontal_m - tokens.stroke_width_thin,
+                bottom: height as f32 - spacing as f32 - tokens.stroke_width_thin,
             };
             context.render_target.DrawText(
                 state.text.as_wide(),
