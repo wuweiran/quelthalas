@@ -78,50 +78,59 @@ struct State {
 }
 
 impl State {
-    fn get_min_width(&self) -> i32 {
-        match &self.size {
+    fn get_min_width(&self) -> f32 {
+        (match &self.size {
             Size::Small => 96,
             Size::Medium => 96,
             Size::Large => 64,
-        }
+        }) as f32
     }
 
-    fn get_line_height(&self) -> i32 {
-        match &self.size {
+    fn get_line_height(&self) -> f32 {
+        (match &self.size {
             Size::Small => 16,
             Size::Medium => 20,
             Size::Large => 22,
-        }
+        }) as f32
     }
 
-    fn get_spacing(&self) -> i32 {
-        match &self.size {
+    fn get_spacing(&self) -> f32 {
+        (match &self.size {
             Size::Small => 3,
             Size::Medium => 5,
             Size::Large => 8,
+        }) as f32
+    }
+
+    unsafe fn get_horizontal_padding(&self) -> f32 {
+        let tokens = &(*self.qt_ptr).tokens;
+        match &self.size {
+            Size::Small => tokens.spacing_horizontal_s,
+            Size::Medium => tokens.spacing_horizontal_m,
+            Size::Large => tokens.spacing_horizontal_m,
         }
     }
 
-    unsafe fn get_min_height(&self) -> i32 {
+    unsafe fn get_min_height(&self) -> f32 {
         let tokens = &(*self.qt_ptr).tokens;
-        self.get_line_height() + self.get_spacing() * 2 + (tokens.stroke_width_thin * 2f32) as i32
+        self.get_line_height() + self.get_spacing() * 2f32 + tokens.stroke_width_thin * 2f32
     }
 
-    fn get_desired_icon_size(&self) -> i32 {
-        match &self.size {
+    fn get_desired_icon_size(&self) -> f32 {
+        (match &self.size {
             Size::Small => 20,
             Size::Medium => 20,
             Size::Large => 24,
-        }
+        }) as f32
     }
 
-    unsafe fn get_desired_icon_spacing(&self) -> i32 {
+    unsafe fn get_desired_icon_spacing(&self) -> f32 {
         let tokens = &(*self.qt_ptr).tokens;
-        (match &self.size {
+        match &self.size {
             Size::Small => tokens.spacing_horizontal_xs,
             Size::Medium => tokens.spacing_horizontal_xs,
             Size::Large => tokens.spacing_horizontal_s_nudge,
-        }) as i32
+        }
     }
 
     fn has_icon(&self) -> bool {
@@ -190,8 +199,8 @@ impl QT {
                 WS_TABSTOP | WS_VISIBLE | WS_CHILD,
                 x,
                 y,
-                (boxed.as_ref().get_min_width() as f32 * scaling_factor) as i32,
-                (boxed.as_ref().get_min_height() as f32 * scaling_factor) as i32,
+                (boxed.as_ref().get_min_width() * scaling_factor) as i32,
+                (boxed.as_ref().get_min_height() * scaling_factor) as i32,
                 *parent_window,
                 None,
                 *instance,
@@ -229,10 +238,15 @@ unsafe fn on_create(window: HWND, state: State) -> Result<Context> {
         Size::Medium => tokens.font_size_base300,
         Size::Large => tokens.font_size_base400,
     };
+    let font_weight = match state.size {
+        Size::Small => tokens.font_weight_regular,
+        Size::Medium => tokens.font_weight_semibold,
+        Size::Large => tokens.font_weight_semibold,
+    };
     let text_format = direct_write_factory.CreateTextFormat(
         tokens.font_family_name,
         None,
-        tokens.font_weight_semibold,
+        font_weight,
         DWRITE_FONT_STYLE_NORMAL,
         DWRITE_FONT_STRETCH_NORMAL,
         font_size,
@@ -253,16 +267,17 @@ unsafe fn on_create(window: HWND, state: State) -> Result<Context> {
     let icon_and_space_width = if state.has_icon() {
         state.get_desired_icon_spacing() + state.get_desired_icon_size()
     } else {
-        0
+        0f32
     };
-    let scaled_width = (((state.get_min_width() as f32 - 2f32 * tokens.spacing_horizontal_m)
+    let horizontal_padding = state.get_horizontal_padding();
+    let scaled_width = (((state.get_min_width() - 2f32 * horizontal_padding)
         .max(metrics.width + 2f32 * tokens.stroke_width_thin)
-        + 2f32 * tokens.spacing_horizontal_m
-        + icon_and_space_width as f32)
+        + 2f32 * horizontal_padding
+        + icon_and_space_width)
         * scaling_factor)
         .ceil() as i32;
-    let scaled_height = ((state.get_line_height() as f32 * metrics.lineCount.max(1) as f32
-        + state.get_spacing() as f32 * 2f32
+    let scaled_height = ((state.get_line_height() * metrics.lineCount.max(1) as f32
+        + state.get_spacing() * 2f32
         + tokens.stroke_width_thin * 2f32)
         * scaling_factor)
         .ceil() as i32;
@@ -310,12 +325,11 @@ unsafe fn on_create(window: HWND, state: State) -> Result<Context> {
             None => None,
             Some(svg_stream) => {
                 let device_context5 = render_target.cast::<ID2D1DeviceContext5>()?;
-                let icon_size = state.get_desired_icon_size();
                 Some(device_context5.CreateSvgDocument(
                     &svg_stream,
                     D2D_SIZE_F {
-                        width: icon_size as f32,
-                        height: icon_size as f32,
+                        width: icon.size as f32,
+                        height: icon.size as f32,
                     },
                 )?)
             }
@@ -489,13 +503,14 @@ unsafe fn on_paint(window: HWND, context: &Context) -> Result<()> {
         .render_target
         .CreateSolidColorBrush(&text_color, None)?;
     let spacing = state.get_spacing();
-    let top = spacing as f32 + tokens.stroke_width_thin;
-    let left = tokens.spacing_horizontal_m + tokens.stroke_width_thin;
-    let right = context.width - tokens.spacing_horizontal_m - tokens.stroke_width_thin;
-    let bottom = context.height - spacing as f32 - tokens.stroke_width_thin;
+    let horizontal_padding = state.get_horizontal_padding();
+    let top = spacing + tokens.stroke_width_thin;
+    let left = horizontal_padding + tokens.stroke_width_thin;
+    let right = context.width - horizontal_padding - tokens.stroke_width_thin;
+    let bottom = context.height - spacing - tokens.stroke_width_thin;
     let text_rect = if state.has_icon() {
         let icon_and_space_width =
-            (state.get_desired_icon_size() + state.get_desired_icon_spacing()) as f32;
+            state.get_desired_icon_size() + state.get_desired_icon_spacing();
         match state.icon_position.unwrap_or(IconPosition::Before) {
             IconPosition::Before => D2D_RECT_F {
                 left: left + icon_and_space_width,
@@ -532,13 +547,17 @@ unsafe fn on_paint(window: HWND, context: &Context) -> Result<()> {
             None => {}
             Some(svg) => {
                 let device_context5 = context.render_target.cast::<ID2D1DeviceContext5>()?;
+                let viewport_size = svg.GetViewportSize();
+                let desired_size = state.get_desired_icon_size();
                 match state.icon_position.unwrap_or(IconPosition::Before) {
                     IconPosition::Before => {
-                        device_context5.SetTransform(&Matrix3x2::translation(left, top))
+                        device_context5.SetTransform(&Matrix3x2::translation(
+                            left + desired_size / 2f32 - viewport_size.width / 2f32,
+                            top / 2f32 + bottom / 2f32 - viewport_size.height / 2f32));
                     }
                     IconPosition::After => device_context5.SetTransform(&Matrix3x2::translation(
-                        right - state.get_desired_icon_size() as f32,
-                        top,
+                        right - desired_size / 2f32 - viewport_size.width / 2f32,
+                        top / 2f32 + bottom / 2f32 - viewport_size.height / 2f32,
                     )),
                 }
                 device_context5.DrawSvgDocument(svg);

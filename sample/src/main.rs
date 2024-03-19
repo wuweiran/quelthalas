@@ -49,7 +49,7 @@ fn main() -> Result<()> {
         ShowWindow(window, SW_SHOWDEFAULT);
 
         let scaling_factor = GetDpiForWindow(window) / USER_DEFAULT_SCREEN_DPI;
-        let icon = Icon::calendar_month_24_regular();
+        let icon = Icon::calendar_month_regular();
 
         let qt = QT::new()?;
         qt.creat_button(
@@ -111,7 +111,7 @@ fn main() -> Result<()> {
             30 + 50 * scaling_factor as i32,
             w!("Small with calender icon"),
             &button::Appearance::Secondary,
-            None,
+            Some(&icon),
             None,
             &button::Shape::Rounded,
             &button::Size::Small,

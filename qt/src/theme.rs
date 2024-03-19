@@ -1,7 +1,7 @@
 use windows::core::w;
 use windows::core::PCWSTR;
 use windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F;
-use windows::Win32::Graphics::DirectWrite::{DWRITE_FONT_WEIGHT, DWRITE_FONT_WEIGHT_SEMI_BOLD};
+use windows::Win32::Graphics::DirectWrite::{DWRITE_FONT_WEIGHT, DWRITE_FONT_WEIGHT_REGULAR, DWRITE_FONT_WEIGHT_SEMI_BOLD};
 
 pub(crate) struct Tokens {
     pub color_neutral_background1: D2D1_COLOR_F,
@@ -19,12 +19,14 @@ pub(crate) struct Tokens {
     pub color_neutral_stroke1_pressed: D2D1_COLOR_F,
     pub stroke_width_thin: f32,
     pub font_family_name: PCWSTR,
+    pub font_weight_regular: DWRITE_FONT_WEIGHT,
     pub font_weight_semibold: DWRITE_FONT_WEIGHT,
     pub font_size_base200: f32,
     pub font_size_base300: f32,
     pub font_size_base400: f32,
     pub spacing_horizontal_xs: f32,
     pub spacing_horizontal_s_nudge: f32,
+    pub spacing_horizontal_s: f32,
     pub spacing_horizontal_m: f32,
     pub border_radius_none: f32,
     pub border_radius_medium: f32,
@@ -69,12 +71,14 @@ impl Tokens {
             color_neutral_stroke1_pressed: rgb!("#b3b3b3"),
             stroke_width_thin: 1.0,
             font_family_name: w!("Segoe UI"),
+            font_weight_regular: DWRITE_FONT_WEIGHT_REGULAR,
             font_weight_semibold: DWRITE_FONT_WEIGHT_SEMI_BOLD,
             font_size_base200: 12f32,
             font_size_base300: 14f32,
             font_size_base400: 16f32,
             spacing_horizontal_xs: 4f32,
             spacing_horizontal_s_nudge: 6f32,
+            spacing_horizontal_s: 8f32,
             spacing_horizontal_m: 12f32,
             border_radius_none: 0f32,
             border_radius_medium: 4f32,
