@@ -1,48 +1,49 @@
 use std::mem::size_of;
 
 use windows::core::*;
+use windows::Foundation::Numerics::Matrix3x2;
 use windows::Win32::Foundation::*;
-use windows::Win32::Graphics::Direct2D::{
-    D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_FACTORY_OPTIONS, D2D1_FACTORY_TYPE_SINGLE_THREADED,
-    D2D1_HWND_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_PROPERTIES, D2D1_ROUNDED_RECT,
-    D2D1_STROKE_STYLE_PROPERTIES, D2D1CreateFactory,
-    ID2D1Factory1, ID2D1HwndRenderTarget, ID2D1StrokeStyle,
+use windows::Win32::Graphics::Direct2D::Common::{
+    D2D1_COLOR_F, D2D_RECT_F, D2D_SIZE_F, D2D_SIZE_U,
 };
-use windows::Win32::Graphics::Direct2D::Common::{D2D1_COLOR_F, D2D_RECT_F, D2D_SIZE_U};
+use windows::Win32::Graphics::Direct2D::{
+    D2D1CreateFactory, ID2D1DeviceContext5, ID2D1Factory1, ID2D1HwndRenderTarget, ID2D1StrokeStyle,
+    ID2D1SvgDocument, D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_FACTORY_OPTIONS,
+    D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_HWND_RENDER_TARGET_PROPERTIES,
+    D2D1_RENDER_TARGET_PROPERTIES, D2D1_ROUNDED_RECT, D2D1_STROKE_STYLE_PROPERTIES,
+};
 use windows::Win32::Graphics::DirectWrite::{
-    DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_MEASURING_MODE_NATURAL,
-    DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_CENTER, DWriteCreateFactory,
-    IDWriteFactory, IDWriteTextFormat,
+    DWriteCreateFactory, IDWriteFactory, IDWriteTextFormat, DWRITE_FACTORY_TYPE_SHARED,
+    DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_MEASURING_MODE_NATURAL,
+    DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_TEXT_METRICS,
 };
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, CreateRectRgn, CreateRoundRectRgn, DeleteObject, EndPaint, GetWindowRgn,
-    InvalidateRect, PAINTSTRUCT, PtInRegion, SetWindowRgn,
+    InvalidateRect, PtInRegion, SetWindowRgn, PAINTSTRUCT,
 };
-use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
+use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
 use windows::Win32::UI::Animation::{
     IUIAnimationManager2, IUIAnimationTimer, IUIAnimationTimerEventHandler_Impl,
     IUIAnimationTransitionLibrary2, IUIAnimationVariable2, UIAnimationTimer,
     UIAnimationTransitionLibrary2,
 };
 use windows::Win32::UI::Animation::{
-    IUIAnimationTimerEventHandler, IUIAnimationTimerUpdateHandler, UI_ANIMATION_IDLE_BEHAVIOR_DISABLE,
-    UIAnimationManager2,
+    IUIAnimationTimerEventHandler, IUIAnimationTimerUpdateHandler, UIAnimationManager2,
+    UI_ANIMATION_IDLE_BEHAVIOR_DISABLE,
 };
 use windows::Win32::UI::Controls::WM_MOUSELEAVE;
-use windows::Win32::UI::Input::KeyboardAndMouse::{TME_LEAVE, TrackMouseEvent, TRACKMOUSEEVENT};
+use windows::Win32::UI::Input::KeyboardAndMouse::{TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT};
+use windows::Win32::UI::Shell::SHCreateMemStream;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
-use qt::{get_scaling_factor, MouseEvent};
-
+use crate::icon::Icon;
 use crate::QT;
+use crate::{get_scaling_factor, MouseEvent};
 
 #[derive(Copy, Clone)]
 pub enum Appearance {
-    Subtle,
-    Outline,
     Secondary,
     Primary,
-    Transparent,
 }
 
 #[derive(Copy, Clone)]
@@ -69,14 +70,70 @@ struct State {
     qt_ptr: *const QT,
     text: PCWSTR,
     appearance: Appearance,
+    icon: Option<Icon>,
     icon_position: Option<IconPosition>,
     shape: Shape,
     size: Size,
     mouse_event: MouseEvent,
 }
 
+impl State {
+    fn get_min_width(&self) -> i32 {
+        match &self.size {
+            Size::Small => 96,
+            Size::Medium => 96,
+            Size::Large => 64,
+        }
+    }
+
+    fn get_line_height(&self) -> i32 {
+        match &self.size {
+            Size::Small => 16,
+            Size::Medium => 20,
+            Size::Large => 22,
+        }
+    }
+
+    fn get_spacing(&self) -> i32 {
+        match &self.size {
+            Size::Small => 3,
+            Size::Medium => 5,
+            Size::Large => 8,
+        }
+    }
+
+    unsafe fn get_min_height(&self) -> i32 {
+        let tokens = &(*self.qt_ptr).tokens;
+        self.get_line_height() + self.get_spacing() * 2 + (tokens.stroke_width_thin * 2f32) as i32
+    }
+
+    fn get_desired_icon_size(&self) -> i32 {
+        match &self.size {
+            Size::Small => 20,
+            Size::Medium => 20,
+            Size::Large => 24,
+        }
+    }
+
+    unsafe fn get_desired_icon_spacing(&self) -> i32 {
+        let tokens = &(*self.qt_ptr).tokens;
+        (match &self.size {
+            Size::Small => tokens.spacing_horizontal_xs,
+            Size::Medium => tokens.spacing_horizontal_xs,
+            Size::Large => tokens.spacing_horizontal_s_nudge,
+        }) as i32
+    }
+
+    fn has_icon(&self) -> bool {
+        self.icon.is_some()
+    }
+}
+
 struct Context {
     state: State,
+    width: f32,
+    height: f32,
+    icon_svg: Option<ID2D1SvgDocument>,
     text_format: IDWriteTextFormat,
     render_target: ID2D1HwndRenderTarget,
     stroke_style: ID2D1StrokeStyle,
@@ -99,6 +156,7 @@ impl QT {
         y: i32,
         text: PCWSTR,
         appearance: &Appearance,
+        icon: Option<&Icon>,
         icon_position: Option<&IconPosition>,
         shape: &Shape,
         size: &Size,
@@ -118,14 +176,13 @@ impl QT {
                 qt_ptr: self as *const Self,
                 text,
                 appearance: *appearance,
+                icon: icon.map(|a| *a),
                 icon_position: icon_position.map(|a| *a),
                 shape: *shape,
                 size: *size,
                 mouse_event,
             });
             let scaling_factor = get_scaling_factor(parent_window);
-            let width = (get_width(boxed.as_ref()) as f32 * scaling_factor) as i32;
-            let height = (get_height(boxed.as_ref()) as f32 * scaling_factor) as i32;
             let window = CreateWindowExW(
                 WINDOW_EX_STYLE::default(),
                 class_name,
@@ -133,8 +190,8 @@ impl QT {
                 WS_TABSTOP | WS_VISIBLE | WS_CHILD,
                 x,
                 y,
-                width,
-                height,
+                (boxed.as_ref().get_min_width() as f32 * scaling_factor) as i32,
+                (boxed.as_ref().get_min_height() as f32 * scaling_factor) as i32,
                 *parent_window,
                 None,
                 *instance,
@@ -143,37 +200,6 @@ impl QT {
             Ok(window)
         }
     }
-}
-
-fn get_width(state: &State) -> i32 {
-    match &state.size {
-        Size::Small => 96,
-        Size::Medium => 96,
-        Size::Large => 64,
-    }
-}
-
-fn get_line_height(state: &State) -> i32 {
-    match &state.size {
-        Size::Small => 16,
-        Size::Medium => 20,
-        Size::Large => 22,
-    }
-}
-
-fn get_spacing(state: &State) -> i32 {
-    match &state.size {
-        Size::Small => 3,
-        Size::Medium => 5,
-        Size::Large => 8,
-    }
-}
-
-unsafe fn get_height(state: &State) -> i32 {
-    let tokens = &(*state.qt_ptr).tokens;
-    get_line_height(state)
-        + get_spacing(state) * 2
-        + (tokens.stroke_width_thin * 2f32) as i32
 }
 
 fn create_render_target(
@@ -193,56 +219,108 @@ fn create_render_target(
     }
 }
 
-fn create_style(factory: &ID2D1Factory1) -> Result<ID2D1StrokeStyle> {
-    let props = D2D1_STROKE_STYLE_PROPERTIES::default();
-
-    unsafe { factory.CreateStrokeStyle(&props, None) }
-}
-
 unsafe fn on_create(window: HWND, state: State) -> Result<Context> {
     let qt = &(*state.qt_ptr);
     let tokens = &qt.tokens;
-    let scaling_factor = get_scaling_factor(&window);
-    let width = get_width(&state);
-    let height = get_height(&state);
-    let corner_diameter = match &state.shape {
-        Shape::Circular => width.min(height) as f32,
-        Shape::Rounded => tokens.border_radius_medium * 2f32,
-        Shape::Square => tokens.border_radius_none * 2f32,
-    };
 
-    let region = CreateRoundRectRgn(
-        0,
-        0,
-        (width as f32 * scaling_factor) as i32 + 1,
-        (height as f32 * scaling_factor) as i32 + 1,
-        (corner_diameter * scaling_factor) as i32,
-        (corner_diameter * scaling_factor) as i32,
-    );
-    SetWindowRgn(window, region, TRUE);
-    let factory =
-        D2D1CreateFactory::<ID2D1Factory1>(D2D1_FACTORY_TYPE_SINGLE_THREADED, Some(&D2D1_FACTORY_OPTIONS::default()))?;
     let direct_write_factory = DWriteCreateFactory::<IDWriteFactory>(DWRITE_FACTORY_TYPE_SHARED)?;
+    let font_size = match state.size {
+        Size::Small => tokens.font_size_base200,
+        Size::Medium => tokens.font_size_base300,
+        Size::Large => tokens.font_size_base400,
+    };
     let text_format = direct_write_factory.CreateTextFormat(
         tokens.font_family_name,
         None,
         tokens.font_weight_semibold,
         DWRITE_FONT_STYLE_NORMAL,
         DWRITE_FONT_STRETCH_NORMAL,
-        tokens.font_size_base300,
+        font_size,
         w!(""),
     )?;
     text_format.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER)?;
     text_format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
+    let text_layout = direct_write_factory.CreateTextLayout(
+        state.text.as_wide(),
+        &text_format,
+        1000f32,
+        500f32,
+    )?;
+    let mut metrics = DWRITE_TEXT_METRICS::default();
+    text_layout.GetMetrics(&mut metrics)?;
+
+    let scaling_factor = get_scaling_factor(&window);
+    let icon_and_space_width = if state.has_icon() {
+        state.get_desired_icon_spacing() + state.get_desired_icon_size()
+    } else {
+        0
+    };
+    let scaled_width = (((state.get_min_width() as f32 - 2f32 * tokens.spacing_horizontal_m)
+        .max(metrics.width + 2f32 * tokens.stroke_width_thin)
+        + 2f32 * tokens.spacing_horizontal_m
+        + icon_and_space_width as f32)
+        * scaling_factor)
+        .ceil() as i32;
+    let scaled_height = ((state.get_line_height() as f32 * metrics.lineCount.max(1) as f32
+        + state.get_spacing() as f32 * 2f32
+        + tokens.stroke_width_thin * 2f32)
+        * scaling_factor)
+        .ceil() as i32;
+
+    SetWindowPos(
+        window,
+        None,
+        0,
+        0,
+        scaled_width,
+        scaled_height,
+        SWP_NOMOVE | SWP_NOZORDER,
+    )?;
+
+    let corner_diameter = match &state.shape {
+        Shape::Circular => scaled_width.min(scaled_height),
+        Shape::Rounded => (tokens.border_radius_medium * 2f32 * scaling_factor) as i32,
+        Shape::Square => (tokens.border_radius_none * 2f32 * scaling_factor) as i32,
+    };
+    let region = CreateRoundRectRgn(
+        0,
+        0,
+        scaled_width + 1,
+        scaled_height + 1,
+        corner_diameter,
+        corner_diameter,
+    );
+    SetWindowRgn(window, region, TRUE);
+    let factory = D2D1CreateFactory::<ID2D1Factory1>(
+        D2D1_FACTORY_TYPE_SINGLE_THREADED,
+        Some(&D2D1_FACTORY_OPTIONS::default()),
+    )?;
     let render_target = create_render_target(
         &window,
         D2D_SIZE_U {
-            width: (width as f32 * scaling_factor) as u32,
-            height: (height as f32 * scaling_factor) as u32,
+            width: scaled_width as u32,
+            height: scaled_height as u32,
         },
         &factory,
     )?;
-    let stroke_style = create_style(&factory)?;
+    let stroke_style = factory.CreateStrokeStyle(&D2D1_STROKE_STYLE_PROPERTIES::default(), None)?;
+    let svg_document = match state.icon {
+        None => None,
+        Some(icon) => match SHCreateMemStream(Some(icon.svg.as_bytes())) {
+            None => None,
+            Some(svg_stream) => {
+                let device_context5 = render_target.cast::<ID2D1DeviceContext5>()?;
+                let icon_size = state.get_desired_icon_size();
+                Some(device_context5.CreateSvgDocument(
+                    &svg_stream,
+                    D2D_SIZE_F {
+                        width: icon_size as f32,
+                        height: icon_size as f32,
+                    },
+                )?)
+            }
+        },
+    };
 
     let animation_timer: IUIAnimationTimer =
         CoCreateInstance(&UIAnimationTimer, None, CLSCTX_INPROC_SERVER)?;
@@ -258,7 +336,7 @@ unsafe fn on_create(window: HWND, state: State) -> Result<Context> {
     animation_timer.SetTimerEventHandler(&timer_event_handler)?;
     let background_color = match state.appearance {
         Appearance::Primary => &tokens.color_brand_background,
-        _ => &tokens.color_neutral_background1
+        _ => &tokens.color_neutral_background1,
     };
     let background_color_variable = animation_manager.CreateAnimationVectorVariable(&[
         background_color.r as f64,
@@ -273,7 +351,7 @@ unsafe fn on_create(window: HWND, state: State) -> Result<Context> {
     ])?;
     let text_color = match state.appearance {
         Appearance::Primary => &tokens.color_neutral_foreground_on_brand,
-        _ => &tokens.color_neutral_foreground1
+        _ => &tokens.color_neutral_foreground1,
     };
     let text_color_variable = animation_manager.CreateAnimationVectorVariable(&[
         text_color.r as f64,
@@ -282,8 +360,11 @@ unsafe fn on_create(window: HWND, state: State) -> Result<Context> {
     ])?;
     let context = Context {
         state,
+        height: scaled_height as f32 / scaling_factor,
+        width: scaled_width as f32 / scaling_factor,
         text_format,
         render_target,
+        icon_svg: svg_document,
         stroke_style,
         animation_manager,
         animation_timer,
@@ -314,7 +395,7 @@ impl IUIAnimationTimerEventHandler_Impl for AnimationTimerEventHandler {
         Ok(())
     }
 
-    fn OnRenderingTooSlow(&self, framespersecond: u32) -> Result<()> {
+    fn OnRenderingTooSlow(&self, _frames_per_second: u32) -> Result<()> {
         Ok(())
     }
 }
@@ -323,12 +404,9 @@ unsafe fn on_paint(window: HWND, context: &Context) -> Result<()> {
     let state = &context.state;
     let tokens = &(*state.qt_ptr).tokens;
     let mut ps = PAINTSTRUCT::default();
-    let scaling_factor = get_scaling_factor(&window);
 
-    let width = get_width(state);
-    let height = get_height(state);
     let corner_radius = match state.shape {
-        Shape::Circular => width.min(height) as f32 / 2f32,
+        Shape::Circular => context.width.min(context.height) / 2f32,
         Shape::Rounded => tokens.border_radius_medium,
         Shape::Square => tokens.border_radius_none,
     };
@@ -337,99 +415,138 @@ unsafe fn on_paint(window: HWND, context: &Context) -> Result<()> {
 
     context.render_target.BeginDraw();
 
+    let rounded_rect = D2D1_ROUNDED_RECT {
+        rect: D2D_RECT_F {
+            left: 0f32,
+            top: 0f32,
+            right: context.width,
+            bottom: context.height,
+        },
+        radiusX: corner_radius,
+        radiusY: corner_radius,
+    };
+    let mut vector_variable = [0f64; 3];
+    context
+        .background_color_variable
+        .GetVectorValue(&mut vector_variable)?;
+    let background_color = D2D1_COLOR_F {
+        r: vector_variable[0] as f32,
+        g: vector_variable[1] as f32,
+        b: vector_variable[2] as f32,
+        a: 1.0,
+    };
+    let background_brush = context
+        .render_target
+        .CreateSolidColorBrush(&background_color, None)?;
+    context
+        .render_target
+        .FillRoundedRectangle(&rounded_rect, &background_brush);
+
     match state.appearance {
-        Appearance::Transparent => {}
+        Appearance::Primary => {}
         _ => {
+            context
+                .border_color_variable
+                .GetVectorValue(&mut vector_variable)?;
+            let border_color = D2D1_COLOR_F {
+                r: vector_variable[0] as f32,
+                g: vector_variable[1] as f32,
+                b: vector_variable[2] as f32,
+                a: 1.0,
+            };
+            let border_brush = context
+                .render_target
+                .CreateSolidColorBrush(&border_color, None)?;
             let rounded_rect = D2D1_ROUNDED_RECT {
                 rect: D2D_RECT_F {
-                    left: 0f32,
-                    top: 0f32,
-                    right: width as f32,
-                    bottom: height as f32,
+                    left: tokens.stroke_width_thin * 0.5,
+                    top: tokens.stroke_width_thin * 0.5,
+                    right: context.width - tokens.stroke_width_thin * 0.5,
+                    bottom: context.height - tokens.stroke_width_thin * 0.5,
                 },
                 radiusX: corner_radius,
                 radiusY: corner_radius,
             };
-            let mut vector_variable = [0f64; 3];
-            context
-                .background_color_variable
-                .GetVectorValue(&mut vector_variable)?;
-            let background_color = D2D1_COLOR_F {
-                r: vector_variable[0] as f32,
-                g: vector_variable[1] as f32,
-                b: vector_variable[2] as f32,
-                a: 1.0,
-            };
-            let background_brush = context
-                .render_target
-                .CreateSolidColorBrush(&background_color, None)?;
-            context
-                .render_target
-                .FillRoundedRectangle(&rounded_rect, &background_brush);
-
-            match state.appearance {
-                Appearance::Primary => {}
-                _ => {
-                    context
-                        .border_color_variable
-                        .GetVectorValue(&mut vector_variable)?;
-                    let border_color = D2D1_COLOR_F {
-                        r: vector_variable[0] as f32,
-                        g: vector_variable[1] as f32,
-                        b: vector_variable[2] as f32,
-                        a: 1.0,
-                    };
-                    let border_brush = context
-                        .render_target
-                        .CreateSolidColorBrush(&border_color, None)?;
-                    let rounded_rect = D2D1_ROUNDED_RECT {
-                        rect: D2D_RECT_F {
-                            left: tokens.stroke_width_thin * 0.5,
-                            top: tokens.stroke_width_thin * 0.5,
-                            right: width as f32 - tokens.stroke_width_thin * 0.5,
-                            bottom: height as f32 - tokens.stroke_width_thin * 0.5,
-                        },
-                        radiusX: corner_radius,
-                        radiusY: corner_radius,
-                    };
-                    context.render_target.DrawRoundedRectangle(
-                        &rounded_rect,
-                        &border_brush,
-                        tokens.stroke_width_thin,
-                        &context.stroke_style,
-                    );
-                }
-            }
-
-            context
-                .text_color_variable
-                .GetVectorValue(&mut vector_variable)?;
-            let text_color = D2D1_COLOR_F {
-                r: vector_variable[0] as f32,
-                g: vector_variable[1] as f32,
-                b: vector_variable[2] as f32,
-                a: 1.0,
-            };
-            let text_brush = context
-                .render_target
-                .CreateSolidColorBrush(&text_color, None)?;
-            let spacing = get_spacing(state);
-            let text_rect = D2D_RECT_F {
-                left: tokens.spacing_horizontal_m + tokens.stroke_width_thin,
-                top: spacing as f32 + tokens.stroke_width_thin,
-                right: width as f32 - tokens.spacing_horizontal_m - tokens.stroke_width_thin,
-                bottom: height as f32 - spacing as f32 - tokens.stroke_width_thin,
-            };
-            context.render_target.DrawText(
-                state.text.as_wide(),
-                &context.text_format,
-                &text_rect,
-                &text_brush,
-                D2D1_DRAW_TEXT_OPTIONS_NONE,
-                DWRITE_MEASURING_MODE_NATURAL,
+            context.render_target.DrawRoundedRectangle(
+                &rounded_rect,
+                &border_brush,
+                tokens.stroke_width_thin,
+                &context.stroke_style,
             );
         }
     }
+
+    context
+        .text_color_variable
+        .GetVectorValue(&mut vector_variable)?;
+    let text_color = D2D1_COLOR_F {
+        r: vector_variable[0] as f32,
+        g: vector_variable[1] as f32,
+        b: vector_variable[2] as f32,
+        a: 1.0,
+    };
+    let text_brush = context
+        .render_target
+        .CreateSolidColorBrush(&text_color, None)?;
+    let spacing = state.get_spacing();
+    let top = spacing as f32 + tokens.stroke_width_thin;
+    let left = tokens.spacing_horizontal_m + tokens.stroke_width_thin;
+    let right = context.width - tokens.spacing_horizontal_m - tokens.stroke_width_thin;
+    let bottom = context.height - spacing as f32 - tokens.stroke_width_thin;
+    let text_rect = if state.has_icon() {
+        let icon_and_space_width =
+            (state.get_desired_icon_size() + state.get_desired_icon_spacing()) as f32;
+        match state.icon_position.unwrap_or(IconPosition::Before) {
+            IconPosition::Before => D2D_RECT_F {
+                left: left + icon_and_space_width,
+                top,
+                right,
+                bottom,
+            },
+            IconPosition::After => D2D_RECT_F {
+                left,
+                top,
+                right: right - icon_and_space_width,
+                bottom,
+            },
+        }
+    } else {
+        D2D_RECT_F {
+            left,
+            top,
+            right,
+            bottom,
+        }
+    };
+    context.render_target.DrawText(
+        state.text.as_wide(),
+        &context.text_format,
+        &text_rect,
+        &text_brush,
+        D2D1_DRAW_TEXT_OPTIONS_NONE,
+        DWRITE_MEASURING_MODE_NATURAL,
+    );
+
+    if state.has_icon() {
+        match &context.icon_svg {
+            None => {}
+            Some(svg) => {
+                let device_context5 = context.render_target.cast::<ID2D1DeviceContext5>()?;
+                match state.icon_position.unwrap_or(IconPosition::Before) {
+                    IconPosition::Before => {
+                        device_context5.SetTransform(&Matrix3x2::translation(left, top))
+                    }
+                    IconPosition::After => device_context5.SetTransform(&Matrix3x2::translation(
+                        right - state.get_desired_icon_size() as f32,
+                        top,
+                    )),
+                }
+                device_context5.DrawSvgDocument(svg);
+                device_context5.SetTransform(&Matrix3x2::identity());
+            }
+        }
+    }
+
     context.render_target.EndDraw(None, None)?;
 
     EndPaint(window, &ps);
@@ -445,17 +562,17 @@ unsafe fn change_color(context: &Context) -> Result<()> {
     let background_color = if context.mouse_clicking {
         match appearance {
             Appearance::Primary => &tokens.color_brand_background_pressed,
-            _ => &tokens.color_neutral_background1_pressed
+            _ => &tokens.color_neutral_background1_pressed,
         }
     } else if context.mouse_within {
         match appearance {
             Appearance::Primary => &tokens.color_brand_background_hover,
-            _ => &tokens.color_neutral_background1_hover
+            _ => &tokens.color_neutral_background1_hover,
         }
     } else {
         match appearance {
             Appearance::Primary => &tokens.color_brand_background,
-            _ => &tokens.color_neutral_background1
+            _ => &tokens.color_neutral_background1,
         }
     };
     let background_color_transition = context
@@ -472,12 +589,14 @@ unsafe fn change_color(context: &Context) -> Result<()> {
             tokens.curve_easy_ease[2],
             tokens.curve_easy_ease[3],
         )?;
-    storyboard.AddTransition(&context.background_color_variable, &background_color_transition)?;
+    storyboard.AddTransition(
+        &context.background_color_variable,
+        &background_color_transition,
+    )?;
 
     match appearance {
         Appearance::Primary => {}
         _ => {
-
             let border_color = if context.mouse_clicking {
                 &tokens.color_neutral_stroke1_pressed
             } else if context.mouse_within {
@@ -505,12 +624,14 @@ unsafe fn change_color(context: &Context) -> Result<()> {
 
     let text_color = match appearance {
         Appearance::Primary => &tokens.color_neutral_foreground_on_brand,
-        _ => if context.mouse_clicking {
-            &tokens.color_neutral_foreground1_pressed
-        } else if context.mouse_within {
-            &tokens.color_neutral_foreground1_hover
-        } else {
-            &tokens.color_neutral_foreground1
+        _ => {
+            if context.mouse_clicking {
+                &tokens.color_neutral_foreground1_pressed
+            } else if context.mouse_within {
+                &tokens.color_neutral_foreground1_hover
+            } else {
+                &tokens.color_neutral_foreground1
+            }
         }
     };
     let text_color_transition = context
@@ -533,11 +654,11 @@ unsafe fn change_color(context: &Context) -> Result<()> {
     storyboard.Schedule(seconds_now, None)
 }
 
-unsafe fn on_mouse_enter(window: HWND, context: &Context) -> Result<()> {
+unsafe fn on_mouse_enter(window: &HWND, context: &Context) -> Result<()> {
     let mut tme = TRACKMOUSEEVENT {
         cbSize: size_of::<TRACKMOUSEEVENT>() as u32,
         dwFlags: TME_LEAVE,
-        hwndTrack: window,
+        hwndTrack: *window,
         dwHoverTime: 0,
     };
     TrackMouseEvent(&mut tme)?;
@@ -545,12 +666,13 @@ unsafe fn on_mouse_enter(window: HWND, context: &Context) -> Result<()> {
     Ok(())
 }
 
-unsafe fn on_mouse_leave(window: HWND, context: &Context) -> Result<()> {
+unsafe fn on_mouse_leave(window: &HWND, context: &Context) -> Result<()> {
     _ = change_color(context);
     Ok(())
 }
-unsafe fn on_mouse_click(window: HWND, context: &Context) -> Result<()> {
-    (context.state.mouse_event.on_click)();
+
+unsafe fn on_mouse_click(window: &HWND, context: &Context) -> Result<()> {
+    (context.state.mouse_event.on_click)(window);
     _ = change_color(context);
     Ok(())
 }
@@ -598,7 +720,7 @@ extern "system" fn window_proc(
                 Shape::Square => {
                     if !(*raw).mouse_within {
                         (*raw).mouse_within = true;
-                        let _ = on_mouse_enter(window, context);
+                        let _ = on_mouse_enter(&window, context);
                     }
                 }
                 _ => {
@@ -609,13 +731,13 @@ extern "system" fn window_proc(
                     if PtInRegion(region, mouse_x, mouse_y).into() {
                         if !(*raw).mouse_within {
                             (*raw).mouse_within = true;
-                            let _ = on_mouse_enter(window, context);
+                            let _ = on_mouse_enter(&window, context);
                         }
                     } else {
                         if (*raw).mouse_within {
                             (*raw).mouse_within = false;
                             (*raw).mouse_clicking = false;
-                            let _ = on_mouse_leave(window, context);
+                            let _ = on_mouse_leave(&window, context);
                         }
                     }
                     DeleteObject(region);
@@ -628,7 +750,7 @@ extern "system" fn window_proc(
             let context = &*raw;
             (*raw).mouse_within = false;
             (*raw).mouse_clicking = false;
-            let _ = on_mouse_leave(window, context);
+            let _ = on_mouse_leave(&window, context);
             LRESULT(0)
         },
         WM_LBUTTONDOWN => unsafe {
@@ -642,7 +764,7 @@ extern "system" fn window_proc(
             let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
             let context = &*raw;
             (*raw).mouse_clicking = false;
-            let _ = on_mouse_click(window, context);
+            let _ = on_mouse_click(&window, context);
             LRESULT(0)
         },
         _ => unsafe { DefWindowProcW(window, message, w_param, l_param) },

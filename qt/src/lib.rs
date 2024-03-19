@@ -8,12 +8,14 @@ use windows::Win32::UI::WindowsAndMessaging::USER_DEFAULT_SCREEN_DPI;
 use qt::theme::Tokens;
 
 pub struct MouseEvent {
-    pub on_click: fn(),
+    pub on_click: fn(&HWND),
 }
 
 impl Default for MouseEvent {
     fn default() -> Self {
-        MouseEvent { on_click: || {} }
+        MouseEvent {
+            on_click: |_window| {},
+        }
     }
 }
 
@@ -34,4 +36,5 @@ pub(crate) fn get_scaling_factor(window: &HWND) -> f32 {
 }
 
 pub mod component;
+pub mod icon;
 mod theme;

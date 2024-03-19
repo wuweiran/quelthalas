@@ -11,6 +11,8 @@ use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 use quelthalas::component::button;
+use quelthalas::component::button::IconPosition;
+use quelthalas::icon::Icon;
 use quelthalas::{MouseEvent, QT};
 
 fn main() -> Result<()> {
@@ -47,6 +49,7 @@ fn main() -> Result<()> {
         ShowWindow(window, SW_SHOWDEFAULT);
 
         let scaling_factor = GetDpiForWindow(window) / USER_DEFAULT_SCREEN_DPI;
+        let icon = Icon::calendar_month_24_regular();
 
         let qt = QT::new()?;
         qt.creat_button(
@@ -56,6 +59,7 @@ fn main() -> Result<()> {
             30,
             w!("Rounded"),
             &button::Appearance::Secondary,
+            None,
             None,
             &button::Shape::Rounded,
             &button::Size::Medium,
@@ -69,6 +73,7 @@ fn main() -> Result<()> {
             w!("Circular"),
             &button::Appearance::Secondary,
             None,
+            None,
             &button::Shape::Circular,
             &button::Size::Medium,
             MouseEvent::default(),
@@ -81,6 +86,7 @@ fn main() -> Result<()> {
             w!("Square"),
             &button::Appearance::Secondary,
             None,
+            None,
             &button::Shape::Square,
             &button::Size::Medium,
             MouseEvent::default(),
@@ -88,10 +94,11 @@ fn main() -> Result<()> {
         qt.creat_button(
             &window,
             &instance,
-             20 + 110 * scaling_factor as i32,
-            30 + 50 * scaling_factor as i32,
+            20 + 330 * scaling_factor as i32,
+            30,
             w!("Primary"),
             &button::Appearance::Primary,
+            None,
             None,
             &button::Shape::Rounded,
             &button::Size::Medium,
@@ -100,13 +107,40 @@ fn main() -> Result<()> {
         qt.creat_button(
             &window,
             &instance,
-            20 + 220 * scaling_factor as i32,
+            20,
             30 + 50 * scaling_factor as i32,
-            w!("Outline"),
-            &button::Appearance::Outline,
+            w!("Small with calender icon"),
+            &button::Appearance::Secondary,
+            None,
             None,
             &button::Shape::Rounded,
+            &button::Size::Small,
+            MouseEvent::default(),
+        )?;
+        qt.creat_button(
+            &window,
+            &instance,
+            20,
+            30 + 100 * scaling_factor as i32,
+            w!("With calendar icon after contents"),
+            &button::Appearance::Secondary,
+            Some(&icon),
+            Some(&IconPosition::After),
+            &button::Shape::Rounded,
             &button::Size::Medium,
+            MouseEvent::default(),
+        )?;
+        qt.creat_button(
+            &window,
+            &instance,
+            20,
+            30 + 150 * scaling_factor as i32,
+            w!("Large with calender icon"),
+            &button::Appearance::Secondary,
+            Some(&icon),
+            None,
+            &button::Shape::Rounded,
+            &button::Size::Large,
             MouseEvent::default(),
         )?;
 
