@@ -12,6 +12,7 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 
 use quelthalas::component::button;
 use quelthalas::component::button::IconPosition;
+use quelthalas::component::dialog::DialogResult;
 use quelthalas::icon::Icon;
 use quelthalas::{MouseEvent, QT};
 
@@ -51,7 +52,7 @@ fn main() -> Result<()> {
         let scaling_factor = GetDpiForWindow(window) / USER_DEFAULT_SCREEN_DPI;
         let icon = Icon::calendar_month_regular();
 
-        let qt = QT::new()?;
+        let qt = QT::new();
         qt.creat_button(
             &window,
             &instance,
@@ -162,6 +163,29 @@ extern "system" fn window_process(
 ) -> LRESULT {
     unsafe {
         match message {
+            WM_CLOSE => {
+                let qt = QT::new();
+                let instance = HINSTANCE(GetWindowLongPtrW(window, GWLP_HINSTANCE));
+                match qt.open_dialog(
+                    &window,
+                    &instance,
+                    w!("Confirmation"),
+                    w!("body"),
+                    w!("content"),
+                ) {
+                    Ok(result) => {
+                        match result {
+                            DialogResult::OK => {
+                                _ = DestroyWindow(window);
+                            }
+                            DialogResult::Cancel => {}
+                            DialogResult::Close => {}
+                        }
+                        LRESULT(0)
+                    }
+                    Err(_) => LRESULT(-1),
+                }
+            }
             WM_DESTROY => {
                 PostQuitMessage(0);
                 LRESULT(0)

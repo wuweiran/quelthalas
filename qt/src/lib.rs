@@ -1,6 +1,5 @@
 extern crate self as qt;
 
-use windows::core::Result;
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::WindowsAndMessaging::USER_DEFAULT_SCREEN_DPI;
@@ -8,13 +7,13 @@ use windows::Win32::UI::WindowsAndMessaging::USER_DEFAULT_SCREEN_DPI;
 use qt::theme::Tokens;
 
 pub struct MouseEvent {
-    pub on_click: fn(&HWND),
+    pub on_click: Box<dyn Fn(&HWND)>,
 }
 
 impl Default for MouseEvent {
     fn default() -> Self {
         MouseEvent {
-            on_click: |_window| {},
+            on_click: Box::new(|_window| {}),
         }
     }
 }
@@ -24,10 +23,10 @@ pub struct QT {
 }
 
 impl QT {
-    pub fn new() -> Result<Self> {
-        Ok(QT {
+    pub fn new() -> Self {
+        QT {
             tokens: Tokens::web_light(),
-        })
+        }
     }
 }
 
