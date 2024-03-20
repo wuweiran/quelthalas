@@ -1,7 +1,9 @@
 use windows::core::w;
 use windows::core::PCWSTR;
 use windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F;
-use windows::Win32::Graphics::DirectWrite::{DWRITE_FONT_WEIGHT, DWRITE_FONT_WEIGHT_REGULAR, DWRITE_FONT_WEIGHT_SEMI_BOLD};
+use windows::Win32::Graphics::DirectWrite::{
+    DWRITE_FONT_WEIGHT, DWRITE_FONT_WEIGHT_REGULAR, DWRITE_FONT_WEIGHT_SEMI_BOLD,
+};
 
 pub(crate) struct Tokens {
     pub color_neutral_background1: D2D1_COLOR_F,

@@ -98,7 +98,7 @@ fn main() -> Result<()> {
             30,
             w!("Primary"),
             &button::Appearance::Primary,
-            None,
+            Some(&icon),
             None,
             &button::Shape::Rounded,
             &button::Size::Medium,

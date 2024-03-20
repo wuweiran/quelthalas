@@ -8,9 +8,10 @@ use windows::Win32::Graphics::Direct2D::Common::{
 };
 use windows::Win32::Graphics::Direct2D::{
     D2D1CreateFactory, ID2D1DeviceContext5, ID2D1Factory1, ID2D1HwndRenderTarget, ID2D1StrokeStyle,
-    ID2D1SvgDocument, D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_FACTORY_OPTIONS,
+    ID2D1SvgAttribute, ID2D1SvgDocument, D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_FACTORY_OPTIONS,
     D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_HWND_RENDER_TARGET_PROPERTIES,
     D2D1_RENDER_TARGET_PROPERTIES, D2D1_ROUNDED_RECT, D2D1_STROKE_STYLE_PROPERTIES,
+    D2D1_SVG_PAINT_TYPE_COLOR,
 };
 use windows::Win32::Graphics::DirectWrite::{
     DWriteCreateFactory, IDWriteFactory, IDWriteTextFormat, DWRITE_FACTORY_TYPE_SHARED,
@@ -172,14 +173,15 @@ impl QT {
         mouse_event: MouseEvent,
     ) -> Result<HWND> {
         let class_name: PCWSTR = w!("QT_BUTTON");
-        let window_class: WNDCLASSEXW = WNDCLASSEXW {
-            cbSize: size_of::<WNDCLASSEXW>() as u32,
-            lpszClassName: class_name,
-            style: CS_OWNDC,
-            lpfnWndProc: Some(window_proc),
-            ..Default::default()
-        };
         unsafe {
+            let window_class: WNDCLASSEXW = WNDCLASSEXW {
+                cbSize: size_of::<WNDCLASSEXW>() as u32,
+                lpszClassName: class_name,
+                style: CS_OWNDC,
+                lpfnWndProc: Some(window_proc),
+                hCursor: LoadCursorW(None, IDC_ARROW)?,
+                ..Default::default()
+            };
             RegisterClassExW(&window_class);
             let boxed = Box::new(State {
                 qt_ptr: self as *const Self,
@@ -228,6 +230,14 @@ fn create_render_target(
     }
 }
 
+unsafe fn set_svg_color(svg: &ID2D1SvgDocument, color: &D2D1_COLOR_F) -> Result<()> {
+    let svg_paint = svg.CreatePaint(D2D1_SVG_PAINT_TYPE_COLOR, Some(color), w!(""))?;
+    svg.GetRoot()?
+        .GetFirstChild()?
+        .SetAttributeValue(w!("fill"), &svg_paint.cast::<ID2D1SvgAttribute>()?)?;
+    Ok(())
+}
+
 unsafe fn on_create(window: HWND, state: State) -> Result<Context> {
     let qt = &(*state.qt_ptr);
     let tokens = &qt.tokens;
@@ -270,11 +280,12 @@ unsafe fn on_create(window: HWND, state: State) -> Result<Context> {
         0f32
     };
     let horizontal_padding = state.get_horizontal_padding();
-    let scaled_width = (((state.get_min_width() - 2f32 * horizontal_padding)
-        .max(metrics.width + 2f32 * tokens.stroke_width_thin)
-        + 2f32 * horizontal_padding
-        + icon_and_space_width)
-        * scaling_factor)
+    let scaled_width = ((state.get_min_width().max(
+        metrics.width
+            + 2f32 * tokens.stroke_width_thin
+            + 2f32 * horizontal_padding
+            + icon_and_space_width,
+    )) * scaling_factor)
         .ceil() as i32;
     let scaled_height = ((state.get_line_height() * metrics.lineCount.max(1) as f32
         + state.get_spacing() * 2f32
@@ -325,13 +336,19 @@ unsafe fn on_create(window: HWND, state: State) -> Result<Context> {
             None => None,
             Some(svg_stream) => {
                 let device_context5 = render_target.cast::<ID2D1DeviceContext5>()?;
-                Some(device_context5.CreateSvgDocument(
+                let svg = device_context5.CreateSvgDocument(
                     &svg_stream,
                     D2D_SIZE_F {
                         width: icon.size as f32,
                         height: icon.size as f32,
                     },
-                )?)
+                )?;
+                let color = match state.appearance {
+                    Appearance::Primary => &tokens.color_neutral_foreground_on_brand,
+                    _ => &tokens.color_neutral_foreground1,
+                };
+                _ = set_svg_color(&svg, &color);
+                Some(svg)
             }
         },
     };
@@ -509,8 +526,7 @@ unsafe fn on_paint(window: HWND, context: &Context) -> Result<()> {
     let right = context.width - horizontal_padding - tokens.stroke_width_thin;
     let bottom = context.height - spacing - tokens.stroke_width_thin;
     let text_rect = if state.has_icon() {
-        let icon_and_space_width =
-            state.get_desired_icon_size() + state.get_desired_icon_spacing();
+        let icon_and_space_width = state.get_desired_icon_size() + state.get_desired_icon_spacing();
         match state.icon_position.unwrap_or(IconPosition::Before) {
             IconPosition::Before => D2D_RECT_F {
                 left: left + icon_and_space_width,
@@ -553,7 +569,8 @@ unsafe fn on_paint(window: HWND, context: &Context) -> Result<()> {
                     IconPosition::Before => {
                         device_context5.SetTransform(&Matrix3x2::translation(
                             left + desired_size / 2f32 - viewport_size.width / 2f32,
-                            top / 2f32 + bottom / 2f32 - viewport_size.height / 2f32));
+                            top / 2f32 + bottom / 2f32 - viewport_size.height / 2f32,
+                        ));
                     }
                     IconPosition::After => device_context5.SetTransform(&Matrix3x2::translation(
                         right - desired_size / 2f32 - viewport_size.width / 2f32,
