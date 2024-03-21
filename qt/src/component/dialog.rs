@@ -24,6 +24,8 @@ struct State {
 struct Context {
     state: State,
     result: DialogResult,
+    ok_button: HWND,
+    cancel_button: HWND
 }
 impl QT {
     pub fn open_dialog(
@@ -67,44 +69,6 @@ impl QT {
                 Some(Box::<State>::into_raw(boxed) as _),
             );
 
-            self.creat_button(
-                &window,
-                &instance,
-                20,
-                30,
-                w!("OK"),
-                &button::Appearance::Primary,
-                None,
-                None,
-                &button::Shape::Rounded,
-                &button::Size::Medium,
-                MouseEvent {
-                    on_click: Box::new(move |_| {
-                        let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
-                        (*raw).result = DialogResult::OK;
-                        _ = PostMessageW(window, WM_USER, WPARAM(0), LPARAM(0));
-                    }),
-                },
-            )?;
-            self.creat_button(
-                &window,
-                &instance,
-                20 + 110 * scaling_factor as i32,
-                30,
-                w!("Cancel"),
-                &button::Appearance::Secondary,
-                None,
-                None,
-                &button::Shape::Rounded,
-                &button::Size::Medium,
-                MouseEvent {
-                    on_click: Box::new(move |_| {
-                        let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
-                        (*raw).result = DialogResult::Cancel;
-                        _ = PostMessageW(window, WM_USER, WPARAM(0), LPARAM(0));
-                    }),
-                },
-            )?;
             ShowWindow(window, SW_SHOWDEFAULT);
 
             let mut message = MSG::default();
@@ -130,10 +94,71 @@ impl QT {
 }
 
 unsafe fn on_create(window: HWND, state: State) -> Result<Context> {
+    let instance = HINSTANCE(GetWindowLongPtrW(window, GWLP_HINSTANCE));
+    let qt = &(*state.qt_ptr);
+
+    let ok_button = qt.creat_button(
+        &window,
+        &instance,
+        0,
+        0,
+        w!("OK"),
+        &button::Appearance::Primary,
+        None,
+        None,
+        &button::Shape::Rounded,
+        &button::Size::Medium,
+        MouseEvent {
+            on_click: Box::new(move |_| {
+                let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
+                (*raw).result = DialogResult::OK;
+                _ = PostMessageW(window, WM_USER, WPARAM(0), LPARAM(0));
+            }),
+        },
+    )?;
+    let cancel_button = qt.creat_button(
+        &window,
+        &instance,
+        0,
+        0,
+        w!("Cancel"),
+        &button::Appearance::Secondary,
+        None,
+        None,
+        &button::Shape::Rounded,
+        &button::Size::Medium,
+        MouseEvent {
+            on_click: Box::new(move |_| {
+                let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
+                (*raw).result = DialogResult::Cancel;
+                _ = PostMessageW(window, WM_USER, WPARAM(0), LPARAM(0));
+            }),
+        },
+    )?;
     Ok(Context {
         state,
         result: DialogResult::Close,
+        ok_button,
+        cancel_button
     })
+}
+
+unsafe fn arrange_buttons(window: HWND, context: &Context) -> Result<()> {
+    let scaling_factor = get_scaling_factor(&window);
+    let mut window_rect = RECT::default();
+    GetClientRect(window, &mut window_rect)?;
+    let mut button_rect = RECT::default();
+    GetClientRect(context.cancel_button, &mut button_rect)?;
+    let cancel_button_width = button_rect.right - button_rect.left;
+    let cancel_button_height = button_rect.bottom - button_rect.top;
+    MoveWindow(context.cancel_button, window_rect.right - (cancel_button_width + (24f32 * scaling_factor) as i32), 20, cancel_button_width, cancel_button_height, FALSE)?;
+
+    GetClientRect(context.ok_button, &mut button_rect)?;
+    let ok_button_width = button_rect.right - button_rect.left;
+    let ok_button_height = button_rect.bottom - button_rect.top;
+    MoveWindow(context.ok_button, window_rect.right - (cancel_button_width + ok_button_width + (32f32 * scaling_factor) as i32), 20, ok_button_width, ok_button_height, FALSE)?;
+
+    Ok(())
 }
 
 extern "system" fn window_proc(
@@ -143,7 +168,7 @@ extern "system" fn window_proc(
     l_param: LPARAM,
 ) -> LRESULT {
     match message {
-        WM_NCCREATE => unsafe {
+        WM_CREATE => unsafe {
             let cs = l_param.0 as *const CREATESTRUCTW;
             let raw = (*cs).lpCreateParams as *mut State;
             let state = Box::<State>::from_raw(raw);
@@ -154,10 +179,15 @@ extern "system" fn window_proc(
                     DefWindowProcW(window, message, w_param, l_param)
                 }
                 Err(_) => {
-                    _ = DestroyWindow(window);
-                    LRESULT(-1)
+                    LRESULT(FALSE.0 as isize)
                 }
             }
+        },
+        WM_SIZE => unsafe {
+            let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
+            let context = &*raw;
+            _ = arrange_buttons(window, context);
+            DefWindowProcW(window, message, w_param, l_param)
         },
         WM_DESTROY => unsafe {
             let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;

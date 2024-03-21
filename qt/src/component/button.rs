@@ -720,7 +720,7 @@ extern "system" fn window_proc(
     l_param: LPARAM,
 ) -> LRESULT {
     match message {
-        WM_NCCREATE => unsafe {
+        WM_CREATE => unsafe {
             let cs = l_param.0 as *const CREATESTRUCTW;
             let raw = (*cs).lpCreateParams as *mut State;
             let state = Box::<State>::from_raw(raw);
@@ -728,11 +728,10 @@ extern "system" fn window_proc(
                 Ok(context) => {
                     let boxed = Box::new(context);
                     SetWindowLongPtrW(window, GWLP_USERDATA, Box::<Context>::into_raw(boxed) as _);
-                    DefWindowProcW(window, message, w_param, l_param)
+                    LRESULT(TRUE.0 as isize)
                 }
                 Err(_) => {
-                    _ = DestroyWindow(window);
-                    LRESULT(-1)
+                    LRESULT(FALSE.0 as isize)
                 }
             }
         },
@@ -746,7 +745,7 @@ extern "system" fn window_proc(
             let context = &*raw;
             match on_paint(window, context) {
                 Ok(_) => LRESULT(0),
-                Err(_) => LRESULT(-1),
+                Err(_) => DefWindowProcW(window, message, w_param, l_param),
             }
         },
         WM_MOUSEMOVE => unsafe {
