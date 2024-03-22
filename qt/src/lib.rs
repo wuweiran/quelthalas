@@ -29,7 +29,7 @@ impl QT {
         Self::from(Tokens::web_light())
     }
 
-    pub fn from(tokens: Tokens) -> Self {
+    pub(crate) fn from(tokens: Tokens) -> Self {
         let typography_styles = TypographyStyles::from(&tokens);
         QT {
             tokens,

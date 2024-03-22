@@ -1,3 +1,4 @@
+#![windows_subsystem = "windows"]
 use std::mem::size_of;
 
 use windows::core::*;
