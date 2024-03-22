@@ -2,6 +2,17 @@ use std::mem::size_of;
 
 use windows::core::*;
 use windows::Win32::Foundation::*;
+use windows::Win32::Graphics::Direct2D::Common::{D2D_RECT_F, D2D_SIZE_U};
+use windows::Win32::Graphics::Direct2D::{
+    D2D1CreateFactory, ID2D1Factory1, ID2D1HwndRenderTarget, D2D1_DRAW_TEXT_OPTIONS_NONE,
+    D2D1_FACTORY_OPTIONS, D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_HWND_RENDER_TARGET_PROPERTIES,
+    D2D1_RENDER_TARGET_PROPERTIES,
+};
+use windows::Win32::Graphics::DirectWrite::{
+    DWriteCreateFactory, IDWriteFactory, IDWriteTextFormat, DWRITE_FACTORY_TYPE_SHARED,
+    DWRITE_MEASURING_MODE_NATURAL, DWRITE_TEXT_METRICS,
+};
+use windows::Win32::Graphics::Gdi::{BeginPaint, EndPaint, PAINTSTRUCT};
 use windows::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, SetActiveWindow};
 use windows::Win32::UI::WindowsAndMessaging::*;
 
@@ -17,23 +28,25 @@ pub enum DialogResult {
 
 struct State {
     qt_ptr: *const QT,
-    body: PCWSTR,
+    title: PCWSTR,
     content: PCWSTR,
 }
 
 struct Context {
     state: State,
     result: DialogResult,
+    title_text_format: IDWriteTextFormat,
+    content_text_format: IDWriteTextFormat,
+    render_target: ID2D1HwndRenderTarget,
     ok_button: HWND,
-    cancel_button: HWND
+    cancel_button: HWND,
 }
 impl QT {
     pub fn open_dialog(
         &self,
         parent_window: &HWND,
         instance: &HINSTANCE,
-        window_title: PCWSTR,
-        body: PCWSTR,
+        title: PCWSTR,
         content: PCWSTR,
     ) -> Result<DialogResult> {
         let class_name: PCWSTR = w!("QT_DIALOG");
@@ -51,25 +64,25 @@ impl QT {
             EnableWindow(*parent_window, FALSE);
             let boxed = Box::new(State {
                 qt_ptr: self as *const Self,
-                body,
+                title,
                 content,
             });
             let window = CreateWindowExW(
                 WINDOW_EX_STYLE::default(),
                 class_name,
-                window_title,
-                WS_OVERLAPPEDWINDOW,
+                title,
+                WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
                 CW_USEDEFAULT,
                 CW_USEDEFAULT,
                 (600f32 * scaling_factor) as i32,
-                400,
+                (400f32 * scaling_factor) as i32,
                 *parent_window,
                 None,
                 *instance,
                 Some(Box::<State>::into_raw(boxed) as _),
             );
 
-            ShowWindow(window, SW_SHOWDEFAULT);
+            ShowWindow(window, SW_SHOW);
 
             let mut message = MSG::default();
             let mut result = DialogResult::Cancel;
@@ -96,6 +109,27 @@ impl QT {
 unsafe fn on_create(window: HWND, state: State) -> Result<Context> {
     let instance = HINSTANCE(GetWindowLongPtrW(window, GWLP_HINSTANCE));
     let qt = &(*state.qt_ptr);
+    let direct_write_factory = DWriteCreateFactory::<IDWriteFactory>(DWRITE_FACTORY_TYPE_SHARED)?;
+    let title_typo = &qt.typography_styles.subtitle1;
+    let title_text_format = title_typo.create_text_format(&direct_write_factory)?;
+    let content_typo = &qt.typography_styles.body1;
+    let content_text_format = content_typo.create_text_format(&direct_write_factory)?;
+
+    let factory = D2D1CreateFactory::<ID2D1Factory1>(
+        D2D1_FACTORY_TYPE_SINGLE_THREADED,
+        Some(&D2D1_FACTORY_OPTIONS::default()),
+    )?;
+    let render_target = factory.CreateHwndRenderTarget(
+        &D2D1_RENDER_TARGET_PROPERTIES::default(),
+        &D2D1_HWND_RENDER_TARGET_PROPERTIES {
+            hwnd: window,
+            pixelSize: D2D_SIZE_U {
+                width: 600u32,
+                height: 400u32,
+            },
+            presentOptions: Default::default(),
+        },
+    )?;
 
     let ok_button = qt.creat_button(
         &window,
@@ -137,27 +171,159 @@ unsafe fn on_create(window: HWND, state: State) -> Result<Context> {
     )?;
     Ok(Context {
         state,
+        title_text_format,
+        content_text_format,
+        render_target,
         result: DialogResult::Close,
         ok_button,
-        cancel_button
+        cancel_button,
     })
 }
 
-unsafe fn arrange_buttons(window: HWND, context: &Context) -> Result<()> {
+unsafe fn layout(window: HWND, context: &Context) -> Result<()> {
     let scaling_factor = get_scaling_factor(&window);
-    let mut window_rect = RECT::default();
-    GetClientRect(window, &mut window_rect)?;
+
     let mut button_rect = RECT::default();
     GetClientRect(context.cancel_button, &mut button_rect)?;
     let cancel_button_width = button_rect.right - button_rect.left;
     let cancel_button_height = button_rect.bottom - button_rect.top;
-    MoveWindow(context.cancel_button, window_rect.right - (cancel_button_width + (24f32 * scaling_factor) as i32), 20, cancel_button_width, cancel_button_height, FALSE)?;
-
     GetClientRect(context.ok_button, &mut button_rect)?;
     let ok_button_width = button_rect.right - button_rect.left;
     let ok_button_height = button_rect.bottom - button_rect.top;
-    MoveWindow(context.ok_button, window_rect.right - (cancel_button_width + ok_button_width + (32f32 * scaling_factor) as i32), 20, ok_button_width, ok_button_height, FALSE)?;
 
+    let surface_padding = 24f32;
+    let gap = 8f32;
+
+    let state = &context.state;
+    let direct_write_factory = DWriteCreateFactory::<IDWriteFactory>(DWRITE_FACTORY_TYPE_SHARED)?;
+    let title_text_layout = direct_write_factory.CreateTextLayout(
+        state.title.as_wide(),
+        &context.title_text_format,
+        600f32 - 24f32 - 24f32,
+        1000f32,
+    )?;
+    let mut title_metrics = DWRITE_TEXT_METRICS::default();
+    title_text_layout.GetMetrics(&mut title_metrics)?;
+    let content_text_layout = direct_write_factory.CreateTextLayout(
+        state.content.as_wide(),
+        &context.content_text_format,
+        600f32 - 24f32 - 24f32,
+        1000f32,
+    )?;
+    let mut content_metrics = DWRITE_TEXT_METRICS::default();
+    content_text_layout.GetMetrics(&mut content_metrics)?;
+
+    let scaled_width = (((surface_padding * 2f32 + title_metrics.width)
+        .max(surface_padding * 2f32 + content_metrics.width)
+        .min(600f32))
+        * scaling_factor)
+        .ceil() as i32;
+    let buttons_top = surface_padding + title_metrics.height + gap + content_metrics.height + gap;
+    let scaled_height = ((buttons_top + surface_padding) * scaling_factor).ceil() as i32
+        + ok_button_height.max(cancel_button_height);
+
+    let mut rect = RECT {
+        left: 0,
+        top: 0,
+        right: scaled_width,
+        bottom: scaled_height,
+    };
+    AdjustWindowRect(
+        &mut rect,
+        WINDOW_STYLE(GetWindowLongPtrW(window, GWL_STYLE) as u32),
+        FALSE,
+    )?;
+    SetWindowPos(
+        window,
+        None,
+        0,
+        0,
+        rect.right - rect.left,
+        rect.bottom - rect.top,
+        SWP_NOMOVE | SWP_NOZORDER,
+    )?;
+    context.render_target.Resize(&D2D_SIZE_U {
+        width: scaled_width as u32,
+        height: scaled_height as u32,
+    })?;
+    MoveWindow(
+        context.cancel_button,
+        scaled_width - (cancel_button_width + (24f32 * scaling_factor) as i32),
+        (buttons_top * scaling_factor) as i32,
+        cancel_button_width,
+        cancel_button_height,
+        FALSE,
+    )?;
+    MoveWindow(
+        context.ok_button,
+        scaled_width - (cancel_button_width + ok_button_width + (32f32 * scaling_factor) as i32),
+        (buttons_top * scaling_factor) as i32,
+        ok_button_width,
+        ok_button_height,
+        FALSE,
+    )?;
+
+    Ok(())
+}
+
+unsafe fn on_paint(window: HWND, context: &Context) -> Result<()> {
+    let state = &context.state;
+    let tokens = &(*state.qt_ptr).tokens;
+    let mut window_rect = RECT::default();
+    GetClientRect(window, &mut window_rect)?;
+    let scaling_factor = get_scaling_factor(&window);
+    let width = (window_rect.right - window_rect.left) as f32 / scaling_factor;
+    let height = (window_rect.bottom - window_rect.top) as f32 / scaling_factor;
+
+    let mut ps = PAINTSTRUCT::default();
+    BeginPaint(window, &mut ps);
+    context.render_target.BeginDraw();
+    context
+        .render_target
+        .Clear(Some(&tokens.color_neutral_background1));
+
+    let text_brush = context
+        .render_target
+        .CreateSolidColorBrush(&tokens.color_neutral_foreground1, None)?;
+    context.render_target.DrawText(
+        state.title.as_wide(),
+        &context.title_text_format,
+        &D2D_RECT_F {
+            left: 24f32,
+            top: 24f32,
+            right: width - 24f32,
+            bottom: height - 24f32,
+        },
+        &text_brush,
+        D2D1_DRAW_TEXT_OPTIONS_NONE,
+        DWRITE_MEASURING_MODE_NATURAL,
+    );
+
+    let direct_write_factory = DWriteCreateFactory::<IDWriteFactory>(DWRITE_FACTORY_TYPE_SHARED)?;
+    let title_text_layout = direct_write_factory.CreateTextLayout(
+        state.title.as_wide(),
+        &context.title_text_format,
+        width - 24f32 - 24f32,
+        height - 24f32 - 24f32,
+    )?;
+    let mut title_metrics = DWRITE_TEXT_METRICS::default();
+    title_text_layout.GetMetrics(&mut title_metrics)?;
+    context.render_target.DrawText(
+        state.content.as_wide(),
+        &context.content_text_format,
+        &D2D_RECT_F {
+            left: 24f32,
+            top: 24f32 + title_metrics.height + 8f32,
+            right: width - 24f32,
+            bottom: height - 24f32,
+        },
+        &text_brush,
+        D2D1_DRAW_TEXT_OPTIONS_NONE,
+        DWRITE_MEASURING_MODE_NATURAL,
+    );
+
+    context.render_target.EndDraw(None, None)?;
+    EndPaint(window, &ps);
     Ok(())
 }
 
@@ -178,7 +344,8 @@ extern "system" fn window_proc(
                     SetWindowLongPtrW(window, GWLP_USERDATA, Box::<Context>::into_raw(boxed) as _);
                     DefWindowProcW(window, message, w_param, l_param)
                 }
-                Err(_) => {
+                Err(err) => {
+                    println!("{}", err);
                     LRESULT(FALSE.0 as isize)
                 }
             }
@@ -186,7 +353,13 @@ extern "system" fn window_proc(
         WM_SIZE => unsafe {
             let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
             let context = &*raw;
-            _ = arrange_buttons(window, context);
+            _ = layout(window, context);
+            DefWindowProcW(window, message, w_param, l_param)
+        },
+        WM_PAINT | WM_DISPLAYCHANGE => unsafe {
+            let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
+            let context = &*raw;
+            _ = on_paint(window, context);
             DefWindowProcW(window, message, w_param, l_param)
         },
         WM_DESTROY => unsafe {

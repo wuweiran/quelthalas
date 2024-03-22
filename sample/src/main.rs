@@ -47,7 +47,7 @@ fn main() -> Result<()> {
             None,
         );
 
-        ShowWindow(window, SW_SHOWDEFAULT);
+        ShowWindow(window, SW_SHOW);
 
         let scaling_factor = GetDpiForWindow(window) / USER_DEFAULT_SCREEN_DPI;
         let icon = Icon::calendar_month_regular();
@@ -169,9 +169,8 @@ extern "system" fn window_process(
                 match qt.open_dialog(
                     &window,
                     &instance,
-                    w!("Confirmation"),
-                    w!("body"),
-                    w!("content"),
+                    w!("Dialog title"),
+                    w!("Lorem ipsum dolor sit amet consectetur adipisicing elit. Quisquam exercitationem cumque repellendus eaque est dolor eius expedita nulla ullam? Tenetur reprehenderit aut voluptatum impedit voluptates in natus iure cumque eaque?"),
                 ) {
                     Ok(result) => {
                         match result {

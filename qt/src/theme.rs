@@ -1,10 +1,12 @@
 use windows::core::w;
+use windows::core::Result;
 use windows::core::PCWSTR;
 use windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F;
 use windows::Win32::Graphics::DirectWrite::{
+    IDWriteFactory, IDWriteTextFormat, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL,
     DWRITE_FONT_WEIGHT, DWRITE_FONT_WEIGHT_REGULAR, DWRITE_FONT_WEIGHT_SEMI_BOLD,
+    DWRITE_LINE_SPACING_METHOD_DEFAULT,
 };
-
 pub(crate) struct Tokens {
     pub color_neutral_background1: D2D1_COLOR_F,
     pub color_neutral_background1_hover: D2D1_COLOR_F,
@@ -26,6 +28,10 @@ pub(crate) struct Tokens {
     pub font_size_base200: f32,
     pub font_size_base300: f32,
     pub font_size_base400: f32,
+    pub font_size_base500: f32,
+    pub line_height_base100: f32,
+    pub line_height_base300: f32,
+    pub line_height_base500: f32,
     pub spacing_horizontal_xs: f32,
     pub spacing_horizontal_s_nudge: f32,
     pub spacing_horizontal_s: f32,
@@ -78,6 +84,10 @@ impl Tokens {
             font_size_base200: 12f32,
             font_size_base300: 14f32,
             font_size_base400: 16f32,
+            font_size_base500: 20f32,
+            line_height_base100: 14f32,
+            line_height_base300: 20f32,
+            line_height_base500: 28f32,
             spacing_horizontal_xs: 4f32,
             spacing_horizontal_s_nudge: 6f32,
             spacing_horizontal_s: 8f32,
@@ -86,6 +96,60 @@ impl Tokens {
             border_radius_medium: 4f32,
             curve_easy_ease: [0.33, 0.0, 0.67, 1.0],
             duration_faster: 0.1,
+        }
+    }
+}
+
+pub(crate) struct TypographyStyle {
+    pub font_family_name: PCWSTR,
+    pub font_size: f32,
+    pub font_weight: DWRITE_FONT_WEIGHT,
+    pub line_height: f32,
+}
+
+impl TypographyStyle {
+    pub(crate) unsafe fn create_text_format(
+        &self,
+        factory: &IDWriteFactory,
+    ) -> Result<IDWriteTextFormat> {
+        let title_text_format = factory.CreateTextFormat(
+            self.font_family_name,
+            None,
+            self.font_weight,
+            DWRITE_FONT_STYLE_NORMAL,
+            DWRITE_FONT_STRETCH_NORMAL,
+            self.font_size,
+            w!(""),
+        )?;
+        title_text_format.SetLineSpacing(
+            DWRITE_LINE_SPACING_METHOD_DEFAULT,
+            self.line_height - self.font_size,
+            self.font_size,
+        )?;
+        Ok(title_text_format)
+    }
+}
+
+pub(crate) struct TypographyStyles {
+    pub subtitle1: TypographyStyle,
+    pub body1: TypographyStyle,
+}
+
+impl TypographyStyles {
+    pub(crate) fn from(tokens: &Tokens) -> Self {
+        TypographyStyles {
+            subtitle1: TypographyStyle {
+                font_family_name: tokens.font_family_name,
+                font_size: tokens.font_size_base500,
+                font_weight: tokens.font_weight_semibold,
+                line_height: tokens.line_height_base500,
+            },
+            body1: TypographyStyle {
+                font_family_name: tokens.font_family_name,
+                font_size: tokens.font_size_base300,
+                font_weight: tokens.font_weight_regular,
+                line_height: tokens.line_height_base300,
+            },
         }
     }
 }

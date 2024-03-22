@@ -4,6 +4,7 @@ use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::WindowsAndMessaging::USER_DEFAULT_SCREEN_DPI;
 
+use crate::theme::TypographyStyles;
 use qt::theme::Tokens;
 
 pub struct MouseEvent {
@@ -20,12 +21,19 @@ impl Default for MouseEvent {
 
 pub struct QT {
     tokens: Tokens,
+    typography_styles: TypographyStyles,
 }
 
 impl QT {
     pub fn new() -> Self {
+        Self::from(Tokens::web_light())
+    }
+
+    pub fn from(tokens: Tokens) -> Self {
+        let typography_styles = TypographyStyles::from(&tokens);
         QT {
-            tokens: Tokens::web_light(),
+            tokens,
+            typography_styles,
         }
     }
 }

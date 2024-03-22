@@ -213,23 +213,6 @@ impl QT {
     }
 }
 
-fn create_render_target(
-    window: &HWND,
-    size: D2D_SIZE_U,
-    factory: &ID2D1Factory1,
-) -> Result<ID2D1HwndRenderTarget> {
-    unsafe {
-        factory.CreateHwndRenderTarget(
-            &D2D1_RENDER_TARGET_PROPERTIES::default(),
-            &D2D1_HWND_RENDER_TARGET_PROPERTIES {
-                hwnd: *window,
-                pixelSize: size,
-                presentOptions: Default::default(),
-            },
-        )
-    }
-}
-
 unsafe fn set_svg_color(svg: &ID2D1SvgDocument, color: &D2D1_COLOR_F) -> Result<()> {
     let svg_paint = svg.CreatePaint(D2D1_SVG_PAINT_TYPE_COLOR, Some(color), w!(""))?;
     svg.GetRoot()?
@@ -321,13 +304,16 @@ unsafe fn on_create(window: HWND, state: State) -> Result<Context> {
         D2D1_FACTORY_TYPE_SINGLE_THREADED,
         Some(&D2D1_FACTORY_OPTIONS::default()),
     )?;
-    let render_target = create_render_target(
-        &window,
-        D2D_SIZE_U {
-            width: scaled_width as u32,
-            height: scaled_height as u32,
+    let render_target = factory.CreateHwndRenderTarget(
+        &D2D1_RENDER_TARGET_PROPERTIES::default(),
+        &D2D1_HWND_RENDER_TARGET_PROPERTIES {
+            hwnd: window,
+            pixelSize: D2D_SIZE_U {
+                width: scaled_width as u32,
+                height: scaled_height as u32,
+            },
+            presentOptions: Default::default(),
         },
-        &factory,
     )?;
     let stroke_style = factory.CreateStrokeStyle(&D2D1_STROKE_STYLE_PROPERTIES::default(), None)?;
     let svg_document = match state.icon {
@@ -434,7 +420,6 @@ impl IUIAnimationTimerEventHandler_Impl for AnimationTimerEventHandler {
 unsafe fn on_paint(window: HWND, context: &Context) -> Result<()> {
     let state = &context.state;
     let tokens = &(*state.qt_ptr).tokens;
-    let mut ps = PAINTSTRUCT::default();
 
     let corner_radius = match state.shape {
         Shape::Circular => context.width.min(context.height) / 2f32,
@@ -442,6 +427,7 @@ unsafe fn on_paint(window: HWND, context: &Context) -> Result<()> {
         Shape::Square => tokens.border_radius_none,
     };
 
+    let mut ps = PAINTSTRUCT::default();
     BeginPaint(window, &mut ps);
 
     context.render_target.BeginDraw();
@@ -730,9 +716,7 @@ extern "system" fn window_proc(
                     SetWindowLongPtrW(window, GWLP_USERDATA, Box::<Context>::into_raw(boxed) as _);
                     LRESULT(TRUE.0 as isize)
                 }
-                Err(_) => {
-                    LRESULT(FALSE.0 as isize)
-                }
+                Err(_) => LRESULT(FALSE.0 as isize),
             }
         },
         WM_DESTROY => unsafe {
