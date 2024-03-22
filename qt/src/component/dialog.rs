@@ -233,14 +233,18 @@ unsafe fn layout(window: HWND, context: &Context) -> Result<()> {
         WINDOW_STYLE(GetWindowLongPtrW(window, GWL_STYLE) as u32),
         FALSE,
     )?;
+    let window_width = rect.right - rect.left;
+    let window_height = rect.bottom - rect.top;
+    let parent_window = GetAncestor(window, GA_PARENT);
+    GetWindowRect(parent_window, &mut rect)?;
     SetWindowPos(
         window,
         None,
-        0,
-        0,
-        rect.right - rect.left,
-        rect.bottom - rect.top,
-        SWP_NOMOVE | SWP_NOZORDER,
+        rect.left / 2 + rect.right / 2 - window_width / 2,
+        rect.top / 2 + rect.bottom / 2 - window_height / 2,
+        window_width,
+        window_height,
+        SWP_NOZORDER,
     )?;
     context.render_target.Resize(&D2D_SIZE_U {
         width: scaled_width as u32,
@@ -340,21 +344,13 @@ extern "system" fn window_proc(
             let state = Box::<State>::from_raw(raw);
             match on_create(window, *state) {
                 Ok(context) => {
+                    _ = layout(window, &context);
                     let boxed = Box::new(context);
                     SetWindowLongPtrW(window, GWLP_USERDATA, Box::<Context>::into_raw(boxed) as _);
                     DefWindowProcW(window, message, w_param, l_param)
                 }
-                Err(err) => {
-                    println!("{}", err);
-                    LRESULT(FALSE.0 as isize)
-                }
+                Err(_) => LRESULT(FALSE.0 as isize),
             }
-        },
-        WM_SIZE => unsafe {
-            let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
-            let context = &*raw;
-            _ = layout(window, context);
-            DefWindowProcW(window, message, w_param, l_param)
         },
         WM_PAINT | WM_DISPLAYCHANGE => unsafe {
             let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
