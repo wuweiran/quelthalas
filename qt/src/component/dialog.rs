@@ -26,6 +26,11 @@ pub enum DialogResult {
     Close,
 }
 
+pub enum ModelType {
+    Modal,
+    Alert,
+}
+
 struct State {
     qt_ptr: *const QT,
     title: PCWSTR,
@@ -48,6 +53,7 @@ impl QT {
         instance: &HINSTANCE,
         title: PCWSTR,
         content: PCWSTR,
+        modal_type: &ModelType,
     ) -> Result<DialogResult> {
         let class_name: PCWSTR = w!("QT_DIALOG");
         unsafe {
@@ -67,11 +73,15 @@ impl QT {
                 title,
                 content,
             });
+            let window_style = match modal_type {
+                ModelType::Modal => WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
+                ModelType::Alert => WS_OVERLAPPED | WS_DLGFRAME,
+            };
             let window = CreateWindowExW(
                 WINDOW_EX_STYLE::default(),
                 class_name,
                 title,
-                WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
+                window_style,
                 CW_USEDEFAULT,
                 CW_USEDEFAULT,
                 (600f32 * scaling_factor) as i32,

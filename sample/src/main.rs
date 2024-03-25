@@ -11,9 +11,9 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
-use quelthalas::component::button;
 use quelthalas::component::button::IconPosition;
 use quelthalas::component::dialog::DialogResult;
+use quelthalas::component::{button, dialog};
 use quelthalas::icon::Icon;
 use quelthalas::{MouseEvent, QT};
 
@@ -172,6 +172,7 @@ extern "system" fn window_process(
                     &instance,
                     w!("Dialog title"),
                     w!("Lorem ipsum dolor sit amet consectetur adipisicing elit. Quisquam exercitationem cumque repellendus eaque est dolor eius expedita nulla ullam? Tenetur reprehenderit aut voluptatum impedit voluptates in natus iure cumque eaque?"),
+                    &dialog::ModelType::Alert
                 ) {
                     Ok(result) => {
                         match result {
