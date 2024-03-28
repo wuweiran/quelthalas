@@ -50,102 +50,6 @@ fn main() -> Result<()> {
 
         ShowWindow(window, SW_SHOW);
 
-        let scaling_factor = GetDpiForWindow(window) / USER_DEFAULT_SCREEN_DPI;
-        let icon = Icon::calendar_month_regular();
-
-        let qt = QT::new();
-        qt.creat_button(
-            &window,
-            &instance,
-            20,
-            30,
-            w!("Rounded"),
-            &button::Appearance::Secondary,
-            None,
-            None,
-            &button::Shape::Rounded,
-            &button::Size::Medium,
-            MouseEvent::default(),
-        )?;
-        qt.creat_button(
-            &window,
-            &instance,
-            20 + 110 * scaling_factor as i32,
-            30,
-            w!("Circular"),
-            &button::Appearance::Secondary,
-            None,
-            None,
-            &button::Shape::Circular,
-            &button::Size::Medium,
-            MouseEvent::default(),
-        )?;
-        qt.creat_button(
-            &window,
-            &instance,
-            20 + 220 * scaling_factor as i32,
-            30,
-            w!("Square"),
-            &button::Appearance::Secondary,
-            None,
-            None,
-            &button::Shape::Square,
-            &button::Size::Medium,
-            MouseEvent::default(),
-        )?;
-        qt.creat_button(
-            &window,
-            &instance,
-            20 + 330 * scaling_factor as i32,
-            30,
-            w!("Primary"),
-            &button::Appearance::Primary,
-            Some(&icon),
-            None,
-            &button::Shape::Rounded,
-            &button::Size::Medium,
-            MouseEvent::default(),
-        )?;
-        qt.creat_button(
-            &window,
-            &instance,
-            20,
-            30 + 50 * scaling_factor as i32,
-            w!("Small with calender icon"),
-            &button::Appearance::Secondary,
-            Some(&icon),
-            None,
-            &button::Shape::Rounded,
-            &button::Size::Small,
-            MouseEvent::default(),
-        )?;
-        qt.creat_button(
-            &window,
-            &instance,
-            20,
-            30 + 100 * scaling_factor as i32,
-            w!("With calendar icon after contents"),
-            &button::Appearance::Secondary,
-            Some(&icon),
-            Some(&IconPosition::After),
-            &button::Shape::Rounded,
-            &button::Size::Medium,
-            MouseEvent::default(),
-        )?;
-        qt.creat_button(
-            &window,
-            &instance,
-            20,
-            30 + 150 * scaling_factor as i32,
-            w!("Large with calender icon"),
-            &button::Appearance::Secondary,
-            Some(&icon),
-            None,
-            &button::Shape::Rounded,
-            &button::Size::Large,
-            MouseEvent::default(),
-        )?;
-
         let mut message = MSG::default();
         while GetMessageW(&mut message, None, 0, 0).into() {
             TranslateMessage(&message);
@@ -164,8 +68,109 @@ extern "system" fn window_process(
 ) -> LRESULT {
     unsafe {
         match message {
+            WM_CREATE => {
+                let qt = Box::new(QT::new());
+                let instance = HINSTANCE(GetWindowLongPtrW(window, GWLP_HINSTANCE));
+                let scaling_factor = GetDpiForWindow(window) / USER_DEFAULT_SCREEN_DPI;
+                let icon = Icon::calendar_month_regular();
+
+                _ = qt.creat_button(
+                    &window,
+                    &instance,
+                    20,
+                    30,
+                    w!("Rounded"),
+                    &button::Appearance::Secondary,
+                    None,
+                    None,
+                    &button::Shape::Rounded,
+                    &button::Size::Medium,
+                    MouseEvent::default(),
+                );
+                _ = qt.creat_button(
+                    &window,
+                    &instance,
+                    20 + 110 * scaling_factor as i32,
+                    30,
+                    w!("Circular"),
+                    &button::Appearance::Secondary,
+                    None,
+                    None,
+                    &button::Shape::Circular,
+                    &button::Size::Medium,
+                    MouseEvent::default(),
+                );
+                _ = qt.creat_button(
+                    &window,
+                    &instance,
+                    20 + 220 * scaling_factor as i32,
+                    30,
+                    w!("Square"),
+                    &button::Appearance::Secondary,
+                    None,
+                    None,
+                    &button::Shape::Square,
+                    &button::Size::Medium,
+                    MouseEvent::default(),
+                );
+                _ = qt.creat_button(
+                    &window,
+                    &instance,
+                    20 + 330 * scaling_factor as i32,
+                    30,
+                    w!("Primary"),
+                    &button::Appearance::Primary,
+                    Some(&icon),
+                    None,
+                    &button::Shape::Rounded,
+                    &button::Size::Medium,
+                    MouseEvent::default(),
+                );
+                _ = qt.creat_button(
+                    &window,
+                    &instance,
+                    20,
+                    30 + 50 * scaling_factor as i32,
+                    w!("Small with calender icon"),
+                    &button::Appearance::Secondary,
+                    Some(&icon),
+                    None,
+                    &button::Shape::Rounded,
+                    &button::Size::Small,
+                    MouseEvent::default(),
+                );
+                _ = qt.creat_button(
+                    &window,
+                    &instance,
+                    20,
+                    30 + 100 * scaling_factor as i32,
+                    w!("With calendar icon after contents"),
+                    &button::Appearance::Secondary,
+                    Some(&icon),
+                    Some(&IconPosition::After),
+                    &button::Shape::Rounded,
+                    &button::Size::Medium,
+                    MouseEvent::default(),
+                );
+                _ = qt.creat_button(
+                    &window,
+                    &instance,
+                    20,
+                    30 + 150 * scaling_factor as i32,
+                    w!("Large with calender icon"),
+                    &button::Appearance::Secondary,
+                    Some(&icon),
+                    None,
+                    &button::Shape::Rounded,
+                    &button::Size::Large,
+                    MouseEvent::default(),
+                );
+                SetWindowLongPtrW(window, GWLP_USERDATA, Box::<QT>::into_raw(qt) as _);
+                DefWindowProcW(window, message, w_param, l_param)
+            }
             WM_CLOSE => {
-                let qt = QT::new();
+                let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *const QT;
+                let qt = &*raw;
                 let instance = HINSTANCE(GetWindowLongPtrW(window, GWLP_HINSTANCE));
                 match qt.open_dialog(
                     &window,

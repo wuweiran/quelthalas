@@ -57,7 +57,7 @@ impl QT {
     ) -> Result<DialogResult> {
         let class_name: PCWSTR = w!("QT_DIALOG");
         unsafe {
-            let window_class: WNDCLASSEXW = WNDCLASSEXW {
+            let window_class = WNDCLASSEXW {
                 cbSize: size_of::<WNDCLASSEXW>() as u32,
                 lpszClassName: class_name,
                 style: CS_OWNDC,
