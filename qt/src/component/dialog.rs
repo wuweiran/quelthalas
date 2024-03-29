@@ -12,9 +12,11 @@ use windows::Win32::Graphics::DirectWrite::{
     DWriteCreateFactory, IDWriteFactory, IDWriteTextFormat, DWRITE_FACTORY_TYPE_SHARED,
     DWRITE_MEASURING_MODE_NATURAL, DWRITE_TEXT_METRICS,
 };
-use windows::Win32::Graphics::Gdi::{BeginPaint, EndPaint, PAINTSTRUCT};
+use windows::Win32::Graphics::Gdi::{BeginPaint, EndPaint, InvalidateRect, PAINTSTRUCT};
+use windows::Win32::UI::HiDpi::{AdjustWindowRectExForDpi, GetDpiForWindow};
 use windows::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, SetActiveWindow};
 use windows::Win32::UI::WindowsAndMessaging::*;
+use windows_version::OsVersion;
 
 use crate::component::button;
 use crate::{get_scaling_factor, MouseEvent, QT};
@@ -129,8 +131,13 @@ unsafe fn on_create(window: HWND, state: State) -> Result<Context> {
         D2D1_FACTORY_TYPE_SINGLE_THREADED,
         Some(&D2D1_FACTORY_OPTIONS::default()),
     )?;
+    let dpi = GetDpiForWindow(window);
     let render_target = factory.CreateHwndRenderTarget(
-        &D2D1_RENDER_TARGET_PROPERTIES::default(),
+        &D2D1_RENDER_TARGET_PROPERTIES {
+            dpiX: dpi as f32,
+            dpiY: dpi as f32,
+            ..Default::default()
+        },
         &D2D1_HWND_RENDER_TARGET_PROPERTIES {
             hwnd: window,
             pixelSize: D2D_SIZE_U {
@@ -238,11 +245,22 @@ unsafe fn layout(window: HWND, context: &Context) -> Result<()> {
         right: scaled_width,
         bottom: scaled_height,
     };
-    AdjustWindowRect(
-        &mut rect,
-        WINDOW_STYLE(GetWindowLongPtrW(window, GWL_STYLE) as u32),
-        FALSE,
-    )?;
+    if OsVersion::current() >= OsVersion::new(10, 0, 0, 14393) {
+        AdjustWindowRectExForDpi(
+            &mut rect,
+            WINDOW_STYLE(GetWindowLongPtrW(window, GWL_STYLE) as u32),
+            FALSE,
+            WINDOW_EX_STYLE(GetWindowLongPtrW(window, GWL_EXSTYLE) as u32),
+            GetDpiForWindow(window),
+        )?;
+    } else {
+        AdjustWindowRectEx(
+            &mut rect,
+            WINDOW_STYLE(GetWindowLongPtrW(window, GWL_STYLE) as u32),
+            FALSE,
+            WINDOW_EX_STYLE(GetWindowLongPtrW(window, GWL_EXSTYLE) as u32),
+        )?;
+    }
     let window_width = rect.right - rect.left;
     let window_height = rect.bottom - rect.top;
     let parent_window = GetAncestor(window, GA_PARENT);
@@ -254,7 +272,7 @@ unsafe fn layout(window: HWND, context: &Context) -> Result<()> {
         rect.top / 2 + rect.bottom / 2 - window_height / 2,
         window_width,
         window_height,
-        SWP_NOZORDER,
+        SWP_NOZORDER | SWP_NOMOVE,
     )?;
     context.render_target.Resize(&D2D_SIZE_U {
         width: scaled_width as u32,
@@ -362,11 +380,22 @@ extern "system" fn window_proc(
                 Err(_) => LRESULT(FALSE.0 as isize),
             }
         },
-        WM_PAINT | WM_DISPLAYCHANGE => unsafe {
+        WM_PAINT => unsafe {
             let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
             let context = &*raw;
             _ = on_paint(window, context);
             DefWindowProcW(window, message, w_param, l_param)
+        },
+        WM_GETDPISCALEDSIZE => LRESULT(TRUE.0 as isize),
+        WM_DPICHANGED => unsafe {
+            let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
+            let context = &*raw;
+            let new_dpi_x = w_param.0 as i16 as f32;
+            let new_dpi_y = (w_param.0 >> 16) as i16 as f32;
+            context.render_target.SetDpi(new_dpi_x, new_dpi_y);
+            _ = layout(window, &context);
+            InvalidateRect(window, None, false);
+            LRESULT(TRUE.0 as isize)
         },
         WM_DESTROY => unsafe {
             let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;

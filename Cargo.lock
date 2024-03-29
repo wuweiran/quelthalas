@@ -16,6 +16,7 @@ name = "quelthalas"
 version = "0.1.0"
 dependencies = [
  "windows",
+ "windows-version",
 ]
 
 [[package]]
@@ -118,6 +119,15 @@ dependencies = [
  "windows_x86_64_gnu",
  "windows_x86_64_gnullvm",
  "windows_x86_64_msvc",
+]
+
+[[package]]
+name = "windows-version"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "75aa004c988e080ad34aff5739c39d0312f4684699d6d71fc8a198d057b8b9b4"
+dependencies = [
+ "windows-targets",
 ]
 
 [[package]]

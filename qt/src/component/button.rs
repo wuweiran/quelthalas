@@ -33,6 +33,7 @@ use windows::Win32::UI::Animation::{
     UI_ANIMATION_IDLE_BEHAVIOR_DISABLE,
 };
 use windows::Win32::UI::Controls::WM_MOUSELEAVE;
+use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::{TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT};
 use windows::Win32::UI::Shell::SHCreateMemStream;
 use windows::Win32::UI::WindowsAndMessaging::*;
@@ -141,8 +142,6 @@ impl State {
 
 struct Context {
     state: State,
-    width: f32,
-    height: f32,
     icon_svg: Option<ID2D1SvgDocument>,
     text_format: IDWriteTextFormat,
     render_target: ID2D1HwndRenderTarget,
@@ -246,70 +245,23 @@ unsafe fn on_create(window: HWND, state: State) -> Result<Context> {
     )?;
     text_format.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER)?;
     text_format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
-    let text_layout = direct_write_factory.CreateTextLayout(
-        state.text.as_wide(),
-        &text_format,
-        1000f32,
-        500f32,
-    )?;
-    let mut metrics = DWRITE_TEXT_METRICS::default();
-    text_layout.GetMetrics(&mut metrics)?;
 
-    let scaling_factor = get_scaling_factor(&window);
-    let icon_and_space_width = if state.has_icon() {
-        state.get_desired_icon_spacing() + state.get_desired_icon_size()
-    } else {
-        0f32
-    };
-    let horizontal_padding = state.get_horizontal_padding();
-    let scaled_width = ((state.get_min_width().max(
-        metrics.width
-            + 2f32 * tokens.stroke_width_thin
-            + 2f32 * horizontal_padding
-            + icon_and_space_width,
-    )) * scaling_factor)
-        .ceil() as i32;
-    let scaled_height = ((state.get_line_height() * metrics.lineCount.max(1) as f32
-        + state.get_spacing() * 2f32
-        + tokens.stroke_width_thin * 2f32)
-        * scaling_factor)
-        .ceil() as i32;
-
-    SetWindowPos(
-        window,
-        None,
-        0,
-        0,
-        scaled_width,
-        scaled_height,
-        SWP_NOMOVE | SWP_NOZORDER,
-    )?;
-
-    let corner_diameter = match &state.shape {
-        Shape::Circular => scaled_width.min(scaled_height),
-        Shape::Rounded => (tokens.border_radius_medium * 2f32 * scaling_factor) as i32,
-        Shape::Square => (tokens.border_radius_none * 2f32 * scaling_factor) as i32,
-    };
-    let region = CreateRoundRectRgn(
-        0,
-        0,
-        scaled_width + 1,
-        scaled_height + 1,
-        corner_diameter,
-        corner_diameter,
-    );
-    SetWindowRgn(window, region, TRUE);
     let factory = D2D1CreateFactory::<ID2D1Factory1>(
         D2D1_FACTORY_TYPE_SINGLE_THREADED,
         Some(&D2D1_FACTORY_OPTIONS::default()),
     )?;
+    let dpi = GetDpiForWindow(window);
     let render_target = factory.CreateHwndRenderTarget(
-        &D2D1_RENDER_TARGET_PROPERTIES::default(),
+        &D2D1_RENDER_TARGET_PROPERTIES {
+            dpiX: dpi as f32,
+            dpiY: dpi as f32,
+            ..Default::default()
+        },
         &D2D1_HWND_RENDER_TARGET_PROPERTIES {
             hwnd: window,
             pixelSize: D2D_SIZE_U {
-                width: scaled_width as u32,
-                height: scaled_height as u32,
+                width: state.get_min_width() as u32,
+                height: state.get_min_height() as u32,
             },
             presentOptions: Default::default(),
         },
@@ -376,8 +328,6 @@ unsafe fn on_create(window: HWND, state: State) -> Result<Context> {
     ])?;
     let context = Context {
         state,
-        height: scaled_height as f32 / scaling_factor,
-        width: scaled_width as f32 / scaling_factor,
         text_format,
         render_target,
         icon_svg: svg_document,
@@ -392,6 +342,71 @@ unsafe fn on_create(window: HWND, state: State) -> Result<Context> {
         mouse_clicking: false,
     };
     Ok(context)
+}
+
+unsafe fn layout(window: HWND, context: &Context) -> Result<()> {
+    let state = &context.state;
+    let tokens = &context.state.qt.theme.tokens;
+
+    let direct_write_factory = DWriteCreateFactory::<IDWriteFactory>(DWRITE_FACTORY_TYPE_SHARED)?;
+    let text_layout = direct_write_factory.CreateTextLayout(
+        state.text.as_wide(),
+        &context.text_format,
+        1000f32,
+        500f32,
+    )?;
+    let mut metrics = DWRITE_TEXT_METRICS::default();
+    text_layout.GetMetrics(&mut metrics)?;
+
+    let scaling_factor = get_scaling_factor(&window);
+    let icon_and_space_width = if state.has_icon() {
+        state.get_desired_icon_spacing() + state.get_desired_icon_size()
+    } else {
+        0f32
+    };
+    let horizontal_padding = state.get_horizontal_padding();
+    let scaled_width = ((state.get_min_width().max(
+        metrics.width
+            + 2f32 * tokens.stroke_width_thin
+            + 2f32 * horizontal_padding
+            + icon_and_space_width,
+    )) * scaling_factor)
+        .ceil() as i32;
+    let scaled_height = ((state.get_line_height() * metrics.lineCount.max(1) as f32
+        + state.get_spacing() * 2f32
+        + tokens.stroke_width_thin * 2f32)
+        * scaling_factor)
+        .ceil() as i32;
+
+    SetWindowPos(
+        window,
+        None,
+        0,
+        0,
+        scaled_width,
+        scaled_height,
+        SWP_NOMOVE | SWP_NOZORDER,
+    )?;
+    context.render_target.Resize(&D2D_SIZE_U {
+        width: scaled_width as u32,
+        height: scaled_height as u32,
+    })?;
+
+    let corner_diameter = match &state.shape {
+        Shape::Circular => scaled_width.min(scaled_height),
+        Shape::Rounded => (tokens.border_radius_medium * 2f32 * scaling_factor) as i32,
+        Shape::Square => (tokens.border_radius_none * 2f32 * scaling_factor) as i32,
+    };
+    let region = CreateRoundRectRgn(
+        0,
+        0,
+        scaled_width + 1,
+        scaled_height + 1,
+        corner_diameter,
+        corner_diameter,
+    );
+    SetWindowRgn(window, region, TRUE);
+    Ok(())
 }
 
 #[implement(IUIAnimationTimerEventHandler)]
@@ -420,8 +435,13 @@ unsafe fn on_paint(window: HWND, context: &Context) -> Result<()> {
     let state = &context.state;
     let tokens = &state.qt.theme.tokens;
 
+    let mut button_rect = RECT::default();
+    GetClientRect(window, &mut button_rect)?;
+    let scaling_factor = get_scaling_factor(&window);
+    let width = button_rect.right as f32 / scaling_factor;
+    let height = button_rect.bottom as f32 / scaling_factor;
     let corner_radius = match state.shape {
-        Shape::Circular => context.width.min(context.height) / 2f32,
+        Shape::Circular => width.min(height) / 2f32,
         Shape::Rounded => tokens.border_radius_medium,
         Shape::Square => tokens.border_radius_none,
     };
@@ -435,8 +455,8 @@ unsafe fn on_paint(window: HWND, context: &Context) -> Result<()> {
         rect: D2D_RECT_F {
             left: 0f32,
             top: 0f32,
-            right: context.width,
-            bottom: context.height,
+            right: width,
+            bottom: height,
         },
         radiusX: corner_radius,
         radiusY: corner_radius,
@@ -477,8 +497,8 @@ unsafe fn on_paint(window: HWND, context: &Context) -> Result<()> {
                 rect: D2D_RECT_F {
                     left: tokens.stroke_width_thin * 0.5,
                     top: tokens.stroke_width_thin * 0.5,
-                    right: context.width - tokens.stroke_width_thin * 0.5,
-                    bottom: context.height - tokens.stroke_width_thin * 0.5,
+                    right: width - tokens.stroke_width_thin * 0.5,
+                    bottom: height - tokens.stroke_width_thin * 0.5,
                 },
                 radiusX: corner_radius,
                 radiusY: corner_radius,
@@ -508,8 +528,8 @@ unsafe fn on_paint(window: HWND, context: &Context) -> Result<()> {
     let horizontal_padding = state.get_horizontal_padding();
     let top = spacing + tokens.stroke_width_thin;
     let left = horizontal_padding + tokens.stroke_width_thin;
-    let right = context.width - horizontal_padding - tokens.stroke_width_thin;
-    let bottom = context.height - spacing - tokens.stroke_width_thin;
+    let right = width - horizontal_padding - tokens.stroke_width_thin;
+    let bottom = height - spacing - tokens.stroke_width_thin;
     let text_rect = if state.has_icon() {
         let icon_and_space_width = state.get_desired_icon_size() + state.get_desired_icon_spacing();
         match state.icon_position.unwrap_or(IconPosition::Before) {
@@ -710,6 +730,7 @@ extern "system" fn window_proc(
             let state = Box::<State>::from_raw(raw);
             match on_create(window, *state) {
                 Ok(context) => {
+                    _ = layout(window, &context);
                     let boxed = Box::new(context);
                     SetWindowLongPtrW(window, GWLP_USERDATA, Box::<Context>::into_raw(boxed) as _);
                     LRESULT(TRUE.0 as isize)
@@ -722,13 +743,22 @@ extern "system" fn window_proc(
             _ = Box::<Context>::from_raw(raw);
             LRESULT(0)
         },
-        WM_PAINT | WM_DISPLAYCHANGE => unsafe {
+        WM_PRINTCLIENT | WM_PAINT => unsafe {
             let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
             let context = &*raw;
             match on_paint(window, context) {
                 Ok(_) => LRESULT(0),
                 Err(_) => DefWindowProcW(window, message, w_param, l_param),
             }
+        },
+        WM_DPICHANGED_BEFOREPARENT => unsafe {
+            let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
+            let context = &*raw;
+            _ = layout(window, &context);
+            let new_dpi = GetDpiForWindow(window);
+            context.render_target.SetDpi(new_dpi as f32, new_dpi as f32);
+            InvalidateRect(window, None, false);
+            LRESULT(0)
         },
         WM_MOUSEMOVE => unsafe {
             let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
