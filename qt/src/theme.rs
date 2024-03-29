@@ -62,7 +62,7 @@ macro_rules! rgb {
 }
 
 impl Tokens {
-    pub fn web_light() -> Self {
+    fn web_light() -> Self {
         Tokens {
             color_neutral_background1: rgb!("#ffffff"),
             color_neutral_background1_hover: rgb!("#f5f5f5"),
@@ -150,6 +150,25 @@ impl TypographyStyles {
                 font_weight: tokens.font_weight_regular,
                 line_height: tokens.line_height_base300,
             },
+        }
+    }
+}
+
+pub(crate) struct Theme {
+    pub tokens: Tokens,
+    pub typography_styles: TypographyStyles,
+}
+
+impl Theme {
+    pub(crate) fn web_light() -> Self {
+        Self::from(Tokens::web_light())
+    }
+
+    pub fn from(tokens: Tokens) -> Self {
+        let typography_styles = TypographyStyles::from(&tokens);
+        Theme {
+            tokens,
+            typography_styles,
         }
     }
 }

@@ -1,4 +1,4 @@
-#![windows_subsystem = "windows"]
+//#![windows_subsystem = "windows"]
 use std::mem::size_of;
 
 use windows::core::*;
@@ -69,7 +69,7 @@ extern "system" fn window_process(
     unsafe {
         match message {
             WM_CREATE => {
-                let qt = Box::new(QT::new());
+                let qt = QT::default();
                 let instance = HINSTANCE(GetWindowLongPtrW(window, GWLP_HINSTANCE));
                 let scaling_factor = GetDpiForWindow(window) / USER_DEFAULT_SCREEN_DPI;
                 let icon = Icon::calendar_month_regular();
@@ -165,7 +165,11 @@ extern "system" fn window_process(
                     &button::Size::Large,
                     MouseEvent::default(),
                 );
-                SetWindowLongPtrW(window, GWLP_USERDATA, Box::<QT>::into_raw(qt) as _);
+                SetWindowLongPtrW(
+                    window,
+                    GWLP_USERDATA,
+                    Box::<QT>::into_raw(Box::from(qt)) as _,
+                );
                 DefWindowProcW(window, message, w_param, l_param)
             }
             WM_CLOSE => {

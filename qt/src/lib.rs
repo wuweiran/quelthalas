@@ -1,11 +1,12 @@
 extern crate self as qt;
 
+use std::rc::Rc;
+
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::WindowsAndMessaging::USER_DEFAULT_SCREEN_DPI;
 
-use crate::theme::TypographyStyles;
-use qt::theme::Tokens;
+use crate::theme::Theme;
 
 pub struct MouseEvent {
     pub on_click: Box<dyn Fn(&HWND)>,
@@ -19,21 +20,15 @@ impl Default for MouseEvent {
     }
 }
 
+#[derive(Clone)]
 pub struct QT {
-    tokens: Tokens,
-    typography_styles: TypographyStyles,
+    theme: Rc<Theme>,
 }
 
 impl QT {
-    pub fn new() -> Self {
-        Self::from(Tokens::web_light())
-    }
-
-    pub(crate) fn from(tokens: Tokens) -> Self {
-        let typography_styles = TypographyStyles::from(&tokens);
+    pub fn default() -> Self {
         QT {
-            tokens,
-            typography_styles,
+            theme: Rc::new(Theme::web_light()),
         }
     }
 }

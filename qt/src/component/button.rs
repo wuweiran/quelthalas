@@ -68,7 +68,7 @@ pub enum Size {
 }
 
 struct State {
-    qt_ptr: *const QT,
+    qt: QT,
     text: PCWSTR,
     appearance: Appearance,
     icon: Option<Icon>,
@@ -104,7 +104,7 @@ impl State {
     }
 
     unsafe fn get_horizontal_padding(&self) -> f32 {
-        let tokens = &(*self.qt_ptr).tokens;
+        let tokens = &self.qt.theme.tokens;
         match &self.size {
             Size::Small => tokens.spacing_horizontal_s,
             Size::Medium => tokens.spacing_horizontal_m,
@@ -113,7 +113,7 @@ impl State {
     }
 
     unsafe fn get_min_height(&self) -> f32 {
-        let tokens = &(*self.qt_ptr).tokens;
+        let tokens = &self.qt.theme.tokens;
         self.get_line_height() + self.get_spacing() * 2f32 + tokens.stroke_width_thin * 2f32
     }
 
@@ -126,7 +126,7 @@ impl State {
     }
 
     unsafe fn get_desired_icon_spacing(&self) -> f32 {
-        let tokens = &(*self.qt_ptr).tokens;
+        let tokens = &self.qt.theme.tokens;
         match &self.size {
             Size::Small => tokens.spacing_horizontal_xs,
             Size::Medium => tokens.spacing_horizontal_xs,
@@ -184,7 +184,7 @@ impl QT {
             };
             RegisterClassExW(&window_class);
             let boxed = Box::new(State {
-                qt_ptr: self as *const Self,
+                qt: self.clone(),
                 text,
                 appearance: *appearance,
                 icon: icon.map(|a| *a),
@@ -222,8 +222,7 @@ unsafe fn set_svg_color(svg: &ID2D1SvgDocument, color: &D2D1_COLOR_F) -> Result<
 }
 
 unsafe fn on_create(window: HWND, state: State) -> Result<Context> {
-    let qt = &(*state.qt_ptr);
-    let tokens = &qt.tokens;
+    let tokens = &state.qt.theme.tokens;
 
     let direct_write_factory = DWriteCreateFactory::<IDWriteFactory>(DWRITE_FACTORY_TYPE_SHARED)?;
     let font_size = match state.size {
@@ -419,7 +418,7 @@ impl IUIAnimationTimerEventHandler_Impl for AnimationTimerEventHandler {
 
 unsafe fn on_paint(window: HWND, context: &Context) -> Result<()> {
     let state = &context.state;
-    let tokens = &(*state.qt_ptr).tokens;
+    let tokens = &state.qt.theme.tokens;
 
     let corner_radius = match state.shape {
         Shape::Circular => context.width.min(context.height) / 2f32,
@@ -576,8 +575,7 @@ unsafe fn on_paint(window: HWND, context: &Context) -> Result<()> {
 }
 
 unsafe fn change_color(context: &Context) -> Result<()> {
-    let qt = &(*context.state.qt_ptr);
-    let tokens = &qt.tokens;
+    let tokens = &context.state.qt.theme.tokens;
     let storyboard = context.animation_manager.CreateStoryboard()?;
 
     let appearance = &context.state.appearance;

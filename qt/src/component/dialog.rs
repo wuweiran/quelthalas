@@ -32,7 +32,7 @@ pub enum ModelType {
 }
 
 struct State {
-    qt_ptr: *const QT,
+    qt: QT,
     title: PCWSTR,
     content: PCWSTR,
 }
@@ -69,7 +69,7 @@ impl QT {
             let scaling_factor = get_scaling_factor(parent_window);
             EnableWindow(*parent_window, FALSE);
             let boxed = Box::new(State {
-                qt_ptr: self as *const Self,
+                qt: self.clone(),
                 title,
                 content,
             });
@@ -118,11 +118,11 @@ impl QT {
 
 unsafe fn on_create(window: HWND, state: State) -> Result<Context> {
     let instance = HINSTANCE(GetWindowLongPtrW(window, GWLP_HINSTANCE));
-    let qt = &(*state.qt_ptr);
+    let qt = &state.qt;
     let direct_write_factory = DWriteCreateFactory::<IDWriteFactory>(DWRITE_FACTORY_TYPE_SHARED)?;
-    let title_typo = &qt.typography_styles.subtitle1;
+    let title_typo = &qt.theme.typography_styles.subtitle1;
     let title_text_format = title_typo.create_text_format(&direct_write_factory)?;
-    let content_typo = &qt.typography_styles.body1;
+    let content_typo = &qt.theme.typography_styles.body1;
     let content_text_format = content_typo.create_text_format(&direct_write_factory)?;
 
     let factory = D2D1CreateFactory::<ID2D1Factory1>(
@@ -282,7 +282,7 @@ unsafe fn layout(window: HWND, context: &Context) -> Result<()> {
 
 unsafe fn on_paint(window: HWND, context: &Context) -> Result<()> {
     let state = &context.state;
-    let tokens = &(*state.qt_ptr).tokens;
+    let tokens = &state.qt.theme.tokens;
     let mut window_rect = RECT::default();
     GetClientRect(window, &mut window_rect)?;
     let scaling_factor = get_scaling_factor(&window);
