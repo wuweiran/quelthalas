@@ -1,19 +1,25 @@
-use std::mem::size_of;
+use std::ffi::c_void;
+use std::mem::{size_of, swap, zeroed};
+use std::ptr;
 
 use windows::core::*;
 use windows::Win32::Foundation::{
     FALSE, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, TRUE, WPARAM,
 };
-use windows::Win32::Globalization::{
-    lstrcpynW, lstrlenW, SCRIPT_ANALYSIS, SCRIPT_LOGATTR, SCRIPT_UNDEFINED,
-};
-use windows::Win32::Graphics::Gdi::MapWindowPoints;
+use windows::Win32::Globalization::{lstrcpynW, lstrlenW, ScriptStringCPtoX, SCRIPT_ANALYSIS, SCRIPT_LOGATTR, SCRIPT_UNDEFINED, ScriptStringAnalyse, SSA_LINK, SSA_FALLBACK, SSA_GLYPHS, SSA_PASSWORD, ScriptString_pSize};
+use windows::Win32::Graphics::Gdi::{GetDC, HDC, IntersectRect, InvalidateRect, MapWindowPoints, ReleaseDC};
 use windows::Win32::UI::Input::Ime::{IMECHARPOSITION, IMR_QUERYCHARPOSITION};
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_BACK, VK_CONTROL};
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 use crate::{get_scaling_factor, QT};
-
+macro_rules! order_usize {
+    ($x:expr, $y:expr) => {{
+        if $y < $x {
+            swap($x, $y);
+        }
+    }};
+}
 #[derive(Copy, Clone)]
 pub enum Size {
     Small,
@@ -50,28 +56,41 @@ impl State {
     }
 }
 
+struct ScriptStringAnalysis(*mut c_void);
+
+impl Default for ScriptStringAnalysis {
+    fn default() -> Self {
+        unsafe { zeroed() }
+    }
+}
+
 pub struct Context {
     state: State,
+    cached_text_length: Option<usize>,
     buffer: Vec<u16>,
+    x_offset: usize,
     undo_insert_count: isize,
     undo_position: usize,
     undo_buffer: Vec<u16>,
-    selection_start: isize,
-    selection_end: isize,
+    selection_start: usize,
+    selection_end: usize,
     is_captured: bool,
     ime_status: usize,
     format_rect: RECT,
     log_attribute: Vec<SCRIPT_LOGATTR>,
-    ssa: SCRIPT_ANALYSIS,
+    ssa: Option<ScriptStringAnalysis>,
 }
 
 impl Context {
-    unsafe fn get_text_length(&self) -> isize {
-        lstrlenW(PCWSTR::from_raw(self.buffer.as_slice().as_ptr())) as isize
-    }
-
-    unsafe fn set_text(&mut self, text: PCWSTR) -> isize {
-        0
+    unsafe fn get_text_length(&mut self) -> usize {
+        match self.cached_text_length {
+            None => {
+                let length = lstrlenW(PCWSTR::from_raw(self.buffer.as_slice().as_ptr())) as usize;
+                self.cached_text_length = Some(length);
+                length
+            }
+            Some(text_length) => text_length,
+        }
     }
 }
 
@@ -127,39 +146,113 @@ impl QT {
     }
 }
 
-unsafe fn on_create(window: HWND, state: State) -> Result<Context> {
-    Ok(Context {
-        state,
-        buffer: Vec::new(),
-        undo_insert_count: 0,
-        undo_position: 0,
-        undo_buffer: Vec::new(),
-        selection_start: 0,
-        selection_end: 0,
-        is_captured: false,
-        ime_status: 0,
-        format_rect: RECT::default(),
-        log_attribute: Vec::new(),
-        ssa: SCRIPT_ANALYSIS {
-            _bitfield: SCRIPT_UNDEFINED as u16,
-            s: Default::default(),
-        },
+unsafe fn get_single_line_rect(
+    window: HWND,
+    context: &mut Context,
+    start_col: usize,
+    end_col: Option<usize>,
+) -> Result<RECT> {
+    let pt1 = if start_col == 0 {
+        context.format_rect.left
+    } else {
+        position_from_char(window, context, start_col)?.x
+    };
+    let pt2 = match end_col {
+        None => context.format_rect.right,
+        Some(col) => position_from_char(window, context, col)?.x,
+    };
+    let pt3 = match &context.ssa {
+        None => pt1,
+        Some(ssa) => {
+            let mut pt3 = ScriptStringCPtoX(
+                ssa.0,
+                start_col as i32,
+                FALSE,
+            )?;
+            pt3 = pt3 + context.format_rect.left;
+            pt3
+        }
+    };
+
+    Ok(RECT {
+        left: pt1.min(pt2).min(pt3),
+        top: context.format_rect.top,
+        right: pt1.max(pt2).max(pt3),
+        bottom: context.format_rect.top + context.state.get_line_height(),
     })
 }
 
-unsafe fn clear(context: &mut Context) -> Result<()> {
+unsafe fn invalidate_text(
+    window: HWND,
+    context: &mut Context,
+    start: usize,
+    end: usize,
+) -> Result<()> {
+    if start == end {
+        return Ok(());
+    }
+
+    let actual_start = start.min(end);
+    let actual_end = start.max(end);
+    let line_rect = get_single_line_rect(window, context, actual_start, Some(actual_end))?;
+    let mut rc = RECT::default();
+    if IntersectRect(&mut rc, &line_rect, &context.format_rect).into() {
+        InvalidateRect(window, Some(&rc), true);
+    }
     Ok(())
 }
 
-unsafe fn set_selection(context: &mut Context, start: isize, end: isize) -> Result<()> {
-    Ok(())
-}
+unsafe fn set_selection(
+    window: HWND,
+    context: &mut Context,
+    start: Option<usize>,
+    end: Option<usize>,
+) -> Result<bool> {
+    let mut old_start = context.selection_start;
+    let mut old_end = context.selection_end;
+    let length = context.get_text_length();
 
-unsafe fn move_backward(context: &mut Context, extend: bool) -> Result<()> {
-    Ok(())
+    let mut new_start = match start {
+        None => context.selection_end,
+        Some(s) => length.min(s),
+    };
+    let mut new_end = match start {
+        None => context.selection_end,
+        Some(_) => match end {
+            None => length,
+            Some(e) => length.min(e),
+        },
+    };
+    if old_start == new_start && old_end == new_end {
+        return Ok(false);
+    }
+
+    context.selection_start = new_start;
+    context.selection_end = new_end;
+
+    /* Compute the necessary invalidation region.
+    Let's assume that we sort them in this order: new_start <= new_end <= old_start <= old_end */
+    order_usize!(&mut new_end, &mut old_end);
+    order_usize!(&mut new_start, &mut old_start);
+    order_usize!(&mut old_start, &mut old_end);
+    order_usize!(&mut new_start, &mut new_end);
+    /* Note that at this point 'end' and 'old_start' are not in order, but start is definitely the min. and old_end is definitely the max. */
+    if new_end != old_start {
+        if old_start > new_end {
+            invalidate_text(window, context, new_start, new_end)?;
+            invalidate_text(window, context, old_start, old_end)?;
+        } else {
+            invalidate_text(window, context, new_start, old_start)?;
+            invalidate_text(window, context, new_end, old_end)?;
+        }
+    } else {
+        invalidate_text(window, context, new_start, old_start)?;
+    }
+    Ok(true)
 }
 
 unsafe fn replace_selection(
+    window: HWND,
     context: &mut Context,
     can_undo: bool,
     replace: Vec<u16>,
@@ -169,6 +262,131 @@ unsafe fn replace_selection(
     Ok(())
 }
 
+unsafe fn update_uniscribe_data(window: HWND, context: &mut Context, dc: Option<HDC>) -> Result<()> {
+    if context.ssa.is_none() {
+        let length = context.get_text_length();
+        let udc = dc.unwrap_or(GetDC(window));
+        let mut ssa = ScriptStringAnalysis::default();
+        match context.state.input_type {
+            Type::Password => {
+                ScriptStringAnalyse(udc, w!("*").as_ptr() as _, (1.5 * length as f32 + 16f32) as i32, -1, SSA_LINK|SSA_FALLBACK|SSA_GLYPHS|SSA_PASSWORD, -1, None, None, None, None, ptr::null(), &mut ssa.0)?;
+            },
+            _ => {ScriptStringAnalyse(udc, context.buffer.as_slice().as_ptr() as _, (1.5 * length as f32 + 16f32) as i32, -1, SSA_LINK|SSA_FALLBACK|SSA_GLYPHS, -1, None, None, None, None, ptr::null(), &mut ssa.0)?;}
+        }
+        if dc.map(|x| x == udc).unwrap_or(false) {
+            ReleaseDC(window, udc);
+        }
+        context.ssa = Some(ssa);
+    }
+    Ok(())
+}
+unsafe fn invalidate_uniscribe_data(window: HWND, context: &mut Context) -> Result<()> {
+    Ok(())
+}
+
+unsafe fn scroll_caret(window: HWND, context: &mut Context) -> Result<()> {
+    Ok(())
+}
+
+unsafe fn update_scroll_info(window: HWND, context: &mut Context) -> Result<()> {
+    Ok(())
+}
+
+unsafe fn set_text(window: HWND, context: &mut Context, text: PCWSTR) -> Result<()> {
+    set_selection(window, context, Some(0), None)?;
+    replace_selection(
+        window,
+        context,
+        false,
+        text.as_wide().to_vec(),
+        false,
+        false,
+    )?;
+    set_selection(window, context, Some(0), Some(0))?;
+    scroll_caret(window, context)?;
+    update_scroll_info(window, context)?;
+    invalidate_uniscribe_data(window, context)?;
+    Ok(())
+}
+
+unsafe fn position_from_char(window: HWND, context: &mut Context, index: usize) -> Result<POINT> {
+    let length = context.get_text_length();
+    update_uniscribe_data(window, context, None)?;
+    let mut x_off: usize = 0;
+    if context.x_offset != 0 {
+        match &context.ssa {
+            None => {x_off = 0;}
+            Some(ssa) => {
+                if context.x_offset >= length {
+                    let leftover = context.x_offset - length;
+                    let size = ScriptString_pSize(ssa.0);
+                    x_off = (*size).cx as usize;
+                    x_off += 8 * leftover;
+                } else {
+                    x_off = ScriptStringCPtoX(ssa.0, context.x_offset as i32, FALSE)? as usize;
+                }
+            }
+        }
+    }
+    let index = index.min(length);
+    let xi = if index != 0 {
+        if index >= length {
+            match &context.ssa {
+                None => 0,
+                Some(ssa) =>  {let size = ScriptString_pSize(ssa.0);
+                    (*size).cx as usize}
+            }
+        } else {
+            match &context.ssa {
+                None => 0,
+                Some(ssa) =>  ScriptStringCPtoX(ssa.0, context.x_offset as i32, FALSE)? as usize
+            }
+        }
+    } else {0};
+    Ok(POINT {
+        x: xi as i32 - x_off as i32 + context.format_rect.left,
+        y: context.format_rect.top,
+    })
+}
+
+unsafe fn clear(window: HWND, context: &mut Context) -> Result<()> {
+    replace_selection(window, context, true, Vec::new(), true, true)
+}
+
+unsafe fn move_backward(window: HWND, context: &mut Context, extend: bool) -> Result<()> {
+    let mut e = context.selection_end;
+    if e > 0 {
+        e = e - 1;
+    }
+    let start = if extend {
+        context.selection_start
+    } else {
+        e
+    };
+    set_selection(window, context, Some(start), Some(e))?;
+    scroll_caret(window, context)?;
+    Ok(())
+}
+
+unsafe fn on_create(window: HWND, state: State) -> Result<Context> {
+    Ok(Context {
+        state,
+        cached_text_length: None,
+        buffer: Vec::new(),
+        x_offset: 0,
+        undo_insert_count: 0,
+        undo_position: 0,
+        undo_buffer: Vec::new(),
+        selection_start: 0,
+        selection_end: 0,
+        is_captured: false,
+        ime_status: 0,
+        format_rect: RECT::default(),
+        log_attribute: Vec::new(),
+        ssa: Default::default(),
+    })
+}
+
 unsafe fn on_char(window: HWND, context: &mut Context, char: u16) -> Result<()> {
     let control = GetKeyState(VK_CONTROL.0 as i32) != 0;
     const BACK: u16 = VK_BACK.0;
@@ -176,11 +394,11 @@ unsafe fn on_char(window: HWND, context: &mut Context, char: u16) -> Result<()> 
         BACK => {
             if !control {
                 if context.selection_start != context.selection_end {
-                    clear(context)?;
+                    clear(window, context)?;
                 } else {
-                    set_selection(context, -1, 0)?;
-                    move_backward(context, true)?;
-                    clear(context)?;
+                    set_selection(window, context, None, None)?;
+                    move_backward(window, context, true)?;
+                    clear(window, context)?;
                 }
             }
         }
@@ -214,7 +432,7 @@ unsafe fn on_char(window: HWND, context: &mut Context, char: u16) -> Result<()> 
             Type::Number => {}
             _ => {
                 if char >= '_' as u16 && char != 127 {
-                    replace_selection(context, true, Vec::<u16>::from([char]), true, true)?;
+                    replace_selection(window, context, true, Vec::<u16>::from([char]), true, true)?;
                 }
             }
         },
@@ -274,10 +492,6 @@ unsafe fn update_imm_composition_font(context: &Context) -> Result<()> {
     Ok(())
 }
 
-unsafe fn position_from_char(context: &Context, index: i32) -> Result<POINT> {
-    Ok(POINT::default())
-}
-
 extern "system" fn window_proc(
     window: HWND,
     message: u32,
@@ -334,7 +548,7 @@ extern "system" fn window_proc(
         WM_CLEAR => unsafe {
             let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
             let context = &mut *raw;
-            _ = clear(context);
+            _ = clear(window, context);
             LRESULT::default()
         },
         WM_CONTEXTMENU => LRESULT::default(),
@@ -363,8 +577,8 @@ extern "system" fn window_proc(
         },
         WM_GETTEXTLENGTH => unsafe {
             let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
-            let context = &*raw;
-            LRESULT(context.get_text_length())
+            let context = &mut *raw;
+            LRESULT(context.get_text_length() as isize)
         },
         WM_KEYDOWN => unsafe {
             let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
@@ -429,7 +643,7 @@ extern "system" fn window_proc(
         WM_SETTEXT => unsafe {
             let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
             let context = &mut *raw;
-            context.set_text(PCWSTR(l_param.0 as *const u16));
+            _ = set_text(window, context, PCWSTR(l_param.0 as *const u16));
             LRESULT(TRUE.0 as isize)
         },
         WM_IME_SETCONTEXT => unsafe {
@@ -448,7 +662,7 @@ extern "system" fn window_proc(
         WM_IME_COMPOSITION => unsafe {
             let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
             let context = &mut *raw;
-            _ = replace_selection(context, true, Vec::new(), true, true);
+            _ = replace_selection(window, context, true, Vec::new(), true, true);
             DefWindowProcW(window, message, w_param, l_param)
         },
         WM_IME_SELECT => LRESULT::default(),
@@ -457,11 +671,9 @@ extern "system" fn window_proc(
                 IMR_QUERYCHARPOSITION => {
                     let char_pos = &mut (*(l_param.0 as *mut IMECHARPOSITION));
                     let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
-                    let context = &*raw;
-                    match position_from_char(
-                        context,
-                        context.selection_start as i32 + char_pos.dwCharPos as i32,
-                    ) {
+                    let context = &mut *raw;
+                    match position_from_char(window, context, context.selection_start + char_pos.dwCharPos as usize)
+                    {
                         Ok(point) => {
                             char_pos.pt.x = point.x;
                             char_pos.pt.y = point.y;
@@ -492,5 +704,4 @@ extern "system" fn window_proc(
         },
         _ => unsafe { DefWindowProcW(window, message, w_param, l_param) },
     }
-    // unlock buffer
 }
