@@ -13,7 +13,7 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 
 use quelthalas::component::button::IconPosition;
 use quelthalas::component::dialog::DialogResult;
-use quelthalas::component::{button, dialog};
+use quelthalas::component::{button, dialog, input};
 use quelthalas::icon::Icon;
 use quelthalas::{MouseEvent, QT};
 
@@ -164,6 +164,17 @@ extern "system" fn window_process(
                     &button::Shape::Rounded,
                     &button::Size::Large,
                     MouseEvent::default(),
+                );
+                _ = qt.creat_input(
+                    &window,
+                    &instance,
+                    20,
+                    30 + 200 * scaling_factor as i32,
+                    &input::Size::Medium,
+                    &input::Appearance::Outline,
+                    None,
+                    &input::Type::Text,
+                    None,
                 );
                 SetWindowLongPtrW(
                     window,

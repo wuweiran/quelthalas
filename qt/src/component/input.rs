@@ -1,22 +1,27 @@
 use std::ffi::c_void;
 use std::mem::{size_of, swap};
-use std::ptr;
-use std::ptr::null_mut;
+use std::ptr::{null, null_mut};
 use std::slice::from_raw_parts_mut;
 
 use windows::core::*;
 use windows::Win32::Foundation::{
-    FALSE, HANDLE, HGLOBAL, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, TRUE, WPARAM,
+    COLORREF, FALSE, HANDLE, HGLOBAL, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, SIZE, TRUE,
+    WPARAM,
 };
 use windows::Win32::Globalization::{
     lstrcpynW, lstrlenW, u_memcpy, ScriptBreak, ScriptStringAnalyse, ScriptStringCPtoX,
-    ScriptStringFree, ScriptStringXtoCP, ScriptString_pSize, SCRIPT_ANALYSIS, SCRIPT_LOGATTR,
-    SCRIPT_UNDEFINED, SSA_FALLBACK, SSA_GLYPHS, SSA_LINK, SSA_PASSWORD,
+    ScriptStringFree, ScriptStringOut, ScriptStringXtoCP, ScriptString_pSize, SCRIPT_ANALYSIS,
+    SCRIPT_LOGATTR, SCRIPT_UNDEFINED, SSA_FALLBACK, SSA_GLYPHS, SSA_LINK, SSA_PASSWORD,
 };
 use windows::Win32::Graphics::Gdi::{
-    CreateFontW, GetDC, GetTextMetricsW, IntersectRect, InvalidateRect, MapWindowPoints,
-    RedrawWindow, ReleaseDC, SelectObject, CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET,
-    FW_BOLD, HDC, OUT_OUTLINE_PRECIS, RDW_INVALIDATE, TEXTMETRICW, VARIABLE_PITCH,
+    BeginPaint, CreateFontW, CreateSolidBrush, EndPaint, FillRect, GetBkColor, GetBkMode,
+    GetClipBox, GetDC, GetObjectW, GetSysColor, GetSysColorBrush, GetTextColor,
+    GetTextExtentPoint32W, GetTextMetricsW, InflateRect, IntersectClipRect, IntersectRect,
+    InvalidateRect, MapWindowPoints, PatBlt, RedrawWindow, ReleaseDC, SelectObject, SetBkColor,
+    SetBkMode, SetTextColor, TextOutW, BACKGROUND_MODE, CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS,
+    COLOR_HIGHLIGHT, COLOR_HIGHLIGHTTEXT, COLOR_WINDOWFRAME, DEFAULT_CHARSET, ETO_OPTIONS, FW_BOLD,
+    HDC, HFONT, LOGFONTW, OPAQUE, OUT_OUTLINE_PRECIS, PAINTSTRUCT, PATCOPY, RDW_INVALIDATE,
+    TEXTMETRICW, VARIABLE_PITCH,
 };
 use windows::Win32::System::DataExchange::{
     CloseClipboard, EmptyClipboard, GetClipboardData, OpenClipboard, SetClipboardData,
@@ -26,7 +31,10 @@ use windows::Win32::System::Ole::CF_UNICODETEXT;
 use windows::Win32::System::SystemServices::MK_SHIFT;
 use windows::Win32::UI::Controls::{SetScrollInfo, WORD_BREAK_ACTION};
 use windows::Win32::UI::Controls::{WB_ISDELIMITER, WB_LEFT, WB_RIGHT};
-use windows::Win32::UI::Input::Ime::{IMECHARPOSITION, IMR_QUERYCHARPOSITION};
+use windows::Win32::UI::Input::Ime::{
+    ImmGetContext, ImmReleaseContext, ImmSetCompositionFontW, ImmSetCompositionWindow, CFS_RECT,
+    COMPOSITIONFORM, IMECHARPOSITION, IMR_QUERYCHARPOSITION,
+};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetCapture, GetKeyState, ReleaseCapture, SetCapture, SetFocus, VK_BACK, VK_CONTROL, VK_DELETE,
     VK_END, VK_HOME, VK_INSERT, VK_LEFT, VK_MENU, VK_RIGHT, VK_SHIFT,
@@ -72,14 +80,6 @@ pub struct State {
     placeholder: Option<PCWSTR>,
 }
 
-struct ScriptStringAnalysis(*mut c_void);
-
-impl Default for ScriptStringAnalysis {
-    fn default() -> Self {
-        ScriptStringAnalysis(null_mut())
-    }
-}
-
 pub struct StringBuffer(Vec<u16>);
 
 impl StringBuffer {
@@ -89,7 +89,7 @@ impl StringBuffer {
 
     fn with_capacity(capacity: usize) -> Self {
         let mut vec = Vec::<u16>::with_capacity(capacity + 1);
-        vec[capacity] = 0;
+        vec.resize(capacity + 1, 0);
         StringBuffer(vec)
     }
 
@@ -143,11 +143,12 @@ pub struct Context {
     is_focused: bool,
     ime_status: usize,
     format_rect: RECT,
+    font: HFONT,
     line_height: i32,
     char_width: i32,
     text_width: i32,
     log_attribute: Vec<SCRIPT_LOGATTR>,
-    ssa: Option<ScriptStringAnalysis>,
+    ssa: *mut c_void,
 }
 
 impl Context {
@@ -162,12 +163,9 @@ impl Context {
         }
     }
     unsafe fn invalidate_uniscribe_data(&mut self) -> Result<()> {
-        match &mut self.ssa {
-            None => {}
-            Some(ssa) => {
-                ScriptStringFree(&mut ssa.0)?;
-                self.ssa = None;
-            }
+        if !self.ssa.is_null() {
+            ScriptStringFree(&mut self.ssa)?;
+            self.ssa = null_mut();
         }
         Ok(())
     }
@@ -251,13 +249,12 @@ unsafe fn get_single_line_rect(
         None => context.format_rect.right,
         Some(col) => position_from_char(window, context, col)?.x,
     };
-    let pt3 = match &context.ssa {
-        None => pt1,
-        Some(ssa) => {
-            let mut pt3 = ScriptStringCPtoX(ssa.0, start_col as i32, FALSE)?;
-            pt3 = pt3 + context.format_rect.left;
-            pt3
-        }
+    let pt3 = if !context.ssa.is_null() {
+        let mut pt3 = ScriptStringCPtoX(context.ssa, start_col as i32, FALSE)?;
+        pt3 = pt3 + context.format_rect.left;
+        pt3
+    } else {
+        pt1
     };
 
     Ok(RECT {
@@ -449,11 +446,10 @@ unsafe fn update_uniscribe_data(
     window: HWND,
     context: &mut Context,
     dc: Option<HDC>,
-) -> Result<()> {
-    if context.ssa.is_none() {
+) -> Result<*mut c_void> {
+    if context.ssa.is_null() {
         let length = context.get_text_length();
         let udc = dc.unwrap_or(GetDC(window));
-        let mut ssa = ScriptStringAnalysis::default();
         match context.state.input_type {
             Type::Password => {
                 ScriptStringAnalyse(
@@ -467,8 +463,8 @@ unsafe fn update_uniscribe_data(
                     None,
                     None,
                     None,
-                    ptr::null(),
-                    &mut ssa.0,
+                    null(),
+                    &mut context.ssa,
                 )?;
             }
             _ => {
@@ -483,24 +479,23 @@ unsafe fn update_uniscribe_data(
                     None,
                     None,
                     None,
-                    ptr::null(),
-                    &mut ssa.0,
+                    null(),
+                    &mut context.ssa,
                 )?;
             }
         }
         if dc.map(|x| x == udc).unwrap_or(false) {
             ReleaseDC(window, udc);
         }
-        context.ssa = Some(ssa);
     }
-    Ok(())
+    Ok(context.ssa)
 }
 
 unsafe fn set_caret_position(window: HWND, context: &mut Context, position: usize) -> Result<()> {
     if context.is_focused {
         let res = position_from_char(window, context, position)?;
         SetCaretPos(res.x, res.y)?;
-        update_imm_composition_window(window, res.x, res.y)?;
+        update_imm_composition_window(window, context, res.x, res.y);
     }
     Ok(())
 }
@@ -558,14 +553,38 @@ unsafe fn set_text(window: HWND, context: &mut Context, text: PCWSTR) -> Result<
     Ok(())
 }
 
+unsafe fn adjust_format_rect(window: HWND, context: &mut Context) -> Result<()> {
+    context.format_rect.right = context
+        .format_rect
+        .right
+        .max(context.format_rect.left + context.char_width);
+    context.format_rect.bottom = context.format_rect.top + context.line_height;
+    let mut client_rect = RECT::default();
+    GetClientRect(window, &mut client_rect)?;
+    context.format_rect.bottom = context.format_rect.bottom.min(client_rect.bottom);
+    set_caret_position(window, context, context.selection_end)
+}
+
+unsafe fn set_rect_np(window: HWND, context: &mut Context) -> Result<()> {
+    GetClientRect(window, &mut context.format_rect)?;
+    let bw = GetSystemMetrics(SM_CXBORDER) + 1;
+    let bh = GetSystemMetrics(SM_CYBORDER) + 1;
+    InflateRect(&mut context.format_rect, -bw, 0);
+    if context.format_rect.bottom - context.format_rect.top > context.line_height + 2 * bh {
+        InflateRect(&mut context.format_rect, 0, -bh);
+    }
+    context.format_rect.left = context.format_rect.left + 12;
+    context.format_rect.right = context.format_rect.right - 12;
+    adjust_format_rect(window, context)
+}
+
 unsafe fn calculate_line_width(window: HWND, context: &mut Context) -> Result<()> {
     update_uniscribe_data(window, context, None)?;
-    context.char_width = match &context.ssa {
-        None => 0,
-        Some(ssa) => {
-            let size = ScriptString_pSize(ssa.0);
-            (*size).cx
-        }
+    context.char_width = if !context.ssa.is_null() {
+        let size = ScriptString_pSize(context.ssa);
+        (*size).cx
+    } else {
+        0
     };
     Ok(())
 }
@@ -575,36 +594,33 @@ unsafe fn position_from_char(window: HWND, context: &mut Context, index: usize) 
     update_uniscribe_data(window, context, None)?;
     let mut x_off: usize = 0;
     if context.x_offset != 0 {
-        match &context.ssa {
-            None => {
-                x_off = 0;
+        if !context.ssa.is_null() {
+            if context.x_offset >= length {
+                let leftover = context.x_offset - length;
+                let size = ScriptString_pSize(context.ssa);
+                x_off = (*size).cx as usize;
+                x_off += context.char_width as usize * leftover;
+            } else {
+                x_off = ScriptStringCPtoX(context.ssa, context.x_offset as i32, FALSE)? as usize;
             }
-            Some(ssa) => {
-                if context.x_offset >= length {
-                    let leftover = context.x_offset - length;
-                    let size = ScriptString_pSize(ssa.0);
-                    x_off = (*size).cx as usize;
-                    x_off += context.char_width as usize * leftover;
-                } else {
-                    x_off = ScriptStringCPtoX(ssa.0, context.x_offset as i32, FALSE)? as usize;
-                }
-            }
+        } else {
+            x_off = 0;
         }
     }
     let index = index.min(length);
     let xi = if index != 0 {
         if index >= length {
-            match &context.ssa {
-                None => 0,
-                Some(ssa) => {
-                    let size = ScriptString_pSize(ssa.0);
-                    (*size).cx as usize
-                }
+            if !context.ssa.is_null() {
+                let size = ScriptString_pSize(context.ssa);
+                (*size).cx as usize
+            } else {
+                0
             }
         } else {
-            match &context.ssa {
-                None => 0,
-                Some(ssa) => ScriptStringCPtoX(ssa.0, context.x_offset as i32, FALSE)? as usize,
+            if !context.ssa.is_null() {
+                ScriptStringCPtoX(context.ssa, context.x_offset as i32, FALSE)? as usize
+            } else {
+                0
             }
         }
     } else {
@@ -625,26 +641,24 @@ unsafe fn char_from_position(window: HWND, context: &mut Context, point: POINT) 
     update_uniscribe_data(window, context, None)?;
     let x_off = if context.x_offset != 0 {
         let length = context.get_text_length();
-        match &context.ssa {
-            None => 0,
-            Some(ssa) => {
-                if context.x_offset >= length {
-                    let size = ScriptString_pSize(ssa.0);
-                    (*size).cx
-                } else {
-                    ScriptStringCPtoX(ssa.0, context.x_offset as i32, FALSE)?
-                }
+        if !context.ssa.is_null() {
+            if context.x_offset >= length {
+                let size = ScriptString_pSize(context.ssa);
+                (*size).cx
+            } else {
+                ScriptStringCPtoX(context.ssa, context.x_offset as i32, FALSE)?
             }
+        } else {
+            0
         }
     } else {
         0
     };
     let mut index = 0;
     if x < 0 {
-        if x + x_off > 0 || context.ssa.is_none() {
-            let ssa = ScriptStringAnalysis::default();
+        if x + x_off > 0 || context.ssa.is_null() {
             let mut trailing = 0;
-            ScriptStringXtoCP(ssa.0, x + x_off, &mut index, &mut trailing)?;
+            ScriptStringXtoCP(context.ssa, x + x_off, &mut index, &mut trailing)?;
             if trailing != 0 {
                 index = index + 1;
             }
@@ -652,21 +666,18 @@ unsafe fn char_from_position(window: HWND, context: &mut Context, point: POINT) 
     } else {
         if x != 0 {
             let length = context.get_text_length();
-            match &context.ssa {
-                None => {
-                    index = 0;
+            if !context.ssa.is_null() {
+                let size = ScriptString_pSize(context.ssa);
+                if x > (*size).cx {
+                    index = length as i32;
                 }
-                Some(ssa) => {
-                    let size = ScriptString_pSize(ssa.0);
-                    if x > (*size).cx {
-                        index = length as i32;
-                    }
-                    let mut trailing = 0;
-                    ScriptStringXtoCP(ssa.0, x + x_off, &mut index, &mut trailing)?;
-                    if trailing != 0 {
-                        index = index + 1;
-                    }
+                let mut trailing = 0;
+                ScriptStringXtoCP(context.ssa, x + x_off, &mut index, &mut trailing)?;
+                if trailing != 0 {
+                    index = index + 1;
                 }
+            } else {
+                index = 0;
             }
         } else {
             index = context.x_offset as i32;
@@ -755,11 +766,12 @@ unsafe fn on_create(window: HWND, state: State) -> Result<Context> {
         is_focused: false,
         ime_status: 0,
         format_rect: RECT::default(),
+        font,
         line_height: tm.tmHeight,
         char_width: tm.tmAveCharWidth,
         text_width: 0,
         log_attribute: Vec::new(),
-        ssa: Default::default(),
+        ssa: null_mut(),
     })
 }
 
@@ -1081,7 +1093,143 @@ unsafe fn on_mouse_move(window: HWND, context: &mut Context, x: i32, y: i32) -> 
     Ok(())
 }
 
-unsafe fn on_paint(window: HWND, context: &Context) -> Result<()> {
+unsafe fn paint_text(
+    context: &Context,
+    dc: HDC,
+    x: i32,
+    y: i32,
+    col: usize,
+    count: usize,
+    rev: bool,
+) -> Result<i32> {
+    if count == 0 {
+        return Ok(0);
+    }
+
+    let bk_mode = GetBkMode(dc);
+    let bk_color = GetBkColor(dc);
+    let text_color = GetTextColor(dc);
+    if rev {
+        SetBkColor(dc, COLORREF(GetSysColor(COLOR_HIGHLIGHT)));
+        SetTextColor(dc, COLORREF(GetSysColor(COLOR_HIGHLIGHTTEXT)));
+        SetBkMode(dc, OPAQUE);
+    }
+
+    TextOutW(
+        dc,
+        x,
+        y,
+        &context.buffer.as_wcs().as_wide()[col..col + count],
+    );
+    let mut size = SIZE::default();
+    GetTextExtentPoint32W(
+        dc,
+        &context.buffer.as_wcs().as_wide()[col..col + count],
+        &mut size,
+    );
+
+    if rev {
+        SetBkColor(dc, bk_color);
+        SetTextColor(dc, text_color);
+        SetBkMode(dc, BACKGROUND_MODE(bk_mode as u32));
+    }
+    Ok(size.cx)
+}
+
+unsafe fn paint_line(window: HWND, context: &mut Context, dc: HDC, rev: bool) -> Result<()> {
+    let ssa = update_uniscribe_data(window, context, Some(dc))?;
+    let pos = position_from_char(window, context, 0)?;
+    let mut x = pos.x;
+    let y = pos.y;
+    let mut li = 0;
+    let mut ll = 0;
+    let mut start = 0;
+    let mut end = 0;
+    if rev {
+        li = 0;
+        ll = context.get_text_length();
+        start = context.selection_start.min(context.selection_end);
+        end = context.selection_start.max(context.selection_end);
+        start = (li + ll).min(li.max(start));
+        end = (li + ll).min(li.max(end));
+    }
+
+    if !ssa.is_null() {
+        ScriptStringOut(
+            ssa,
+            x,
+            y,
+            ETO_OPTIONS(0),
+            Some(&context.format_rect),
+            (start - li) as i32,
+            (end - li) as i32,
+            FALSE,
+        )?;
+    } else if rev && start == end && context.is_focused {
+        x = x + paint_text(context, dc, x, y, 0, start - li, false)?;
+        x = x + paint_text(context, dc, x, y, start - li, end - start, false)?;
+        x = x + paint_text(context, dc, x, y, end - li, li + ll - end, false)?;
+    } else {
+        x = x + paint_text(context, dc, x, y, 0, ll, false)?;
+    }
+    Ok(())
+}
+
+unsafe fn on_paint(window: HWND, context: &mut Context) -> Result<()> {
+    let rev = context.is_focused;
+    let mut ps = PAINTSTRUCT::default();
+    let dc = BeginPaint(window, &mut ps);
+    context.invalidate_uniscribe_data()?;
+    let mut client_rect = RECT::default();
+    GetClientRect(window, &mut client_rect)?;
+
+    let brush = CreateSolidBrush(COLORREF(0xffffff));
+    IntersectClipRect(
+        dc,
+        client_rect.left,
+        client_rect.top,
+        client_rect.right,
+        client_rect.bottom,
+    );
+
+    let bw = GetSystemMetrics(SM_CXBORDER);
+    let bh = GetSystemMetrics(SM_CYBORDER);
+    let mut rc = client_rect;
+    let old_brush = SelectObject(dc, GetSysColorBrush(COLOR_WINDOWFRAME));
+    PatBlt(dc, rc.left, rc.top, rc.right - rc.left, bh, PATCOPY);
+    PatBlt(dc, rc.left, rc.top, bw, rc.bottom - rc.top, PATCOPY);
+    PatBlt(dc, rc.left, rc.bottom - 1, rc.right - rc.left, -bw, PATCOPY);
+    PatBlt(dc, rc.right - 1, rc.top, -bw, rc.bottom - rc.top, PATCOPY);
+    SelectObject(dc, old_brush);
+    IntersectClipRect(
+        dc,
+        rc.left + bw,
+        rc.top + bh,
+        (rc.right - bw).max(rc.left + bw),
+        (rc.bottom - bh).max(rc.top + bh),
+    );
+
+    GetClipBox(dc, &mut rc);
+    FillRect(dc, &rc, brush);
+
+    IntersectClipRect(
+        dc,
+        context.format_rect.left,
+        context.format_rect.top,
+        context.format_rect.right,
+        context.format_rect.bottom,
+    );
+    let old_font = SelectObject(dc, context.font);
+    let mut rc_rgn = RECT::default();
+    GetClipBox(dc, &mut rc_rgn);
+    update_uniscribe_data(window, context, Some(dc))?;
+    let rc_line = get_single_line_rect(window, context, 0, None)?;
+    if IntersectRect(&mut rc, &rc_rgn, &rc_line).into() {
+        paint_line(window, context, dc, rev)?;
+    }
+    SelectObject(dc, old_font);
+    EndPaint(window, &ps);
+
     Ok(())
 }
 
@@ -1100,12 +1248,27 @@ unsafe fn set_focus(window: HWND, context: &mut Context) -> Result<()> {
     Ok(())
 }
 
-unsafe fn update_imm_composition_window(window: HWND, x: i32, y: i32) -> Result<()> {
-    Ok(())
+unsafe fn update_imm_composition_window(window: HWND, context: &Context, x: i32, y: i32) {
+    let form = COMPOSITIONFORM {
+        dwStyle: CFS_RECT,
+        ptCurrentPos: POINT { x, y },
+        rcArea: context.format_rect,
+    };
+    let himc = ImmGetContext(window);
+    ImmSetCompositionWindow(himc, &form);
+    ImmReleaseContext(window, himc);
 }
 
-unsafe fn update_imm_composition_font(context: &Context) -> Result<()> {
-    Ok(())
+unsafe fn update_imm_composition_font(window: HWND, context: &Context) {
+    let himc = ImmGetContext(window);
+    let mut composition_font = LOGFONTW::default();
+    GetObjectW(
+        context.font,
+        size_of::<LOGFONTW>() as i32,
+        Some(&mut composition_font as *mut LOGFONTW as _),
+    );
+    ImmSetCompositionFontW(himc, &composition_font);
+    ImmReleaseContext(window, himc);
 }
 
 extern "system" fn window_proc(
@@ -1120,7 +1283,9 @@ extern "system" fn window_proc(
             let raw = (*cs).lpCreateParams as *mut State;
             let state = Box::<State>::from_raw(raw);
             match on_create(window, *state) {
-                Ok(context) => {
+                Ok(mut context) => {
+                    _ = set_rect_np(window, &mut context);
+                    update_scroll_info(window, &mut context);
                     let boxed = Box::new(context);
                     SetWindowLongPtrW(window, GWLP_USERDATA, Box::<Context>::into_raw(boxed) as _);
                     LRESULT(TRUE.0 as isize)
@@ -1238,15 +1403,15 @@ extern "system" fn window_proc(
         },
         WM_PRINTCLIENT | WM_PAINT => unsafe {
             let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
-            let context = &*raw;
+            let context = &mut *raw;
             match on_paint(window, context) {
                 Ok(_) => LRESULT(0),
-                Err(_) => DefWindowProcW(window, message, w_param, l_param),
+                Err(err) => DefWindowProcW(window, message, w_param, l_param),
             }
         },
         WM_PASTE => unsafe {
             let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
-            let context = &*raw;
+            let context = &mut *raw;
             _ = on_paint(window, context);
             LRESULT::default()
         },
@@ -1263,13 +1428,15 @@ extern "system" fn window_proc(
             LRESULT(TRUE.0 as isize)
         },
         WM_IME_SETCONTEXT => unsafe {
+            let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
+            let context = &mut *raw;
             let mut point = POINT::default();
             match GetCaretPos(&mut point) {
                 Ok(_) => {
-                    _ = update_imm_composition_window(window, point.x, point.y);
+                    _ = update_imm_composition_window(window, context, point.x, point.y);
                     let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
                     let context = &*raw;
-                    _ = update_imm_composition_font(context);
+                    _ = update_imm_composition_font(window, context);
                 }
                 Err(_) => {}
             }
