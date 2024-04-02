@@ -792,11 +792,9 @@ unsafe fn on_char(window: HWND, context: &mut Context, char: u16) -> Result<()> 
         }
         0x03 => {
             // ^C
-            match context.state.input_type {
-                Type::Password => {}
-                _ => {
-                    SendMessageW(window, WM_COPY, WPARAM(0), LPARAM(0));
-                }
+            if let Type::Password = context.state.input_type {
+            } else {
+                SendMessageW(window, WM_COPY, WPARAM(0), LPARAM(0));
             }
         }
         0x16 => {
@@ -805,25 +803,23 @@ unsafe fn on_char(window: HWND, context: &mut Context, char: u16) -> Result<()> 
         }
         0x18 => {
             // ^X
-            match context.state.input_type {
-                Type::Password => {}
-                _ => {
-                    SendMessageW(window, WM_CUT, WPARAM(0), LPARAM(0));
-                }
+            if let Type::Password = context.state.input_type {
+            } else {
+                SendMessageW(window, WM_CUT, WPARAM(0), LPARAM(0));
             }
         }
         0x1A => {
             // ^Z
             SendMessageW(window, WM_UNDO, WPARAM(0), LPARAM(0));
         }
-        _ => match context.state.input_type {
-            Type::Number => {}
-            _ => {
+        _ => {
+            if let Type::Number = context.state.input_type {
+            } else {
                 if char >= '_' as u16 && char != 127 {
                     replace_selection(window, context, true, Vec::<u16>::from([char]))?;
                 }
             }
-        },
+        }
     }
     Ok(())
 }
@@ -864,23 +860,17 @@ unsafe fn on_paste(window: HWND, context: &mut Context) -> Result<()> {
         let src = GlobalLock(HGLOBAL(hsrc.0 as _));
         let string = PCWSTR::from_raw(src as _);
         let mut len = lstrlenW(string) as usize;
-        match string.as_wide().iter().position(|a| *a == '\n' as u16) {
-            None => {}
-            Some(position) => {
-                len = position;
-                if len > 0 && string.as_wide()[len - 1] == '\r' as u16 {
-                    len = len - 1;
-                }
+        if let Some(position) = string.as_wide().iter().position(|a| *a == '\n' as u16) {
+            len = position;
+            if len > 0 && string.as_wide()[len - 1] == '\r' as u16 {
+                len = len - 1;
             }
         }
         replace_selection(window, context, true, string.as_wide()[..len].to_vec())?;
         GlobalUnlock(HGLOBAL(hsrc.0 as _))?;
     } else {
-        match context.state.input_type {
-            Type::Password => {
-                replace_selection(window, context, true, Vec::new())?;
-            }
-            _ => {}
+        if let Type::Password = context.state.input_type {
+            replace_selection(window, context, true, Vec::new())?;
         }
     }
     CloseClipboard()?;
@@ -1406,7 +1396,7 @@ extern "system" fn window_proc(
             let context = &mut *raw;
             match on_paint(window, context) {
                 Ok(_) => LRESULT(0),
-                Err(err) => DefWindowProcW(window, message, w_param, l_param),
+                Err(_) => DefWindowProcW(window, message, w_param, l_param),
             }
         },
         WM_PASTE => unsafe {
@@ -1431,14 +1421,11 @@ extern "system" fn window_proc(
             let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
             let context = &mut *raw;
             let mut point = POINT::default();
-            match GetCaretPos(&mut point) {
-                Ok(_) => {
-                    _ = update_imm_composition_window(window, context, point.x, point.y);
-                    let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
-                    let context = &*raw;
-                    _ = update_imm_composition_font(window, context);
-                }
-                Err(_) => {}
+            if GetCaretPos(&mut point).is_ok() {
+                _ = update_imm_composition_window(window, context, point.x, point.y);
+                let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
+                let context = &*raw;
+                _ = update_imm_composition_font(window, context);
             }
             LRESULT::default()
         },

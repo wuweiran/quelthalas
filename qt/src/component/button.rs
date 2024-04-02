@@ -478,38 +478,36 @@ unsafe fn on_paint(window: HWND, context: &Context) -> Result<()> {
         .render_target
         .FillRoundedRectangle(&rounded_rect, &background_brush);
 
-    match state.appearance {
-        Appearance::Primary => {}
-        _ => {
-            context
-                .border_color_variable
-                .GetVectorValue(&mut vector_variable)?;
-            let border_color = D2D1_COLOR_F {
-                r: vector_variable[0] as f32,
-                g: vector_variable[1] as f32,
-                b: vector_variable[2] as f32,
-                a: 1.0,
-            };
-            let border_brush = context
-                .render_target
-                .CreateSolidColorBrush(&border_color, None)?;
-            let rounded_rect = D2D1_ROUNDED_RECT {
-                rect: D2D_RECT_F {
-                    left: tokens.stroke_width_thin * 0.5,
-                    top: tokens.stroke_width_thin * 0.5,
-                    right: width - tokens.stroke_width_thin * 0.5,
-                    bottom: height - tokens.stroke_width_thin * 0.5,
-                },
-                radiusX: corner_radius,
-                radiusY: corner_radius,
-            };
-            context.render_target.DrawRoundedRectangle(
-                &rounded_rect,
-                &border_brush,
-                tokens.stroke_width_thin,
-                &context.stroke_style,
-            );
-        }
+    if let Appearance::Primary = state.appearance {
+    } else {
+        context
+            .border_color_variable
+            .GetVectorValue(&mut vector_variable)?;
+        let border_color = D2D1_COLOR_F {
+            r: vector_variable[0] as f32,
+            g: vector_variable[1] as f32,
+            b: vector_variable[2] as f32,
+            a: 1.0,
+        };
+        let border_brush = context
+            .render_target
+            .CreateSolidColorBrush(&border_color, None)?;
+        let rounded_rect = D2D1_ROUNDED_RECT {
+            rect: D2D_RECT_F {
+                left: tokens.stroke_width_thin * 0.5,
+                top: tokens.stroke_width_thin * 0.5,
+                right: width - tokens.stroke_width_thin * 0.5,
+                bottom: height - tokens.stroke_width_thin * 0.5,
+            },
+            radiusX: corner_radius,
+            radiusY: corner_radius,
+        };
+        context.render_target.DrawRoundedRectangle(
+            &rounded_rect,
+            &border_brush,
+            tokens.stroke_width_thin,
+            &context.stroke_style,
+        );
     }
 
     context
@@ -564,27 +562,24 @@ unsafe fn on_paint(window: HWND, context: &Context) -> Result<()> {
     );
 
     if state.has_icon() {
-        match &context.icon_svg {
-            None => {}
-            Some(svg) => {
-                let device_context5 = context.render_target.cast::<ID2D1DeviceContext5>()?;
-                let viewport_size = svg.GetViewportSize();
-                let desired_size = state.get_desired_icon_size();
-                match state.icon_position.unwrap_or(IconPosition::Before) {
-                    IconPosition::Before => {
-                        device_context5.SetTransform(&Matrix3x2::translation(
-                            left + desired_size / 2f32 - viewport_size.width / 2f32,
-                            top / 2f32 + bottom / 2f32 - viewport_size.height / 2f32,
-                        ));
-                    }
-                    IconPosition::After => device_context5.SetTransform(&Matrix3x2::translation(
-                        right - desired_size / 2f32 - viewport_size.width / 2f32,
+        if let Some(svg) = &context.icon_svg {
+            let device_context5 = context.render_target.cast::<ID2D1DeviceContext5>()?;
+            let viewport_size = svg.GetViewportSize();
+            let desired_size = state.get_desired_icon_size();
+            match state.icon_position.unwrap_or(IconPosition::Before) {
+                IconPosition::Before => {
+                    device_context5.SetTransform(&Matrix3x2::translation(
+                        left + desired_size / 2f32 - viewport_size.width / 2f32,
                         top / 2f32 + bottom / 2f32 - viewport_size.height / 2f32,
-                    )),
+                    ));
                 }
-                device_context5.DrawSvgDocument(svg);
-                device_context5.SetTransform(&Matrix3x2::identity());
+                IconPosition::After => device_context5.SetTransform(&Matrix3x2::translation(
+                    right - desired_size / 2f32 - viewport_size.width / 2f32,
+                    top / 2f32 + bottom / 2f32 - viewport_size.height / 2f32,
+                )),
             }
+            device_context5.DrawSvgDocument(svg);
+            device_context5.SetTransform(&Matrix3x2::identity());
         }
     }
 
@@ -634,32 +629,30 @@ unsafe fn change_color(context: &Context) -> Result<()> {
         &background_color_transition,
     )?;
 
-    match appearance {
-        Appearance::Primary => {}
-        _ => {
-            let border_color = if context.mouse_clicking {
-                &tokens.color_neutral_stroke1_pressed
-            } else if context.mouse_within {
-                &tokens.color_neutral_stroke1_hover
-            } else {
-                &tokens.color_neutral_stroke1
-            };
-            let border_color_transition = context
-                .transition_library
-                .CreateCubicBezierLinearVectorTransition(
-                    tokens.duration_faster,
-                    &[
-                        border_color.r as f64,
-                        border_color.g as f64,
-                        border_color.b as f64,
-                    ],
-                    tokens.curve_easy_ease[0],
-                    tokens.curve_easy_ease[1],
-                    tokens.curve_easy_ease[2],
-                    tokens.curve_easy_ease[3],
-                )?;
-            storyboard.AddTransition(&context.border_color_variable, &border_color_transition)?;
-        }
+    if let Appearance::Primary = appearance {
+    } else {
+        let border_color = if context.mouse_clicking {
+            &tokens.color_neutral_stroke1_pressed
+        } else if context.mouse_within {
+            &tokens.color_neutral_stroke1_hover
+        } else {
+            &tokens.color_neutral_stroke1
+        };
+        let border_color_transition = context
+            .transition_library
+            .CreateCubicBezierLinearVectorTransition(
+                tokens.duration_faster,
+                &[
+                    border_color.r as f64,
+                    border_color.g as f64,
+                    border_color.b as f64,
+                ],
+                tokens.curve_easy_ease[0],
+                tokens.curve_easy_ease[1],
+                tokens.curve_easy_ease[2],
+                tokens.curve_easy_ease[3],
+            )?;
+        storyboard.AddTransition(&context.border_color_variable, &border_color_transition)?;
     }
 
     let text_color = match appearance {

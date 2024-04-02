@@ -195,12 +195,8 @@ extern "system" fn window_process(
                     &dialog::ModelType::Alert
                 ) {
                     Ok(result) => {
-                        match result {
-                            DialogResult::OK => {
-                                _ = DestroyWindow(window);
-                            }
-                            DialogResult::Cancel => {}
-                            DialogResult::Close => {}
+                        if let DialogResult::OK = result {
+                            _ = DestroyWindow(window);
                         }
                         LRESULT(0)
                     }
