@@ -80,6 +80,25 @@ pub struct State {
     placeholder: Option<PCWSTR>,
 }
 
+impl State {
+    fn get_field_height(&self) -> f32 {
+        match self.size {
+            Size::Small => 24f32,
+            Size::Medium => 32f32,
+            Size::Large => 40f32,
+        }
+    }
+
+    fn get_horizontal_padding(&self) -> f32 {
+        let tokens = &self.qt.theme.tokens;
+        match self.size {
+            Size::Small => tokens.spacing_horizontal_s,
+            Size::Medium => tokens.spacing_horizontal_m,
+            Size::Large => tokens.spacing_horizontal_m + tokens.spacing_horizontal_s_nudge,
+        }
+    }
+}
+
 pub struct StringBuffer(Vec<u16>);
 
 impl StringBuffer {
@@ -450,6 +469,7 @@ unsafe fn update_uniscribe_data(
     if context.ssa.is_null() {
         let length = context.get_text_length();
         let udc = dc.unwrap_or(GetDC(window));
+        let old_font = SelectObject(udc, context.font);
         match context.state.input_type {
             Type::Password => {
                 ScriptStringAnalyse(
@@ -484,6 +504,8 @@ unsafe fn update_uniscribe_data(
                 )?;
             }
         }
+
+        SelectObject(udc, old_font);
         if dc.map(|x| x == udc).unwrap_or(false) {
             ReleaseDC(window, udc);
         }
@@ -573,8 +595,9 @@ unsafe fn set_rect_np(window: HWND, context: &mut Context) -> Result<()> {
     if context.format_rect.bottom - context.format_rect.top > context.line_height + 2 * bh {
         InflateRect(&mut context.format_rect, 0, -bh);
     }
-    context.format_rect.left = context.format_rect.left + 12;
-    context.format_rect.right = context.format_rect.right - 12;
+    let horizontal_padding = context.state.get_horizontal_padding() as i32;
+    context.format_rect.left = context.format_rect.left + horizontal_padding;
+    context.format_rect.right = context.format_rect.right - horizontal_padding;
     adjust_format_rect(window, context)
 }
 
@@ -1188,8 +1211,8 @@ unsafe fn on_paint(window: HWND, context: &mut Context) -> Result<()> {
     let old_brush = SelectObject(dc, GetSysColorBrush(COLOR_WINDOWFRAME));
     PatBlt(dc, rc.left, rc.top, rc.right - rc.left, bh, PATCOPY);
     PatBlt(dc, rc.left, rc.top, bw, rc.bottom - rc.top, PATCOPY);
-    PatBlt(dc, rc.left, rc.bottom - 1, rc.right - rc.left, -bw, PATCOPY);
-    PatBlt(dc, rc.right - 1, rc.top, -bw, rc.bottom - rc.top, PATCOPY);
+    PatBlt(dc, rc.left, rc.bottom - 1, rc.right - rc.left, bh, PATCOPY);
+    PatBlt(dc, rc.right - 1, rc.top, bw, rc.bottom - rc.top, PATCOPY);
     SelectObject(dc, old_brush);
     IntersectClipRect(
         dc,
@@ -1272,9 +1295,11 @@ extern "system" fn window_proc(
             let cs = l_param.0 as *const CREATESTRUCTW;
             let raw = (*cs).lpCreateParams as *mut State;
             let state = Box::<State>::from_raw(raw);
-            match on_create(window, *state) {
+            match on_create(window, *state).and_then(|mut context| {
+                set_rect_np(window, &mut context)?;
+                Ok(context)
+            }) {
                 Ok(mut context) => {
-                    _ = set_rect_np(window, &mut context);
                     update_scroll_info(window, &mut context);
                     let boxed = Box::new(context);
                     SetWindowLongPtrW(window, GWLP_USERDATA, Box::<Context>::into_raw(boxed) as _);
