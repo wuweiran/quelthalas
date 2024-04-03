@@ -431,7 +431,7 @@ impl IUIAnimationTimerEventHandler_Impl for AnimationTimerEventHandler {
     }
 }
 
-unsafe fn on_paint(window: HWND, context: &Context) -> Result<()> {
+unsafe fn paint(window: HWND, context: &Context) -> Result<()> {
     let state = &context.state;
     let tokens = &state.qt.theme.tokens;
 
@@ -445,12 +445,6 @@ unsafe fn on_paint(window: HWND, context: &Context) -> Result<()> {
         Shape::Rounded => tokens.border_radius_medium,
         Shape::Square => tokens.border_radius_none,
     };
-
-    let mut ps = PAINTSTRUCT::default();
-    BeginPaint(window, &mut ps);
-
-    context.render_target.BeginDraw();
-
     let rounded_rect = D2D1_ROUNDED_RECT {
         rect: D2D_RECT_F {
             left: 0f32,
@@ -582,11 +576,19 @@ unsafe fn on_paint(window: HWND, context: &Context) -> Result<()> {
             device_context5.SetTransform(&Matrix3x2::identity());
         }
     }
-
-    context.render_target.EndDraw(None, None)?;
-
-    EndPaint(window, &ps);
     Ok(())
+}
+
+unsafe fn on_paint(window: HWND, context: &Context) -> Result<()> {
+    let mut ps = PAINTSTRUCT::default();
+    BeginPaint(window, &mut ps);
+    context.render_target.BeginDraw();
+
+    let paint_result = paint(window, context);
+
+    let result = paint_result.and(context.render_target.EndDraw(None, None));
+    EndPaint(window, &ps);
+    result
 }
 
 unsafe fn change_color(context: &Context) -> Result<()> {

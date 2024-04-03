@@ -298,7 +298,7 @@ unsafe fn layout(window: HWND, context: &Context) -> Result<()> {
     Ok(())
 }
 
-unsafe fn on_paint(window: HWND, context: &Context) -> Result<()> {
+unsafe fn paint(window: HWND, context: &Context) -> Result<()> {
     let state = &context.state;
     let tokens = &state.qt.theme.tokens;
     let mut window_rect = RECT::default();
@@ -306,14 +306,6 @@ unsafe fn on_paint(window: HWND, context: &Context) -> Result<()> {
     let scaling_factor = get_scaling_factor(&window);
     let width = (window_rect.right - window_rect.left) as f32 / scaling_factor;
     let height = (window_rect.bottom - window_rect.top) as f32 / scaling_factor;
-
-    let mut ps = PAINTSTRUCT::default();
-    BeginPaint(window, &mut ps);
-    context.render_target.BeginDraw();
-    context
-        .render_target
-        .Clear(Some(&tokens.color_neutral_background1));
-
     let text_brush = context
         .render_target
         .CreateSolidColorBrush(&tokens.color_neutral_foreground1, None)?;
@@ -353,10 +345,20 @@ unsafe fn on_paint(window: HWND, context: &Context) -> Result<()> {
         D2D1_DRAW_TEXT_OPTIONS_NONE,
         DWRITE_MEASURING_MODE_NATURAL,
     );
-
-    context.render_target.EndDraw(None, None)?;
-    EndPaint(window, &ps);
     Ok(())
+}
+
+unsafe fn on_paint(window: HWND, context: &Context) -> Result<()> {
+    let mut ps = PAINTSTRUCT::default();
+    BeginPaint(window, &mut ps);
+    context.render_target.BeginDraw();
+    context.render_target.Clear(Some(
+        &context.state.qt.theme.tokens.color_neutral_background1,
+    ));
+
+    let result = paint(window, context).and(context.render_target.EndDraw(None, None));
+    EndPaint(window, &ps);
+    result
 }
 
 extern "system" fn window_proc(
