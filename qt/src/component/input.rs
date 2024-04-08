@@ -160,7 +160,6 @@ pub struct Context {
     selection_end: usize,
     is_captured: bool,
     is_focused: bool,
-    ime_status: usize,
     format_rect: RECT,
     font: HFONT,
     line_height: i32,
@@ -242,7 +241,7 @@ impl QT {
                 x,
                 y,
                 (380f32 * scaling_factor) as i32,
-                (32f32 * scaling_factor) as i32,
+                (boxed.get_field_height() * scaling_factor) as i32,
                 *parent_window,
                 None,
                 *instance,
@@ -366,7 +365,7 @@ unsafe fn replace_selection(
         return Ok(());
     }
     order_usize!(&mut start, &mut end);
-    let mut text_length = context.get_text_length();
+    let text_length = context.get_text_length();
     let size = text_length - (end - start) + replace.len();
     context.buffer.make_fit(size);
     let mut buf = StringBuffer::new();
@@ -787,7 +786,6 @@ unsafe fn on_create(window: HWND, state: State) -> Result<Context> {
         selection_end: 0,
         is_captured: false,
         is_focused: false,
-        ime_status: 0,
         format_rect: RECT::default(),
         font,
         line_height: tm.tmHeight,
@@ -1181,9 +1179,9 @@ unsafe fn paint_line(window: HWND, context: &mut Context, dc: HDC, rev: bool) ->
     } else if rev && start == end && context.is_focused {
         x = x + paint_text(context, dc, x, y, 0, start - li, false)?;
         x = x + paint_text(context, dc, x, y, start - li, end - start, false)?;
-        x = x + paint_text(context, dc, x, y, end - li, li + ll - end, false)?;
+        paint_text(context, dc, x, y, end - li, li + ll - end, false)?;
     } else {
-        x = x + paint_text(context, dc, x, y, 0, ll, false)?;
+        paint_text(context, dc, x, y, 0, ll, false)?;
     }
     Ok(())
 }
