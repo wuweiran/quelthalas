@@ -13,7 +13,7 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 
 use quelthalas::component::button::IconPosition;
 use quelthalas::component::dialog::DialogResult;
-use quelthalas::component::{button, dialog, input};
+use quelthalas::component::{button, dialog, input, progress_bar};
 use quelthalas::icon::Icon;
 use quelthalas::{MouseEvent, QT};
 
@@ -175,6 +175,28 @@ extern "system" fn window_process(
                     None,
                     &input::Type::Text,
                     None,
+                );
+                _ = qt.create_progress_bar(
+                    &window,
+                    &instance,
+                    20,
+                    30 + 250 * scaling_factor as i32,
+                    400 * scaling_factor as i32,
+                    &progress_bar::Shape::Rounded,
+                    None,
+                    None,
+                    &progress_bar::Thickness::Medium,
+                );
+                _ = qt.create_progress_bar(
+                    &window,
+                    &instance,
+                    20,
+                    30 + 275 * scaling_factor as i32,
+                    400 * scaling_factor as i32,
+                    &progress_bar::Shape::Rounded,
+                    Some(0.4),
+                    None,
+                    &progress_bar::Thickness::Large,
                 );
                 SetWindowLongPtrW(
                     window,
