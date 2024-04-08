@@ -246,24 +246,13 @@ unsafe fn on_create(window: HWND, state: State) -> Result<Context> {
 unsafe fn paint(window: HWND, context: &Context) -> Result<()> {
     let state = &context.state;
     let tokens = &state.qt.theme.tokens;
+    context.render_target.Clear(Some(&tokens.color_neutral_background6));
+
     let mut rect = RECT::default();
     GetClientRect(window, &mut rect)?;
     let scaling_factor = get_scaling_factor(&window);
     let width = rect.right as f32 / scaling_factor;
     let height = rect.bottom as f32 / scaling_factor;
-
-    let background_rect = D2D_RECT_F {
-        left: 0f32,
-        top: 0f32,
-        right: width,
-        bottom: height,
-    };
-    let background_brush = context
-        .render_target
-        .CreateSolidColorBrush(&tokens.color_neutral_background6, None)?;
-    context
-        .render_target
-        .FillRectangle(&background_rect, &background_brush);
 
     match state.value {
         Some(value) => {
