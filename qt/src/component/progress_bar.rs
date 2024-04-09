@@ -246,7 +246,9 @@ unsafe fn on_create(window: HWND, state: State) -> Result<Context> {
 unsafe fn paint(window: HWND, context: &Context) -> Result<()> {
     let state = &context.state;
     let tokens = &state.qt.theme.tokens;
-    context.render_target.Clear(Some(&tokens.color_neutral_background6));
+    context
+        .render_target
+        .Clear(Some(&tokens.color_neutral_background6));
 
     let mut rect = RECT::default();
     GetClientRect(window, &mut rect)?;
@@ -320,6 +322,48 @@ unsafe fn on_paint(window: HWND, context: &Context) -> Result<()> {
     result
 }
 
+unsafe fn on_dpi_changed(window: HWND, context: &Context) -> Result<()> {
+    let scaling_factor = get_scaling_factor(&window);
+    let scaled_width = context.state.width * scaling_factor;
+    let scaled_height = context.state.get_height() * scaling_factor;
+    SetWindowPos(
+        window,
+        None,
+        0,
+        0,
+        scaled_width as i32,
+        scaled_height as i32,
+        SWP_NOMOVE | SWP_NOZORDER,
+    )?;
+    context.render_target.Resize(&D2D_SIZE_U {
+        width: scaled_width as u32,
+        height: scaled_height as u32,
+    })?;
+    let new_dpi = GetDpiForWindow(window);
+    context.render_target.SetDpi(new_dpi as f32, new_dpi as f32);
+    InvalidateRect(window, None, false);
+
+    let tokens = &context.state.qt.theme.tokens;
+    let corner_diameter = match context.state.shape {
+        Shape::Rounded => {
+            scaled_height.min(tokens.border_radius_medium * 2f32 * scaling_factor) as i32
+        }
+        Shape::Square => {
+            scaled_height.min(tokens.border_radius_none * 2f32 * scaling_factor) as i32
+        }
+    };
+    let region = CreateRoundRectRgn(
+        0,
+        0,
+        scaled_width as i32 + 1,
+        scaled_height as i32 + 1,
+        corner_diameter,
+        corner_diameter,
+    );
+    SetWindowRgn(window, region, TRUE);
+    Ok(())
+}
+
 extern "system" fn window_proc(
     window: HWND,
     message: u32,
@@ -356,25 +400,7 @@ extern "system" fn window_proc(
         WM_DPICHANGED_BEFOREPARENT => unsafe {
             let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
             let context = &*raw;
-            let scaling_factor = get_scaling_factor(&window);
-            let scaled_width = context.state.width * scaling_factor;
-            let scaled_height = context.state.get_height() * scaling_factor;
-            _ = SetWindowPos(
-                window,
-                None,
-                0,
-                0,
-                scaled_width as i32,
-                scaled_height as i32,
-                SWP_NOMOVE | SWP_NOZORDER,
-            )
-            .and(context.render_target.Resize(&D2D_SIZE_U {
-                width: scaled_width as u32,
-                height: scaled_height as u32,
-            }));
-            let new_dpi = GetDpiForWindow(window);
-            context.render_target.SetDpi(new_dpi as f32, new_dpi as f32);
-            InvalidateRect(window, None, false);
+            _ = on_dpi_changed(window, context);
             LRESULT(0)
         },
         _ => unsafe { DefWindowProcW(window, message, w_param, l_param) },
