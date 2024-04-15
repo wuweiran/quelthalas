@@ -69,7 +69,7 @@ impl QT {
             };
             RegisterClassExW(&window_class);
             let scaling_factor = get_scaling_factor(parent_window);
-            EnableWindow(*parent_window, FALSE);
+            _ = EnableWindow(*parent_window, FALSE);
             let boxed = Box::new(State {
                 qt: self.clone(),
                 title,
@@ -94,7 +94,7 @@ impl QT {
                 Some(Box::<State>::into_raw(boxed) as _),
             );
 
-            ShowWindow(window, SW_SHOW);
+            _ = ShowWindow(window, SW_SHOW);
 
             let mut message = MSG::default();
             let mut result = DialogResult::Cancel;
@@ -104,14 +104,14 @@ impl QT {
                     let context = &*raw;
                     result = context.result;
                 }
-                TranslateMessage(&message);
+                _ = TranslateMessage(&message);
                 DispatchMessageW(&message);
                 let window_exists: bool = IsWindow(window).into();
                 if !window_exists {
                     break;
                 }
             }
-            EnableWindow(*parent_window, TRUE);
+            _ = EnableWindow(*parent_window, TRUE);
             SetActiveWindow(*parent_window);
             Ok(result)
         }
@@ -357,7 +357,7 @@ unsafe fn on_paint(window: HWND, context: &Context) -> Result<()> {
     ));
 
     let result = paint(window, context).and(context.render_target.EndDraw(None, None));
-    EndPaint(window, &ps);
+    _ = EndPaint(window, &ps);
     result
 }
 
@@ -396,7 +396,7 @@ extern "system" fn window_proc(
             let new_dpi_y = (w_param.0 >> 16) as i16 as f32;
             context.render_target.SetDpi(new_dpi_x, new_dpi_y);
             _ = layout(window, &context);
-            InvalidateRect(window, None, false);
+            _ = InvalidateRect(window, None, false);
             LRESULT(TRUE.0 as isize)
         },
         WM_DESTROY => unsafe {

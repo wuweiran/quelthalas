@@ -72,7 +72,7 @@ impl QT {
             ..Default::default()
         };
         RegisterClassExW(&window_class);
-        let is_parent_window_valid : bool = IsWindow(parent_window).into();
+        let is_parent_window_valid: bool = IsWindow(parent_window).into();
         if !is_parent_window_valid {
             return Err(Error::from(ERROR_INVALID_WINDOW_HANDLE));
         }
@@ -97,8 +97,7 @@ impl QT {
             Some(Box::<Context>::into_raw(boxed) as _),
         );
         init_tracking(parent_window)?;
-        track_menu(window, menu.clone(), 0, 0, parent_window)
-            .and(exit_tracking(parent_window))?;
+        track_menu(window, menu.clone(), 0, 0, parent_window).and(exit_tracking(parent_window))?;
         Ok(())
     }
 }
@@ -150,7 +149,7 @@ unsafe fn track_menu(
                 if CallMsgFilterW(&msg, MSGF_MENU as i32).into() {
                     break;
                 }
-                PeekMessageW(&mut msg, None, msg.message, msg.message, PM_REMOVE);
+                _ = PeekMessageW(&mut msg, None, msg.message, msg.message, PM_REMOVE);
             } else {
                 if !enter_idle_sent {
                     enter_idle_sent = true;
@@ -172,7 +171,7 @@ unsafe fn track_menu(
 
         if msg.message == WM_CANCELMODE {
             exit_menu = true;
-            PeekMessageW(&mut msg, None, msg.message, msg.message, PM_REMOVE);
+            _ = PeekMessageW(&mut msg, None, msg.message, msg.message, PM_REMOVE);
             break;
         }
     }
@@ -244,7 +243,7 @@ extern "system" fn window_proc(
             let mut ps = PAINTSTRUCT::default();
             let dc = BeginPaint(window, &mut ps);
             _ = draw_popup_menu(window, dc, menu);
-            EndPaint(window, &ps);
+            _ = EndPaint(window, &ps);
             LRESULT(0)
         },
         WM_PRINTCLIENT => unsafe {
