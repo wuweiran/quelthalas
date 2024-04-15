@@ -80,7 +80,7 @@ impl QT {
             return Err(Error::from(ERROR_INVALID_WINDOW_HANDLE));
         }
         let menu = Rc::new(convert_menu_info_list_to_menu(menu_list));
-        let window = init_popup(self.clone(), parent_window, menu, x, y);
+        let window = init_popup(self.clone(), parent_window, menu.clone(), x, y);
         init_tracking(parent_window)?;
         track_menu(window, menu.clone(), 0, 0, parent_window).and(exit_tracking(parent_window))?;
         Ok(())
