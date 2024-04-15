@@ -6,7 +6,9 @@ use windows::Win32::Foundation::{
     ERROR_INVALID_WINDOW_HANDLE, FALSE, HINSTANCE, HWND, LPARAM, LRESULT, POINT, TRUE, WPARAM,
 };
 use windows::Win32::Graphics::Gdi::{BeginPaint, EndPaint, HDC, PAINTSTRUCT};
-use windows::Win32::UI::Input::KeyboardAndMouse::SetCapture;
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    SetCapture, VIRTUAL_KEY, VK_DOWN, VK_END, VK_F10, VK_HOME, VK_MENU, VK_RIGHT, VK_SHIFT, VK_UP,
+};
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 use crate::QT;
@@ -54,6 +56,8 @@ fn convert_menu_info_list_to_menu(menu_info_list: Vec<MenuInfo>) -> Menu {
     Menu { items }
 }
 
+const CLASS_NAME: PCWSTR = w!("QT_MENU");
+
 impl QT {
     pub unsafe fn open_menu(
         &self,
@@ -62,7 +66,6 @@ impl QT {
         x: i32,
         y: i32,
     ) -> Result<()> {
-        const CLASS_NAME: PCWSTR = w!("QT_MENU");
         let window_class = WNDCLASSEXW {
             cbSize: size_of::<WNDCLASSEXW>() as u32,
             lpszClassName: CLASS_NAME,
@@ -77,29 +80,33 @@ impl QT {
             return Err(Error::from(ERROR_INVALID_WINDOW_HANDLE));
         }
         let menu = Rc::new(convert_menu_info_list_to_menu(menu_list));
-        let boxed = Box::new(Context {
-            qt: self.clone(),
-            menu: menu.clone(),
-            owning_window: parent_window,
-        });
-        let window = CreateWindowExW(
-            WINDOW_EX_STYLE::default(),
-            CLASS_NAME,
-            w!(""),
-            WS_POPUP,
-            x,
-            y,
-            0,
-            0,
-            parent_window,
-            None,
-            HINSTANCE(GetWindowLongPtrW(parent_window, GWLP_HINSTANCE)),
-            Some(Box::<Context>::into_raw(boxed) as _),
-        );
+        let window = init_popup(self.clone(), parent_window, menu, x, y);
         init_tracking(parent_window)?;
         track_menu(window, menu.clone(), 0, 0, parent_window).and(exit_tracking(parent_window))?;
         Ok(())
     }
+}
+
+unsafe fn init_popup(qt: QT, owning_window: HWND, menu: Rc<Menu>, x: i32, y: i32) -> HWND {
+    let boxed = Box::new(Context {
+        qt,
+        menu,
+        owning_window,
+    });
+    CreateWindowExW(
+        WINDOW_EX_STYLE::default(),
+        CLASS_NAME,
+        w!(""),
+        WS_POPUP,
+        x,
+        y,
+        0,
+        0,
+        owning_window,
+        None,
+        HINSTANCE(GetWindowLongPtrW(owning_window, GWLP_HINSTANCE)),
+        Some(Box::<Context>::into_raw(boxed) as _),
+    )
 }
 
 unsafe fn init_tracking(owning_window: HWND) -> Result<()> {
@@ -126,6 +133,32 @@ struct Tracker {
     point: POINT,
 }
 
+fn menu_from_point(root: Rc<Menu>, point: &POINT) -> Option<Rc<Menu>> {
+    None
+}
+
+fn menu_button_down(mt: &mut Tracker, message: u32, menu: Rc<Menu>) -> bool {
+    false
+}
+
+fn menu_button_up(mt: &mut Tracker, menu: Rc<Menu>) -> i32 {
+    0
+}
+
+fn menu_mouse_move(mt: &mut Tracker, menu: Rc<Menu>) -> bool {
+    false
+}
+
+fn select_item(window: HWND, menu: &Menu, index: Option<i32>) {}
+
+fn select_previous(window: HWND, menu: &Menu) {}
+
+fn select_next(window: HWND, menu: &Menu) {}
+
+fn select_first(window: HWND, menu: &Menu) {}
+
+fn select_last(window: HWND, menu: &Menu) {}
+
 unsafe fn track_menu(
     window: HWND,
     menu: Rc<Menu>,
@@ -134,11 +167,12 @@ unsafe fn track_menu(
     owning_window: HWND,
 ) -> Result<()> {
     SetCapture(window);
+    let mut remove_message = false;
     let mut mt = Tracker {
         current_menu: menu.clone(),
         top_menu: menu.clone(),
         owning_window,
-        point: Default::default(),
+        point: POINT { x, y },
     };
     let mut exit_menu = false;
     let mut enter_idle_sent = false;
@@ -173,6 +207,60 @@ unsafe fn track_menu(
             exit_menu = true;
             _ = PeekMessageW(&mut msg, None, msg.message, msg.message, PM_REMOVE);
             break;
+        }
+
+        mt.point = msg.pt;
+        if msg.hwnd == window || msg.message != WM_TIMER {
+            enter_idle_sent = false;
+        }
+
+        remove_message = false;
+        if msg.message >= WM_MOUSEFIRST && msg.message <= WM_MOUSELAST {
+            mt.point.x = msg.lParam.0 as i16 as i32;
+            mt.point.y = (msg.lParam.0 >> 16) as i16 as i32;
+
+            let menu_from_point_result = menu_from_point(menu.clone(), &mt.point);
+
+            match msg.message {
+                WM_RBUTTONDBLCLK | WM_RBUTTONDOWN | WM_LBUTTONDBLCLK | WM_LBUTTONDOWN => {
+                    remove_message = match menu_from_point_result {
+                        None => false,
+                        Some(menu_from_point) => {
+                            menu_button_down(&mut mt, msg.message, menu_from_point)
+                        }
+                    };
+                    exit_menu = !remove_message;
+                }
+                WM_RBUTTONUP | WM_LBUTTONUP => match menu_from_point_result {
+                    Some(menu_from_point) => {
+                        let executed_menu_id = menu_button_up(&mut mt, menu_from_point);
+                        remove_message = executed_menu_id != -1;
+                        exit_menu = remove_message;
+                    }
+                    None => exit_menu = false,
+                },
+                WM_MOUSEMOVE => {
+                    if let Some(menu_from_point) = menu_from_point_result {
+                        exit_menu = exit_menu | !menu_mouse_move(&mut mt, menu_from_point)
+                    }
+                }
+                _ => {}
+            }
+        } else if msg.message >= WM_KEYFIRST && msg.message <= WM_KEYLAST {
+            remove_message = true;
+            match msg.message {
+                WM_KEYDOWN | WM_SYSKEYDOWN => match VIRTUAL_KEY(msg.wParam.0 as u16) {
+                    VK_MENU | VK_F10 => {
+                        exit_menu = true;
+                    }
+                    VK_HOME => select_first(window, menu.as_ref()),
+                    VK_END => select_last(window, menu.as_ref()),
+                    VK_UP => select_previous(window, menu.as_ref()),
+                    VK_DOWN => select_next(window, menu.as_ref()),
+                    _ => {}
+                },
+                _ => {}
+            }
         }
     }
     Ok(())
@@ -238,24 +326,24 @@ extern "system" fn window_proc(
         },
         WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),
         WM_PAINT => unsafe {
-            let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Menu;
-            let menu = &*raw;
+            let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
+            let context = &*raw;
             let mut ps = PAINTSTRUCT::default();
             let dc = BeginPaint(window, &mut ps);
-            _ = draw_popup_menu(window, dc, menu);
+            _ = draw_popup_menu(window, dc, context.menu.as_ref());
             _ = EndPaint(window, &ps);
             LRESULT(0)
         },
         WM_PRINTCLIENT => unsafe {
-            let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Menu;
-            let menu = &*raw;
-            _ = draw_popup_menu(window, HDC(w_param.0 as isize), menu);
+            let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
+            let context = &*raw;
+            _ = draw_popup_menu(window, HDC(w_param.0 as isize), context.menu.as_ref());
             LRESULT(0)
         },
         WM_ERASEBKGND => LRESULT(1),
         WM_DESTROY => unsafe {
-            let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Menu;
-            _ = Box::<Menu>::from_raw(raw);
+            let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
+            _ = Box::<Context>::from_raw(raw);
             LRESULT(0)
         },
         _ => unsafe { DefWindowProcW(window, message, w_param, l_param) },
