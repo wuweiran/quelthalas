@@ -380,7 +380,7 @@ unsafe fn replace_selection(
         lstrcpynW(
             from_raw_parts_mut(
                 context.buffer.as_mut_ptr().offset(start as isize),
-                size - start,
+                size - start + 1,
             ),
             PCWSTR::from_raw(context.buffer.as_ptr().offset(end as isize)),
         );
@@ -638,12 +638,10 @@ unsafe fn position_from_char(window: HWND, context: &mut Context, index: usize) 
             } else {
                 0
             }
+        } else if !context.ssa.is_null() {
+            ScriptStringCPtoX(context.ssa, index as i32, FALSE)? as usize
         } else {
-            if !context.ssa.is_null() {
-                ScriptStringCPtoX(context.ssa, context.x_offset as i32, FALSE)? as usize
-            } else {
-                0
-            }
+            0
         }
     } else {
         0
@@ -797,7 +795,7 @@ unsafe fn on_create(window: HWND, state: State) -> Result<Context> {
 }
 
 unsafe fn on_char(window: HWND, context: &mut Context, char: u16) -> Result<()> {
-    let control = GetKeyState(VK_CONTROL.0 as i32) != 0;
+    let control = GetKeyState(VK_CONTROL.0 as i32) < 0;
     const BACK: u16 = VK_BACK.0;
     match char {
         BACK => {
@@ -899,12 +897,12 @@ unsafe fn on_paste(window: HWND, context: &mut Context) -> Result<()> {
 }
 
 unsafe fn on_key_down(window: HWND, context: &mut Context, key: i32) -> Result<()> {
-    if GetKeyState(VK_MENU.0 as i32) != 0 {
+    if GetKeyState(VK_MENU.0 as i32) < 0 {
         return Ok(());
     }
 
-    let shift = GetKeyState(VK_SHIFT.0 as i32) != 0;
-    let control = GetKeyState(VK_CONTROL.0 as i32) != 0;
+    let shift = GetKeyState(VK_SHIFT.0 as i32) < 0;
+    let control = GetKeyState(VK_CONTROL.0 as i32) < 0;
 
     const LEFT: i32 = VK_LEFT.0 as i32;
     const RIGHT: i32 = VK_RIGHT.0 as i32;
