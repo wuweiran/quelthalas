@@ -16,6 +16,7 @@ pub(crate) struct Tokens {
     pub color_brand_background_hover: D2D1_COLOR_F,
     pub color_brand_background_pressed: D2D1_COLOR_F,
     pub color_compound_brand_background: D2D1_COLOR_F,
+    pub color_compound_brand_stroke: D2D1_COLOR_F,
     pub color_neutral_foreground1: D2D1_COLOR_F,
     pub color_neutral_foreground1_hover: D2D1_COLOR_F,
     pub color_neutral_foreground1_pressed: D2D1_COLOR_F,
@@ -44,7 +45,9 @@ pub(crate) struct Tokens {
     pub border_radius_none: f32,
     pub border_radius_medium: f32,
     pub curve_easy_ease: [f64; 4],
+    pub curve_decelerate_mid: [f64; 4],
     pub duration_faster: f64,
+    pub duration_normal: f64,
 }
 
 macro_rules! rgb {
@@ -77,6 +80,7 @@ impl Tokens {
             color_brand_background_hover: rgb!("#115ea3"),
             color_brand_background_pressed: rgb!("#0c3b5e"),
             color_compound_brand_background: rgb!("#0f6cbd"),
+            color_compound_brand_stroke: rgb!("#0f6cbd"),
             color_neutral_foreground1: rgb!("#242424"),
             color_neutral_foreground1_hover: rgb!("#242424"),
             color_neutral_foreground1_pressed: rgb!("#242424"),
@@ -105,7 +109,9 @@ impl Tokens {
             border_radius_none: 0f32,
             border_radius_medium: 4f32,
             curve_easy_ease: [0.33, 0.0, 0.67, 1.0],
+            curve_decelerate_mid: [0.0, 0.0, 0.0, 1.0],
             duration_faster: 0.1,
+            duration_normal: 0.2,
         }
     }
 }

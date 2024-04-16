@@ -17,19 +17,26 @@ use windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F;
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, CreateFontW, CreateRoundRectRgn, CreateSolidBrush, DeleteObject, EndPaint, FillRgn,
     GetBkColor, GetBkMode, GetClipBox, GetDC, GetObjectW, GetSysColor, GetTextColor,
-    GetTextExtentPoint32W, GetTextMetricsW, InflateRect, IntersectClipRect, IntersectRect,
-    InvalidateRect, MapWindowPoints, PatBlt, RedrawWindow, ReleaseDC, SelectObject, SetBkColor,
-    SetBkMode, SetTextColor, SetWindowRgn, TextOutW, BACKGROUND_MODE, CLEARTYPE_QUALITY,
-    CLIP_DEFAULT_PRECIS, COLOR_HIGHLIGHT, COLOR_HIGHLIGHTTEXT, DEFAULT_CHARSET, ETO_OPTIONS,
-    HBRUSH, HDC, HFONT, LOGFONTW, OPAQUE, OUT_OUTLINE_PRECIS, PAINTSTRUCT, PATCOPY, RDW_INVALIDATE,
-    TEXTMETRICW, VARIABLE_PITCH,
+    GetTextExtentPoint32W, GetTextMetricsW, InflateRect, IntersectRect, InvalidateRect,
+    MapWindowPoints, PatBlt, RedrawWindow, ReleaseDC, SelectObject, SetBkColor, SetBkMode,
+    SetTextColor, SetWindowRgn, TextOutW, BACKGROUND_MODE, CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS,
+    COLOR_HIGHLIGHT, COLOR_HIGHLIGHTTEXT, DEFAULT_CHARSET, ETO_OPTIONS, HBRUSH, HDC, HFONT,
+    LOGFONTW, OPAQUE, OUT_OUTLINE_PRECIS, PAINTSTRUCT, PATCOPY, RDW_INVALIDATE, TEXTMETRICW,
+    VARIABLE_PITCH,
 };
+use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
 use windows::Win32::System::DataExchange::{
     CloseClipboard, EmptyClipboard, GetClipboardData, OpenClipboard, SetClipboardData,
 };
 use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
 use windows::Win32::System::Ole::CF_UNICODETEXT;
 use windows::Win32::System::SystemServices::MK_SHIFT;
+use windows::Win32::UI::Animation::{
+    IUIAnimationManager2, IUIAnimationTimer, IUIAnimationTimerEventHandler,
+    IUIAnimationTimerEventHandler_Impl, IUIAnimationTimerUpdateHandler,
+    IUIAnimationTransitionLibrary2, IUIAnimationVariable2, UIAnimationManager2, UIAnimationTimer,
+    UIAnimationTransitionLibrary2, UI_ANIMATION_IDLE_BEHAVIOR_DISABLE,
+};
 use windows::Win32::UI::Controls::{SetScrollInfo, WORD_BREAK_ACTION};
 use windows::Win32::UI::Controls::{WB_ISDELIMITER, WB_LEFT, WB_RIGHT};
 use windows::Win32::UI::Input::Ime::{
@@ -166,6 +173,10 @@ impl StringBuffer {
 
 pub struct Context {
     state: State,
+    animation_manager: IUIAnimationManager2,
+    animation_timer: IUIAnimationTimer,
+    transition_library: IUIAnimationTransitionLibrary2,
+    bottom_focus_border: IUIAnimationVariable2,
     cached_text_length: Option<usize>,
     buffer: StringBuffer,
     x_offset: usize,
@@ -180,10 +191,10 @@ pub struct Context {
     font: HFONT,
     background_color: COLORREF,
     background_color_brush: HBRUSH,
-    border_color: COLORREF,
     border_color_brush: HBRUSH,
-    border_bottom_color: COLORREF,
+    border_color_focused_brush: HBRUSH,
     border_bottom_color_brush: HBRUSH,
+    border_bottom_color_focused_brush: HBRUSH,
     text_color: COLORREF,
     line_height: i32,
     char_width: i32,
@@ -224,7 +235,7 @@ impl Context {
 }
 
 impl QT {
-    pub fn creat_input(
+    pub fn create_input(
         &self,
         parent_window: &HWND,
         instance: &HINSTANCE,
@@ -487,7 +498,7 @@ unsafe fn replace_selection(
 
     start = start + replace.len();
     set_selection(window, context, Some(start), Some(start))?;
-    InvalidateRect(window, None, true);
+    InvalidateRect(window, None, false);
 
     scroll_caret(window, context)?;
     update_scroll_info(window, context);
@@ -813,7 +824,45 @@ fn convert_to_color_ref(from: &D2D1_COLOR_F) -> COLORREF {
     let r = (from.r * 255.0) as u32;
     let g = (from.g * 255.0) as u32;
     let b = (from.b * 255.0) as u32;
-    COLORREF(r << 16 | g << 8 | b)
+    COLORREF(b << 16 | g << 8 | r)
+}
+
+#[implement(IUIAnimationTimerEventHandler)]
+struct AnimationTimerEventHandler {
+    window: HWND,
+}
+
+impl IUIAnimationTimerEventHandler_Impl for AnimationTimerEventHandler {
+    fn OnPreUpdate(&self) -> Result<()> {
+        Ok(())
+    }
+
+    fn OnPostUpdate(&self) -> Result<()> {
+        unsafe {
+            let raw = GetWindowLongPtrW(self.window, GWLP_USERDATA) as *mut Context;
+            let context = &*raw;
+            let mut rc = RECT::default();
+            GetClientRect(self.window, &mut rc)?;
+            let scaling_factor = get_scaling_factor(&self.window);
+            let border_width = (1.0 * scaling_factor) as i32;
+            let border_bottom_width = (2.0 * scaling_factor) as i32;
+            _ = InvalidateRect(
+                self.window,
+                Some(&RECT {
+                    left: rc.left,
+                    top: (rc.bottom - border_bottom_width).max(rc.top + border_width),
+                    right: rc.right,
+                    bottom: rc.bottom,
+                }),
+                false,
+            );
+        }
+        Ok(())
+    }
+
+    fn OnRenderingTooSlow(&self, _frames_per_second: u32) -> Result<()> {
+        Ok(())
+    }
 }
 
 unsafe fn on_create(window: HWND, state: State) -> Result<Context> {
@@ -842,11 +891,30 @@ unsafe fn on_create(window: HWND, state: State) -> Result<Context> {
     GetTextMetricsW(dc, &mut tm);
     SelectObject(dc, old_font);
     ReleaseDC(window, dc);
+    let animation_timer: IUIAnimationTimer =
+        CoCreateInstance(&UIAnimationTimer, None, CLSCTX_INPROC_SERVER)?;
+    let transition_library: IUIAnimationTransitionLibrary2 =
+        CoCreateInstance(&UIAnimationTransitionLibrary2, None, CLSCTX_INPROC_SERVER)?;
+    let animation_manager: IUIAnimationManager2 =
+        CoCreateInstance(&UIAnimationManager2, None, CLSCTX_INPROC_SERVER)?;
+    let timer_update_handler = animation_manager.cast::<IUIAnimationTimerUpdateHandler>()?;
+    animation_timer
+        .SetTimerUpdateHandler(&timer_update_handler, UI_ANIMATION_IDLE_BEHAVIOR_DISABLE)?;
+    let timer_event_handler: IUIAnimationTimerEventHandler =
+        AnimationTimerEventHandler { window }.into();
+    animation_timer.SetTimerEventHandler(&timer_event_handler)?;
+    let bottom_focus_border = animation_manager.CreateAnimationVariable(0.0)?;
     let background_color = convert_to_color_ref(&tokens.color_neutral_background1);
     let border_color = convert_to_color_ref(&tokens.color_neutral_stroke1);
+    let border_color_focused = convert_to_color_ref(&tokens.color_neutral_stroke1_pressed);
     let border_bottom_color = convert_to_color_ref(&tokens.color_neutral_stroke_accessible);
+    let border_bottom_focused_color = convert_to_color_ref(&tokens.color_compound_brand_stroke);
     Ok(Context {
         state,
+        animation_manager,
+        animation_timer,
+        transition_library,
+        bottom_focus_border,
         cached_text_length: None,
         buffer: StringBuffer::new(),
         x_offset: 0,
@@ -861,10 +929,10 @@ unsafe fn on_create(window: HWND, state: State) -> Result<Context> {
         font,
         background_color,
         background_color_brush: CreateSolidBrush(background_color),
-        border_color,
         border_color_brush: CreateSolidBrush(border_color),
-        border_bottom_color,
+        border_color_focused_brush: CreateSolidBrush(border_color_focused),
         border_bottom_color_brush: CreateSolidBrush(border_bottom_color),
+        border_bottom_color_focused_brush: CreateSolidBrush(border_bottom_focused_color),
         text_color: Default::default(),
         line_height: tm.tmHeight,
         char_width: tm.tmAveCharWidth,
@@ -914,7 +982,7 @@ unsafe fn on_char(window: HWND, context: &mut Context, char: u16) -> Result<()> 
         _ => {
             if let Type::Number = context.state.input_type {
             } else {
-                if char >= '_' as u16 && char != 127 {
+                if char >= ' ' as u16 && char != 127 {
                     replace_selection(window, context, true, Vec::<u16>::from([char]), true)?;
                 }
             }
@@ -1054,6 +1122,7 @@ unsafe fn on_kill_focus(window: HWND, context: &mut Context) -> Result<()> {
         context.selection_start,
         context.selection_end,
     )?;
+    RedrawWindow(window, None, None, RDW_INVALIDATE);
     Ok(())
 }
 
@@ -1272,40 +1341,66 @@ unsafe fn on_paint(window: HWND, context: &mut Context) -> Result<()> {
     let rev = context.is_focused;
     let mut ps = PAINTSTRUCT::default();
     let dc = BeginPaint(window, &mut ps);
-    SetTextColor(dc, context.text_color);
-    SetBkColor(dc, context.background_color);
-    context.invalidate_uniscribe_data()?;
-    let mut client_rect = RECT::default();
-    GetClientRect(window, &mut client_rect)?;
-
-    IntersectClipRect(
-        dc,
-        client_rect.left,
-        client_rect.top,
-        client_rect.right,
-        client_rect.bottom,
-    );
+    let mut rc_rgn = RECT::default();
+    GetClipBox(dc, &mut rc_rgn);
 
     let tokens = &context.state.qt.theme.tokens;
     let scaling_factor = get_scaling_factor(&window);
     let border_width = (1.0 * scaling_factor) as i32;
-    let mut rc = client_rect;
-    let old_brush = SelectObject(dc, context.border_color_brush);
+    let border_bottom_width = (2.0 * scaling_factor) as i32;
+    let mut rc = RECT::default();
+    GetClientRect(window, &mut rc)?;
     let diameter = (tokens.border_radius_medium * scaling_factor * 2f32) as i32;
     let w = diameter.max(border_width);
-    PatBlt(dc, rc.left, rc.top, rc.right - rc.left, w, PATCOPY);
-    PatBlt(dc, rc.left, rc.top, w, rc.bottom - rc.top, PATCOPY);
-    PatBlt(dc, rc.right - w, rc.top, w, rc.bottom - rc.top, PATCOPY);
-    SelectObject(dc, context.border_bottom_color_brush);
-    PatBlt(
-        dc,
-        rc.left,
-        rc.bottom - (w / 4).max(border_width),
-        rc.right - rc.left,
-        (w / 4).max(border_width),
-        PATCOPY,
-    );
-    SelectObject(dc, old_brush);
+    let mut rc_intersect = RECT::default();
+
+    if IntersectRect(
+        &mut rc_intersect,
+        &rc_rgn,
+        &RECT {
+            left: rc.left,
+            top: rc.top,
+            right: rc.right,
+            bottom: (rc.bottom - border_bottom_width).max(rc.top + border_width),
+        },
+    )
+    .into()
+    {
+        let border_color_brush = if context.is_focused {
+            context.border_color_focused_brush
+        } else {
+            context.border_color_brush
+        };
+        SelectObject(dc, border_color_brush);
+        PatBlt(dc, rc.left, rc.top, rc.right - rc.left, w, PATCOPY);
+        PatBlt(dc, rc.left, rc.top, w, rc.bottom - rc.top, PATCOPY);
+        PatBlt(dc, rc.right - w, rc.top, w, rc.bottom - rc.top, PATCOPY);
+    }
+
+    let need_draw_border_bottom: bool = IntersectRect(
+        &mut rc_intersect,
+        &rc_rgn,
+        &RECT {
+            left: rc.left,
+            top: (rc.bottom - border_bottom_width).max(rc.top + border_width),
+            right: rc.right,
+            bottom: rc.bottom,
+        },
+    )
+    .into();
+
+    if need_draw_border_bottom {
+        SelectObject(dc, context.border_bottom_color_brush);
+        PatBlt(
+            dc,
+            rc.left,
+            rc.bottom - border_bottom_width,
+            rc.right - rc.left,
+            border_bottom_width,
+            PATCOPY,
+        );
+    }
+
     let foreground_region = CreateRoundRectRgn(
         rc.left + border_width,
         rc.top + border_width,
@@ -1316,32 +1411,32 @@ unsafe fn on_paint(window: HWND, context: &mut Context) -> Result<()> {
     );
     FillRgn(dc, foreground_region, context.background_color_brush);
     DeleteObject(foreground_region);
-    IntersectClipRect(
-        dc,
-        rc.left + border_width,
-        rc.top + border_width,
-        (rc.right - border_width).max(rc.left + border_width),
-        (rc.bottom - border_width).max(rc.top + border_width),
-    );
 
-    GetClipBox(dc, &mut rc);
-
-    IntersectClipRect(
-        dc,
-        context.format_rect.left,
-        context.format_rect.top,
-        context.format_rect.right,
-        context.format_rect.bottom,
-    );
-    let old_font = SelectObject(dc, context.font);
-    let mut rc_rgn = RECT::default();
-    GetClipBox(dc, &mut rc_rgn);
-    update_uniscribe_data(window, context, Some(dc))?;
-    let rc_line = get_single_line_rect(window, context, 0, None)?;
-    if IntersectRect(&mut rc, &rc_rgn, &rc_line).into() {
-        paint_line(window, context, dc, rev)?;
+    if need_draw_border_bottom && context.is_focused {
+        SelectObject(dc, context.border_bottom_color_focused_brush);
+        let percentage = context.bottom_focus_border.GetValue()?;
+        PatBlt(
+            dc,
+            (rc.left as f64 * (1.0 + percentage) / 2.0 + rc.right as f64 * (1.0 - percentage) / 2.0)
+                as i32,
+            rc.bottom - border_bottom_width,
+            ((rc.right - rc.left) as f64 * percentage) as i32,
+            border_bottom_width,
+            PATCOPY,
+        );
     }
-    SelectObject(dc, old_font);
+
+    let rc_line = get_single_line_rect(window, context, 0, None)?;
+    if IntersectRect(&mut rc_intersect, &rc_rgn, &rc_line).into() {
+        let old_font = SelectObject(dc, context.font);
+        SetTextColor(dc, context.text_color);
+        SetBkColor(dc, context.background_color);
+        context.invalidate_uniscribe_data()?;
+        update_uniscribe_data(window, context, Some(dc))?;
+        paint_line(window, context, dc, rev)?;
+        SelectObject(dc, old_font);
+    }
+
     EndPaint(window, &ps);
 
     Ok(())
@@ -1359,6 +1454,24 @@ unsafe fn set_focus(window: HWND, context: &mut Context) -> Result<()> {
     set_caret_position(window, context, context.selection_end)?;
     ShowCaret(window)?;
     RedrawWindow(window, None, None, RDW_INVALIDATE);
+    let tokens = &context.state.qt.theme.tokens;
+    let transition = context
+        .transition_library
+        .CreateCubicBezierLinearTransition(
+            tokens.duration_normal,
+            1.0,
+            tokens.curve_decelerate_mid[0],
+            tokens.curve_decelerate_mid[1],
+            tokens.curve_decelerate_mid[2],
+            tokens.curve_decelerate_mid[3],
+        )?;
+    let seconds_now = context.animation_timer.GetTime()?;
+    context.bottom_focus_border = context.animation_manager.CreateAnimationVariable(0.0)?;
+    context.animation_manager.ScheduleTransition(
+        &context.bottom_focus_border,
+        &transition,
+        seconds_now,
+    )?;
     Ok(())
 }
 
@@ -1423,6 +1536,7 @@ extern "system" fn window_proc(
             let context = Box::<Context>::from_raw(raw);
             DeleteObject(context.background_color_brush);
             DeleteObject(context.border_color_brush);
+            DeleteObject(context.border_color_focused_brush);
             DeleteObject(context.border_bottom_color_brush);
             LRESULT(0)
         },

@@ -165,7 +165,7 @@ extern "system" fn window_process(
                     &button::Size::Large,
                     MouseEvent::default(),
                 );
-                _ = qt.creat_input(
+                _ = qt.create_input(
                     &window,
                     &instance,
                     20,
@@ -176,11 +176,22 @@ extern "system" fn window_process(
                     &input::Type::Text,
                     None,
                 );
-                _ = qt.create_progress_bar(
+                _ = qt.create_input(
                     &window,
                     &instance,
                     20,
                     30 + 250 * scaling_factor as i32,
+                    &input::Size::Small,
+                    &input::Appearance::Outline,
+                    None,
+                    &input::Type::Text,
+                    None,
+                );
+                _ = qt.create_progress_bar(
+                    &window,
+                    &instance,
+                    20,
+                    30 + 300 * scaling_factor as i32,
                     400 * scaling_factor as i32,
                     &progress_bar::Shape::Rounded,
                     None,
@@ -191,7 +202,7 @@ extern "system" fn window_process(
                     &window,
                     &instance,
                     20,
-                    30 + 275 * scaling_factor as i32,
+                    30 + 325 * scaling_factor as i32,
                     400 * scaling_factor as i32,
                     &progress_bar::Shape::Rounded,
                     Some(0.4),
