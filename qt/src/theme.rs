@@ -23,6 +23,7 @@ pub(crate) struct Tokens {
     pub color_neutral_stroke1: D2D1_COLOR_F,
     pub color_neutral_stroke1_hover: D2D1_COLOR_F,
     pub color_neutral_stroke1_pressed: D2D1_COLOR_F,
+    pub color_neutral_stroke_accessible: D2D1_COLOR_F,
     pub stroke_width_thin: f32,
     pub font_family_name: PCWSTR,
     pub font_weight_regular: DWRITE_FONT_WEIGHT,
@@ -32,7 +33,9 @@ pub(crate) struct Tokens {
     pub font_size_base400: f32,
     pub font_size_base500: f32,
     pub line_height_base100: f32,
+    pub line_height_base200: f32,
     pub line_height_base300: f32,
+    pub line_height_base400: f32,
     pub line_height_base500: f32,
     pub spacing_horizontal_xs: f32,
     pub spacing_horizontal_s_nudge: f32,
@@ -81,6 +84,7 @@ impl Tokens {
             color_neutral_stroke1: rgb!("#d1d1d1"),
             color_neutral_stroke1_hover: rgb!("#c7c7c7"),
             color_neutral_stroke1_pressed: rgb!("#b3b3b3"),
+            color_neutral_stroke_accessible: rgb!("#616161"),
             stroke_width_thin: 1.0,
             font_family_name: w!("Segoe UI"),
             font_weight_regular: DWRITE_FONT_WEIGHT_REGULAR,
@@ -90,7 +94,9 @@ impl Tokens {
             font_size_base400: 16f32,
             font_size_base500: 20f32,
             line_height_base100: 14f32,
+            line_height_base200: 16f32,
             line_height_base300: 20f32,
+            line_height_base400: 22f32,
             line_height_base500: 28f32,
             spacing_horizontal_xs: 4f32,
             spacing_horizontal_s_nudge: 6f32,
@@ -135,24 +141,38 @@ impl TypographyStyle {
 }
 
 pub(crate) struct TypographyStyles {
-    pub subtitle1: TypographyStyle,
+    pub caption1: TypographyStyle,
     pub body1: TypographyStyle,
+    pub body2: TypographyStyle,
+    pub subtitle1: TypographyStyle,
 }
 
 impl TypographyStyles {
     pub(crate) fn from(tokens: &Tokens) -> Self {
         TypographyStyles {
-            subtitle1: TypographyStyle {
+            caption1: TypographyStyle {
                 font_family_name: tokens.font_family_name,
-                font_size: tokens.font_size_base500,
-                font_weight: tokens.font_weight_semibold,
-                line_height: tokens.line_height_base500,
+                font_size: tokens.font_size_base200,
+                font_weight: tokens.font_weight_regular,
+                line_height: tokens.line_height_base200,
             },
             body1: TypographyStyle {
                 font_family_name: tokens.font_family_name,
                 font_size: tokens.font_size_base300,
                 font_weight: tokens.font_weight_regular,
                 line_height: tokens.line_height_base300,
+            },
+            body2: TypographyStyle {
+                font_family_name: tokens.font_family_name,
+                font_size: tokens.font_size_base400,
+                font_weight: tokens.font_weight_regular,
+                line_height: tokens.line_height_base400,
+            },
+            subtitle1: TypographyStyle {
+                font_family_name: tokens.font_family_name,
+                font_size: tokens.font_size_base500,
+                font_weight: tokens.font_weight_semibold,
+                line_height: tokens.line_height_base500,
             },
         }
     }

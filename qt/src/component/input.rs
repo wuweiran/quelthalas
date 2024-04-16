@@ -9,18 +9,19 @@ use windows::Win32::Foundation::{
     WPARAM,
 };
 use windows::Win32::Globalization::{
-    lstrcpynW, lstrlenW, u_memcpy, ScriptBreak, ScriptStringAnalyse, ScriptStringCPtoX,
-    ScriptStringFree, ScriptStringOut, ScriptStringXtoCP, ScriptString_pSize, SCRIPT_ANALYSIS,
-    SCRIPT_LOGATTR, SCRIPT_UNDEFINED, SSA_FALLBACK, SSA_GLYPHS, SSA_LINK, SSA_PASSWORD,
+    lstrcpynW, lstrlenW, u_memcpy, ScriptBreak, ScriptStringCPtoX, ScriptStringFree,
+    ScriptStringOut, ScriptStringXtoCP, ScriptString_pSize, SCRIPT_ANALYSIS, SCRIPT_LOGATTR,
+    SCRIPT_UNDEFINED, SSA_FALLBACK, SSA_GLYPHS, SSA_LINK, SSA_PASSWORD,
 };
+use windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F;
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, CreateFontW, CreateSolidBrush, EndPaint, FillRect, GetBkColor, GetBkMode,
-    GetClipBox, GetDC, GetObjectW, GetSysColor, GetSysColorBrush, GetTextColor,
+    BeginPaint, CreateFontW, CreateRoundRectRgn, CreateSolidBrush, DeleteObject, EndPaint, FillRgn,
+    GetBkColor, GetBkMode, GetClipBox, GetDC, GetObjectW, GetSysColor, GetTextColor,
     GetTextExtentPoint32W, GetTextMetricsW, InflateRect, IntersectClipRect, IntersectRect,
     InvalidateRect, MapWindowPoints, PatBlt, RedrawWindow, ReleaseDC, SelectObject, SetBkColor,
-    SetBkMode, SetTextColor, TextOutW, BACKGROUND_MODE, CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS,
-    COLOR_HIGHLIGHT, COLOR_HIGHLIGHTTEXT, COLOR_WINDOWFRAME, DEFAULT_CHARSET, ETO_OPTIONS, FW_BOLD,
-    HDC, HFONT, LOGFONTW, OPAQUE, OUT_OUTLINE_PRECIS, PAINTSTRUCT, PATCOPY, RDW_INVALIDATE,
+    SetBkMode, SetTextColor, SetWindowRgn, TextOutW, BACKGROUND_MODE, CLEARTYPE_QUALITY,
+    CLIP_DEFAULT_PRECIS, COLOR_HIGHLIGHT, COLOR_HIGHLIGHTTEXT, DEFAULT_CHARSET, ETO_OPTIONS,
+    HBRUSH, HDC, HFONT, LOGFONTW, OPAQUE, OUT_OUTLINE_PRECIS, PAINTSTRUCT, PATCOPY, RDW_INVALIDATE,
     TEXTMETRICW, VARIABLE_PITCH,
 };
 use windows::Win32::System::DataExchange::{
@@ -40,7 +41,9 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     VK_END, VK_HOME, VK_INSERT, VK_LEFT, VK_MENU, VK_RIGHT, VK_SHIFT,
 };
 use windows::Win32::UI::WindowsAndMessaging::*;
+use windows_sys::Win32::Globalization::ScriptStringAnalyse;
 
+use crate::theme::TypographyStyle;
 use crate::{get_scaling_factor, QT};
 
 macro_rules! order_usize {
@@ -95,6 +98,15 @@ impl State {
             Size::Small => tokens.spacing_horizontal_s,
             Size::Medium => tokens.spacing_horizontal_m,
             Size::Large => tokens.spacing_horizontal_m + tokens.spacing_horizontal_s_nudge,
+        }
+    }
+
+    fn get_typography_styles(&self) -> &TypographyStyle {
+        let typography_styles = &self.qt.theme.typography_styles;
+        match self.size {
+            Size::Small => &typography_styles.caption1,
+            Size::Medium => &typography_styles.body1,
+            Size::Large => &typography_styles.body2,
         }
     }
 }
@@ -166,6 +178,13 @@ pub struct Context {
     is_focused: bool,
     format_rect: RECT,
     font: HFONT,
+    background_color: COLORREF,
+    background_color_brush: HBRUSH,
+    border_color: COLORREF,
+    border_color_brush: HBRUSH,
+    border_bottom_color: COLORREF,
+    border_bottom_color_brush: HBRUSH,
+    text_color: COLORREF,
     line_height: i32,
     char_width: i32,
     text_width: i32,
@@ -492,36 +511,40 @@ unsafe fn update_uniscribe_data(
         let old_font = SelectObject(udc, context.font);
         match context.state.input_type {
             Type::Password => {
-                ScriptStringAnalyse(
-                    udc,
+                let hr = ScriptStringAnalyse(
+                    udc.0,
                     w!("*").as_ptr() as _,
+                    length as i32,
                     (1.5 * length as f32 + 16f32) as i32,
                     -1,
                     SSA_LINK | SSA_FALLBACK | SSA_GLYPHS | SSA_PASSWORD,
                     -1,
-                    None,
-                    None,
-                    None,
-                    None,
+                    null(),
+                    null(),
+                    null(),
+                    null(),
                     null(),
                     &mut context.ssa,
-                )?;
+                );
+                HRESULT(hr).ok()?;
             }
             _ => {
-                ScriptStringAnalyse(
-                    udc,
+                let hr = ScriptStringAnalyse(
+                    udc.0,
                     context.buffer.as_ptr() as _,
+                    length as i32,
                     (1.5 * length as f32 + 16f32) as i32,
                     -1,
                     SSA_LINK | SSA_FALLBACK | SSA_GLYPHS,
                     -1,
-                    None,
-                    None,
-                    None,
-                    None,
+                    null(),
+                    null(),
+                    null(),
+                    null(),
                     null(),
                     &mut context.ssa,
-                )?;
+                );
+                HRESULT(hr).ok()?;
             }
         }
 
@@ -601,6 +624,10 @@ unsafe fn adjust_format_rect(window: HWND, context: &mut Context) -> Result<()> 
         .format_rect
         .right
         .max(context.format_rect.left + context.char_width);
+    let y_offset = (context.format_rect.bottom - context.format_rect.top - context.line_height) / 2;
+    if y_offset > 0 {
+        context.format_rect.top = context.format_rect.top + y_offset;
+    }
     context.format_rect.bottom = context.format_rect.top + context.line_height;
     let mut client_rect = RECT::default();
     GetClientRect(window, &mut client_rect)?;
@@ -609,14 +636,26 @@ unsafe fn adjust_format_rect(window: HWND, context: &mut Context) -> Result<()> 
 }
 
 unsafe fn set_rect_np(window: HWND, context: &mut Context) -> Result<()> {
+    let scaling_factor = get_scaling_factor(&window);
     GetClientRect(window, &mut context.format_rect)?;
-    let bw = GetSystemMetrics(SM_CXBORDER) + 1;
-    let bh = GetSystemMetrics(SM_CYBORDER) + 1;
-    InflateRect(&mut context.format_rect, -bw, 0);
-    if context.format_rect.bottom - context.format_rect.top > context.line_height + 2 * bh {
-        InflateRect(&mut context.format_rect, 0, -bh);
+    let corner_diameter =
+        (context.state.qt.theme.tokens.border_radius_medium * scaling_factor * 2f32) as i32;
+    let region = CreateRoundRectRgn(
+        0,
+        0,
+        context.format_rect.right + 1,
+        context.format_rect.bottom + 1,
+        corner_diameter,
+        corner_diameter,
+    );
+    SetWindowRgn(window, region, TRUE);
+    let border_width = (1.0 * scaling_factor) as i32;
+    InflateRect(&mut context.format_rect, -border_width, 0);
+    if context.format_rect.bottom - context.format_rect.top > context.line_height + 2 * border_width
+    {
+        InflateRect(&mut context.format_rect, 0, -border_width);
     }
-    let horizontal_padding = context.state.get_horizontal_padding() as i32;
+    let horizontal_padding = (context.state.get_horizontal_padding() * scaling_factor) as i32;
     context.format_rect.left = context.format_rect.left + horizontal_padding;
     context.format_rect.right = context.format_rect.right - horizontal_padding;
     adjust_format_rect(window, context)
@@ -770,23 +809,32 @@ unsafe fn move_backward(window: HWND, context: &mut Context, extend: bool) -> Re
     scroll_caret(window, context)?;
     Ok(())
 }
+fn convert_to_color_ref(from: &D2D1_COLOR_F) -> COLORREF {
+    let r = (from.r * 255.0) as u32;
+    let g = (from.g * 255.0) as u32;
+    let b = (from.b * 255.0) as u32;
+    COLORREF(r << 16 | g << 8 | b)
+}
 
 unsafe fn on_create(window: HWND, state: State) -> Result<Context> {
+    let tokens = &state.qt.theme.tokens;
+    let scaling_factor = get_scaling_factor(&window);
+    let typography_styles = state.get_typography_styles();
     let font = CreateFontW(
-        32,                           // Height of the font
-        0,                            // Width of the font (0 for default)
-        0,                            // Angle of escapement (0 for default)
-        0,                            // Orientation angle (0 for default)
-        FW_BOLD.0 as i32,             // Font weight (bold)
-        0,                            // Italic (not italic)
-        0,                            // Underline (not underlined)
-        0,                            // Strikeout (not struck out)
-        DEFAULT_CHARSET.0 as u32,     // Character set (default)
-        OUT_OUTLINE_PRECIS.0 as u32,  // Output precision (outline)
-        CLIP_DEFAULT_PRECIS.0 as u32, // Clipping precision (default)
-        CLEARTYPE_QUALITY.0 as u32,   // Font quality (ClearType)
-        VARIABLE_PITCH.0 as u32,      // Pitch and family (variable pitch)
-        state.qt.theme.tokens.font_family_name,
+        (typography_styles.line_height * scaling_factor) as i32,
+        0,                               // Width of the font (0 for default)
+        0,                               // Angle of escapement (0 for default)
+        0,                               // Orientation angle (0 for default)
+        typography_styles.font_weight.0, // Font weight
+        0,                               // Italic (not italic)
+        0,                               // Underline (not underlined)
+        0,                               // Strikeout (not struck out)
+        DEFAULT_CHARSET.0 as u32,        // Character set (default)
+        OUT_OUTLINE_PRECIS.0 as u32,     // Output precision (outline)
+        CLIP_DEFAULT_PRECIS.0 as u32,    // Clipping precision (default)
+        CLEARTYPE_QUALITY.0 as u32,      // Font quality (ClearType)
+        VARIABLE_PITCH.0 as u32,         // Pitch and family (variable pitch)
+        tokens.font_family_name,
     );
     let dc = GetDC(window);
     let old_font = SelectObject(dc, font);
@@ -794,6 +842,9 @@ unsafe fn on_create(window: HWND, state: State) -> Result<Context> {
     GetTextMetricsW(dc, &mut tm);
     SelectObject(dc, old_font);
     ReleaseDC(window, dc);
+    let background_color = convert_to_color_ref(&tokens.color_neutral_background1);
+    let border_color = convert_to_color_ref(&tokens.color_neutral_stroke1);
+    let border_bottom_color = convert_to_color_ref(&tokens.color_neutral_stroke_accessible);
     Ok(Context {
         state,
         cached_text_length: None,
@@ -808,6 +859,13 @@ unsafe fn on_create(window: HWND, state: State) -> Result<Context> {
         is_focused: false,
         format_rect: RECT::default(),
         font,
+        background_color,
+        background_color_brush: CreateSolidBrush(background_color),
+        border_color,
+        border_color_brush: CreateSolidBrush(border_color),
+        border_bottom_color,
+        border_bottom_color_brush: CreateSolidBrush(border_bottom_color),
+        text_color: Default::default(),
         line_height: tm.tmHeight,
         char_width: tm.tmAveCharWidth,
         text_width: 0,
@@ -1214,11 +1272,12 @@ unsafe fn on_paint(window: HWND, context: &mut Context) -> Result<()> {
     let rev = context.is_focused;
     let mut ps = PAINTSTRUCT::default();
     let dc = BeginPaint(window, &mut ps);
+    SetTextColor(dc, context.text_color);
+    SetBkColor(dc, context.background_color);
     context.invalidate_uniscribe_data()?;
     let mut client_rect = RECT::default();
     GetClientRect(window, &mut client_rect)?;
 
-    let brush = CreateSolidBrush(COLORREF(0xffffff));
     IntersectClipRect(
         dc,
         client_rect.left,
@@ -1227,25 +1286,45 @@ unsafe fn on_paint(window: HWND, context: &mut Context) -> Result<()> {
         client_rect.bottom,
     );
 
-    let bw = GetSystemMetrics(SM_CXBORDER);
-    let bh = GetSystemMetrics(SM_CYBORDER);
+    let tokens = &context.state.qt.theme.tokens;
+    let scaling_factor = get_scaling_factor(&window);
+    let border_width = (1.0 * scaling_factor) as i32;
     let mut rc = client_rect;
-    let old_brush = SelectObject(dc, GetSysColorBrush(COLOR_WINDOWFRAME));
-    PatBlt(dc, rc.left, rc.top, rc.right - rc.left, bh, PATCOPY);
-    PatBlt(dc, rc.left, rc.top, bw, rc.bottom - rc.top, PATCOPY);
-    PatBlt(dc, rc.left, rc.bottom - 1, rc.right - rc.left, bh, PATCOPY);
-    PatBlt(dc, rc.right - 1, rc.top, bw, rc.bottom - rc.top, PATCOPY);
+    let old_brush = SelectObject(dc, context.border_color_brush);
+    let diameter = (tokens.border_radius_medium * scaling_factor * 2f32) as i32;
+    let w = diameter.max(border_width);
+    PatBlt(dc, rc.left, rc.top, rc.right - rc.left, w, PATCOPY);
+    PatBlt(dc, rc.left, rc.top, w, rc.bottom - rc.top, PATCOPY);
+    PatBlt(dc, rc.right - w, rc.top, w, rc.bottom - rc.top, PATCOPY);
+    SelectObject(dc, context.border_bottom_color_brush);
+    PatBlt(
+        dc,
+        rc.left,
+        rc.bottom - (w / 4).max(border_width),
+        rc.right - rc.left,
+        (w / 4).max(border_width),
+        PATCOPY,
+    );
     SelectObject(dc, old_brush);
+    let foreground_region = CreateRoundRectRgn(
+        rc.left + border_width,
+        rc.top + border_width,
+        (rc.right - border_width).max(rc.left + border_width) + 1,
+        (rc.bottom - border_width).max(rc.top + border_width) + 1,
+        diameter,
+        diameter,
+    );
+    FillRgn(dc, foreground_region, context.background_color_brush);
+    DeleteObject(foreground_region);
     IntersectClipRect(
         dc,
-        rc.left + bw,
-        rc.top + bh,
-        (rc.right - bw).max(rc.left + bw),
-        (rc.bottom - bh).max(rc.top + bh),
+        rc.left + border_width,
+        rc.top + border_width,
+        (rc.right - border_width).max(rc.left + border_width),
+        (rc.bottom - border_width).max(rc.top + border_width),
     );
 
     GetClipBox(dc, &mut rc);
-    FillRect(dc, &rc, brush);
 
     IntersectClipRect(
         dc,
@@ -1341,7 +1420,10 @@ extern "system" fn window_proc(
         },
         WM_DESTROY => unsafe {
             let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
-            _ = Box::<Context>::from_raw(raw);
+            let context = Box::<Context>::from_raw(raw);
+            DeleteObject(context.background_color_brush);
+            DeleteObject(context.border_color_brush);
+            DeleteObject(context.border_bottom_color_brush);
             LRESULT(0)
         },
         WM_CHAR => unsafe {
