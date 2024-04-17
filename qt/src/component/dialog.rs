@@ -106,8 +106,7 @@ impl QT {
                 }
                 _ = TranslateMessage(&message);
                 DispatchMessageW(&message);
-                let window_exists: bool = IsWindow(window).into();
-                if !window_exists {
+                if !IsWindow(window).as_bool() {
                     break;
                 }
             }

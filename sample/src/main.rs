@@ -170,9 +170,22 @@ extern "system" fn window_process(
                     &instance,
                     20,
                     30 + 200 * scaling_factor as i32,
+                    200 * scaling_factor as i32,
                     &input::Size::Medium,
                     &input::Appearance::Outline,
+                    Some(w!("Default text")),
+                    &input::Type::Text,
                     None,
+                );
+                _ = qt.create_input(
+                    &window,
+                    &instance,
+                    20 + 220 * scaling_factor as i32,
+                    30 + 200 * scaling_factor as i32,
+                    200 * scaling_factor as i32,
+                    &input::Size::Medium,
+                    &input::Appearance::FilledLighter,
+                    Some(w!("Filled lighter")),
                     &input::Type::Text,
                     None,
                 );
@@ -181,11 +194,12 @@ extern "system" fn window_process(
                     &instance,
                     20,
                     30 + 250 * scaling_factor as i32,
+                    380 * scaling_factor as i32,
                     &input::Size::Small,
                     &input::Appearance::Outline,
                     None,
                     &input::Type::Text,
-                    None,
+                    Some(w!("Small with placeholder")),
                 );
                 _ = qt.create_progress_bar(
                     &window,

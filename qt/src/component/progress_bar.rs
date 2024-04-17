@@ -129,7 +129,7 @@ impl IUIAnimationTimerEventHandler_Impl for AnimationTimerEventHandler {
 
     fn OnPostUpdate(&self) -> Result<()> {
         unsafe {
-            InvalidateRect(self.window, None, false);
+            let _ = InvalidateRect(self.window, None, false);
 
             let raw = GetWindowLongPtrW(self.window, GWLP_USERDATA) as *mut Context;
             let context = &mut *raw;
@@ -318,7 +318,7 @@ unsafe fn on_paint(window: HWND, context: &Context) -> Result<()> {
     let paint_result = paint(window, context);
 
     let result = paint_result.and(context.render_target.EndDraw(None, None));
-    EndPaint(window, &ps);
+    let _ = EndPaint(window, &ps);
     result
 }
 
@@ -341,7 +341,7 @@ unsafe fn on_dpi_changed(window: HWND, context: &Context) -> Result<()> {
     })?;
     let new_dpi = GetDpiForWindow(window);
     context.render_target.SetDpi(new_dpi as f32, new_dpi as f32);
-    InvalidateRect(window, None, false);
+    let _ = InvalidateRect(window, None, false);
 
     let tokens = &context.state.qt.theme.tokens;
     let corner_diameter = match context.state.shape {

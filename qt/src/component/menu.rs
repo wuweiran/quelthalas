@@ -75,8 +75,7 @@ impl QT {
             ..Default::default()
         };
         RegisterClassExW(&window_class);
-        let is_parent_window_valid: bool = IsWindow(parent_window).into();
-        if !is_parent_window_valid {
+        if !IsWindow(parent_window).as_bool() {
             return Err(Error::from(ERROR_INVALID_WINDOW_HANDLE));
         }
         let menu = Rc::new(convert_menu_info_list_to_menu(menu_list));

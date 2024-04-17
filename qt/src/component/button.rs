@@ -703,7 +703,7 @@ unsafe fn on_mouse_enter(window: &HWND, context: &Context) -> Result<()> {
     Ok(())
 }
 
-unsafe fn on_mouse_leave(window: &HWND, context: &Context) -> Result<()> {
+unsafe fn on_mouse_leave(context: &Context) -> Result<()> {
     _ = change_color(context);
     Ok(())
 }
@@ -781,7 +781,7 @@ extern "system" fn window_proc(
                         if (*raw).mouse_within {
                             (*raw).mouse_within = false;
                             (*raw).mouse_clicking = false;
-                            let _ = on_mouse_leave(&window, context);
+                            let _ = on_mouse_leave(context);
                         }
                     }
                     _ = DeleteObject(region);
@@ -794,7 +794,7 @@ extern "system" fn window_proc(
             let context = &*raw;
             (*raw).mouse_within = false;
             (*raw).mouse_clicking = false;
-            let _ = on_mouse_leave(&window, context);
+            let _ = on_mouse_leave(context);
             LRESULT(0)
         },
         WM_LBUTTONDOWN => unsafe {

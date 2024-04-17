@@ -241,6 +241,7 @@ impl QT {
         instance: &HINSTANCE,
         x: i32,
         y: i32,
+        width: i32,
         size: &Size,
         appearance: &Appearance,
         default_value: Option<PCWSTR>,
@@ -274,7 +275,7 @@ impl QT {
                 WS_TABSTOP | WS_VISIBLE | WS_CHILD,
                 x,
                 y,
-                (380f32 * scaling_factor) as i32,
+                width,
                 (boxed.get_field_height() * scaling_factor) as i32,
                 *parent_window,
                 None,
@@ -839,8 +840,6 @@ impl IUIAnimationTimerEventHandler_Impl for AnimationTimerEventHandler {
 
     fn OnPostUpdate(&self) -> Result<()> {
         unsafe {
-            let raw = GetWindowLongPtrW(self.window, GWLP_USERDATA) as *mut Context;
-            let context = &*raw;
             let mut rc = RECT::default();
             GetClientRect(self.window, &mut rc)?;
             let scaling_factor = get_scaling_factor(&self.window);
@@ -904,7 +903,11 @@ unsafe fn on_create(window: HWND, state: State) -> Result<Context> {
         AnimationTimerEventHandler { window }.into();
     animation_timer.SetTimerEventHandler(&timer_event_handler)?;
     let bottom_focus_border = animation_manager.CreateAnimationVariable(0.0)?;
-    let background_color = convert_to_color_ref(&tokens.color_neutral_background1);
+    let background_color = match state.appearance {
+        Appearance::Outline => convert_to_color_ref(&tokens.color_neutral_background1),
+        Appearance::FilledLighter => convert_to_color_ref(&tokens.color_neutral_background1),
+        Appearance::FilledDarker => convert_to_color_ref(&tokens.color_neutral_background3),
+    };
     let border_color = convert_to_color_ref(&tokens.color_neutral_stroke1);
     let border_color_focused = convert_to_color_ref(&tokens.color_neutral_stroke1_pressed);
     let border_bottom_color = convert_to_color_ref(&tokens.color_neutral_stroke_accessible);
@@ -1354,7 +1357,7 @@ unsafe fn on_paint(window: HWND, context: &mut Context) -> Result<()> {
     let w = diameter.max(border_width);
     let mut rc_intersect = RECT::default();
 
-    if IntersectRect(
+    let need_draw_border = IntersectRect(
         &mut rc_intersect,
         &rc_rgn,
         &RECT {
@@ -1364,8 +1367,13 @@ unsafe fn on_paint(window: HWND, context: &mut Context) -> Result<()> {
             bottom: (rc.bottom - border_bottom_width).max(rc.top + border_width),
         },
     )
-    .into()
-    {
+    .as_bool()
+        && match context.state.appearance {
+            Appearance::Outline => true,
+            _ => false,
+        };
+
+    if need_draw_border {
         let border_color_brush = if context.is_focused {
             context.border_color_focused_brush
         } else {
@@ -1377,7 +1385,7 @@ unsafe fn on_paint(window: HWND, context: &mut Context) -> Result<()> {
         PatBlt(dc, rc.right - w, rc.top, w, rc.bottom - rc.top, PATCOPY);
     }
 
-    let need_draw_border_bottom: bool = IntersectRect(
+    let need_draw_border_bottom = IntersectRect(
         &mut rc_intersect,
         &rc_rgn,
         &RECT {
@@ -1387,7 +1395,7 @@ unsafe fn on_paint(window: HWND, context: &mut Context) -> Result<()> {
             bottom: rc.bottom,
         },
     )
-    .into();
+    .as_bool();
 
     if need_draw_border_bottom {
         SelectObject(dc, context.border_bottom_color_brush);
