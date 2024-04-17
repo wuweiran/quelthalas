@@ -1005,8 +1005,8 @@ unsafe fn on_copy(window: HWND, context: &mut Context) -> Result<()> {
         context.buffer.as_ptr().offset(start as isize),
         length as i32,
     );
-    *(dst.offset(length as isize) as *mut u16) = 0;
-    GlobalUnlock(hdst)?;
+    *(dst as *mut u16).offset(length as isize) = 0;
+    GlobalUnlock(hdst).or_else(|error| error.code().ok())?;
     OpenClipboard(window)?;
     EmptyClipboard()?;
     SetClipboardData(CF_UNICODETEXT.0 as u32, HANDLE(hdst.0 as _))?;
@@ -1040,7 +1040,7 @@ unsafe fn on_paste(window: HWND, context: &mut Context) -> Result<()> {
             string.as_wide()[..len].to_vec(),
             true,
         )?;
-        GlobalUnlock(HGLOBAL(hsrc.0 as _))?;
+        GlobalUnlock(HGLOBAL(hsrc.0 as _)).or_else(|error| error.code().ok())?;
     } else {
         if let Type::Password = context.state.input_type {
             replace_selection(window, context, true, Vec::new(), true)?;
@@ -1654,7 +1654,7 @@ extern "system" fn window_proc(
         WM_PASTE => unsafe {
             let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
             let context = &mut *raw;
-            _ = on_paint(window, context);
+            _ = on_paste(window, context);
             LRESULT::default()
         },
         WM_SETFOCUS => unsafe {
