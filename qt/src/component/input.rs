@@ -39,6 +39,7 @@ use windows::Win32::UI::Animation::{
 };
 use windows::Win32::UI::Controls::{SetScrollInfo, WORD_BREAK_ACTION};
 use windows::Win32::UI::Controls::{WB_ISDELIMITER, WB_LEFT, WB_RIGHT};
+use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::Ime::{
     ImmGetContext, ImmReleaseContext, ImmSetCompositionFontW, ImmSetCompositionWindow, CFS_RECT,
     COMPOSITIONFORM, IMECHARPOSITION, IMR_QUERYCHARPOSITION,
@@ -83,6 +84,7 @@ pub enum Type {
 
 pub struct State {
     qt: QT,
+    width: f32,
     size: Size,
     appearance: Appearance,
     default_value: Option<PCWSTR>,
@@ -260,15 +262,16 @@ impl QT {
                 ..Default::default()
             };
             RegisterClassExW(&window_class);
+            let scaling_factor = get_scaling_factor(parent_window);
             let boxed = Box::new(State {
                 qt: self.clone(),
+                width: width as f32 / scaling_factor,
                 size: *size,
                 appearance: *appearance,
                 default_value,
                 input_type: *input_type,
                 placeholder,
             });
-            let scaling_factor = get_scaling_factor(parent_window);
             let window = CreateWindowExW(
                 WINDOW_EX_STYLE::default(),
                 class_name,
@@ -276,7 +279,7 @@ impl QT {
                 WS_TABSTOP | WS_VISIBLE | WS_CHILD,
                 x,
                 y,
-                width,
+                (boxed.width * scaling_factor) as i32,
                 (boxed.get_field_height() * scaling_factor) as i32,
                 *parent_window,
                 None,
@@ -1753,6 +1756,52 @@ extern "system" fn window_proc(
                 }
                 _ => DefWindowProcW(window, message, w_param, l_param),
             }
+        },
+        WM_DPICHANGED_BEFOREPARENT => unsafe {
+            let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
+            let context = &mut *raw;
+            let scaling_factor = get_scaling_factor(&window);
+            if SetWindowPos(
+                window,
+                None,
+                0,
+                0,
+                (context.state.width * scaling_factor) as i32,
+                (context.state.get_field_height() * scaling_factor) as i32,
+                SWP_NOMOVE | SWP_NOZORDER,
+            ).is_ok() {
+                let tokens = &context.state.qt.theme.tokens;
+                let typography_styles = context.state.get_typography_styles();
+                let font = CreateFontW(
+                    (typography_styles.line_height * scaling_factor) as i32,
+                    0,
+                    0,
+                    0,
+                    typography_styles.font_weight.0,
+                    0,
+                    0,
+                    0,
+                    DEFAULT_CHARSET.0 as u32,
+                    OUT_OUTLINE_PRECIS.0 as u32,
+                    CLIP_DEFAULT_PRECIS.0 as u32,
+                    CLEARTYPE_QUALITY.0 as u32,
+                    VARIABLE_PITCH.0 as u32,
+                    tokens.font_family_name,
+                );
+                let dc = GetDC(window);
+                let old_font = SelectObject(dc, font);
+                let mut tm = TEXTMETRICW::default();
+                GetTextMetricsW(dc, &mut tm);
+                SelectObject(dc, old_font);
+                ReleaseDC(window, dc);
+                context.font = font;
+                context.line_height = tm.tmHeight;
+                context.char_width = tm.tmAveCharWidth;
+                if set_rect_np(window, context).is_ok() {
+                    _ = InvalidateRect(window, None, true);
+                }
+            }
+            LRESULT(0)
         },
         _ => unsafe { DefWindowProcW(window, message, w_param, l_param) },
     }
