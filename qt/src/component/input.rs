@@ -118,6 +118,7 @@ impl State {
     }
 }
 
+#[derive(Clone)]
 pub struct StringBuffer(Vec<u16>);
 
 impl StringBuffer {
@@ -389,7 +390,7 @@ unsafe fn replace_selection(
     window: HWND,
     context: &mut Context,
     can_undo: bool,
-    replace: Vec<u16>,
+    replace: &[u16],
     honor_limit: bool,
 ) -> Result<()> {
     let mut start = context.selection_start;
@@ -425,7 +426,7 @@ unsafe fn replace_selection(
         context.text_buffer_changed()?;
     }
     if replace_length != 0 {
-        context.buffer.insert_at(start, replace.as_slice());
+        context.buffer.insert_at(start, replace);
         context.text_buffer_changed()?;
     }
 
@@ -470,7 +471,7 @@ unsafe fn replace_selection(
                 context.undo_buffer.make_fit(end - start);
                 u_memcpy(
                     context.undo_buffer.as_mut_ptr(),
-                    context.buffer.as_ptr(),
+                    buf.as_ptr(),
                     (end - start) as i32,
                 );
                 context.undo_position = start;
@@ -622,7 +623,7 @@ unsafe fn update_scroll_info(window: HWND, context: &mut Context) {
 
 unsafe fn set_text(window: HWND, context: &mut Context, text: PCWSTR) -> Result<()> {
     set_selection(window, context, Some(0), None)?;
-    replace_selection(window, context, false, text.as_wide().to_vec(), false)?;
+    replace_selection(window, context, false, text.as_wide(), false)?;
     context.x_offset = 0;
     set_selection(window, context, Some(0), Some(0))?;
     scroll_caret(window, context)?;
@@ -780,7 +781,7 @@ unsafe fn char_from_position(window: HWND, context: &mut Context, point: POINT) 
 }
 
 unsafe fn clear(window: HWND, context: &mut Context) -> Result<()> {
-    replace_selection(window, context, true, Vec::new(), true)
+    replace_selection(window, context, true, &[], true)
 }
 
 unsafe fn move_end(window: HWND, context: &mut Context, extend: bool) -> Result<()> {
@@ -986,7 +987,7 @@ unsafe fn on_char(window: HWND, context: &mut Context, char: u16) -> Result<()> 
             if let Type::Number = context.state.input_type {
             } else {
                 if char >= ' ' as u16 && char != 127 {
-                    replace_selection(window, context, true, Vec::<u16>::from([char]), true)?;
+                    replace_selection(window, context, true, &[char], true)?;
                 }
             }
         }
@@ -1036,20 +1037,34 @@ unsafe fn on_paste(window: HWND, context: &mut Context) -> Result<()> {
                 len = len - 1;
             }
         }
-        replace_selection(
-            window,
-            context,
-            true,
-            string.as_wide()[..len].to_vec(),
-            true,
-        )?;
+        replace_selection(window, context, true, &string.as_wide()[..len], true)?;
         GlobalUnlock(HGLOBAL(hsrc.0 as _)).or_else(|error| error.code().ok())?;
     } else {
         if let Type::Password = context.state.input_type {
-            replace_selection(window, context, true, Vec::new(), true)?;
+            replace_selection(window, context, true, &[], true)?;
         }
     }
     CloseClipboard()?;
+    Ok(())
+}
+
+unsafe fn on_undo(window: HWND, context: &mut Context) -> Result<()> {
+    let text = context.undo_buffer.clone();
+    set_selection(
+        window,
+        context,
+        Some(context.undo_position),
+        Some(context.undo_position + context.undo_insert_count),
+    )?;
+    context.undo_buffer.empty();
+    replace_selection(window, context, true, text.as_wcs().as_wide(), true)?;
+    set_selection(
+        window,
+        context,
+        Some(context.undo_position),
+        Some(context.undo_position + context.undo_insert_count),
+    )?;
+    scroll_caret(window, context)?;
     Ok(())
 }
 
@@ -1520,13 +1535,7 @@ extern "system" fn window_proc(
             match on_create(window, *state).and_then(|mut context| {
                 set_rect_np(window, &mut context)?;
                 if let Some(default_text) = context.state.default_value {
-                    replace_selection(
-                        window,
-                        &mut context,
-                        false,
-                        default_text.as_wide().to_vec(),
-                        false,
-                    )?;
+                    replace_selection(window, &mut context, false, default_text.as_wide(), false)?;
                 }
                 Ok(context)
             }) {
@@ -1596,6 +1605,14 @@ extern "system" fn window_proc(
             let context = &mut *raw;
             _ = on_cut(window, context);
             LRESULT::default()
+        },
+        WM_UNDO => unsafe {
+            let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
+            let context = &mut *raw;
+            match on_undo(window, context) {
+                Ok(_) => LRESULT(TRUE.0 as isize),
+                Err(_) => LRESULT(FALSE.0 as isize),
+            }
         },
         WM_GETTEXT => unsafe {
             let max_length = w_param.0;
@@ -1692,7 +1709,7 @@ extern "system" fn window_proc(
         WM_IME_COMPOSITION => unsafe {
             let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
             let context = &mut *raw;
-            _ = replace_selection(window, context, true, Vec::new(), true);
+            _ = replace_selection(window, context, true, &[], true);
             DefWindowProcW(window, message, w_param, l_param)
         },
         WM_IME_SELECT => LRESULT::default(),
