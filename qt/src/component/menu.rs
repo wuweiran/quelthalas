@@ -1,13 +1,16 @@
-use std::cell::RefCell;
+use std::cell::{RefCell, RefMut};
 use std::mem::size_of;
 use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
 
 use windows::core::*;
 use windows::Win32::Foundation::{
-    ERROR_INVALID_WINDOW_HANDLE, FALSE, HINSTANCE, HWND, LPARAM, LRESULT, POINT, TRUE, WPARAM,
+    ERROR_INVALID_WINDOW_HANDLE, FALSE, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, TRUE, WPARAM,
 };
-use windows::Win32::Graphics::Gdi::{BeginPaint, EndPaint, HDC, PAINTSTRUCT};
+use windows::Win32::Graphics::Gdi::{
+    BeginPaint, EndPaint, GetMonitorInfoW, MonitorFromPoint, RedrawWindow, SetRectEmpty, HDC,
+    MONITORINFO, MONITOR_DEFAULTTONEAREST, PAINTSTRUCT, RDW_ALLCHILDREN, RDW_UPDATENOW,
+};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     ReleaseCapture, SetCapture, VIRTUAL_KEY, VK_DOWN, VK_END, VK_ESCAPE, VK_F10, VK_HOME, VK_LEFT,
     VK_MENU, VK_RIGHT, VK_UP,
@@ -35,6 +38,8 @@ pub enum MenuItem {
 pub struct Menu {
     items: Vec<MenuItem>,
     window: Option<HWND>,
+    focused_item_index: Option<usize>,
+    items_rect: RECT,
 }
 
 pub struct Context {
@@ -63,6 +68,8 @@ fn convert_menu_info_list_to_menu(menu_info_list: Vec<MenuInfo>) -> Menu {
     Menu {
         items,
         window: None,
+        focused_item_index: None,
+        items_rect: RECT::default(),
     }
 }
 
@@ -331,15 +338,67 @@ unsafe fn exit_tracking(owning_window: HWND) -> Result<()> {
     Ok(())
 }
 
+unsafe fn calc_popup_menu_size(menu: RefMut<Menu>, max_height: i32) -> (i32, i32) {
+    SetRectEmpty(&mut menu.items_rect);
+    (0, 0)
+}
+
 unsafe fn show_popup(
-    owning_window: HWND,
-    menu: Rc<RefCell<Menu>>,
-    id: usize,
+    menu: &RefCell<Menu>,
     x: i32,
     y: i32,
     x_anchor: i32,
     y_anchor: i32,
 ) -> Result<()> {
+    let mut menu = menu.borrow_mut();
+    if menu.window.is_none() {
+        return Err(Error::from(ERROR_INVALID_WINDOW_HANDLE));
+    }
+    let window = menu.window.unwrap();
+    menu.focused_item_index = None;
+    let pt = POINT { x, y };
+    let monitor = MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST);
+    let mut info = MONITORINFO {
+        cbSize: size_of::<MONITORINFO>() as u32,
+        ..Default::default()
+    };
+    GetMonitorInfoW(monitor, &mut info);
+    let max_height = info.rcWork.bottom - info.rcWork.top;
+    let (width, height) = calc_popup_menu_size(menu, max_height);
+    let mut x = x;
+    if x + width > info.rcWork.right {
+        if x_anchor != 0 && x >= width - x_anchor {
+            x = x - width - x_anchor;
+        }
+        if x + width > info.rcWork.right {
+            x = info.rcWork.right - width;
+        }
+    }
+    if x < info.rcWork.left {
+        x = info.rcWork.left;
+    }
+    let mut y = y;
+    if y + height > info.rcWork.bottom {
+        if y_anchor != 0 && y >= height + y_anchor {
+            y -= height + y_anchor;
+        }
+        if y + height > info.rcWork.bottom {
+            y = info.rcWork.bottom - height;
+        }
+    }
+    if y < info.rcWork.top {
+        y = info.rcWork.top;
+    }
+    SetWindowPos(
+        window,
+        HWND_TOPMOST,
+        x,
+        y,
+        width,
+        height,
+        SWP_SHOWWINDOW | SWP_NOACTIVATE,
+    )?;
+    RedrawWindow(window, None, None, RDW_UPDATENOW | RDW_ALLCHILDREN)?;
     Ok(())
 }
 
@@ -358,15 +417,7 @@ extern "system" fn window_proc(
             let cs = l_param.0 as *const CREATESTRUCTW;
             let raw = (*cs).lpCreateParams as *mut Context;
             let context = Box::<Context>::from_raw(raw);
-            match show_popup(
-                context.owning_window,
-                context.menu.clone(),
-                0,
-                (*cs).x,
-                (*cs).y,
-                0,
-                0,
-            ) {
+            match show_popup(context.menu.as_ref(), (*cs).x, (*cs).y, 0, 0) {
                 Ok(_) => {
                     SetWindowLongPtrW(
                         window,
