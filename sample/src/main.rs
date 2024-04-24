@@ -198,7 +198,7 @@ extern "system" fn window_process(
                     &input::Size::Small,
                     &input::Appearance::Outline,
                     None,
-                    &input::Type::Text,
+                    &input::Type::Password,
                     Some(w!("Small with placeholder")),
                 );
                 _ = qt.create_progress_bar(

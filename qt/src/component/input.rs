@@ -528,7 +528,7 @@ unsafe fn update_uniscribe_data(
             Type::Password => {
                 let hr = ScriptStringAnalyse(
                     udc.0,
-                    w!("*").as_ptr() as _,
+                    w!("•").as_ptr() as _,
                     length as i32,
                     (1.5 * length as f32 + 16f32) as i32,
                     -1,
