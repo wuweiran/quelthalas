@@ -39,7 +39,6 @@ use windows::Win32::UI::Animation::{
 };
 use windows::Win32::UI::Controls::{SetScrollInfo, WORD_BREAK_ACTION};
 use windows::Win32::UI::Controls::{WB_ISDELIMITER, WB_LEFT, WB_RIGHT};
-use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::Ime::{
     ImmGetContext, ImmReleaseContext, ImmSetCompositionFontW, ImmSetCompositionWindow, CFS_RECT,
     COMPOSITIONFORM, IMECHARPOSITION, IMR_QUERYCHARPOSITION,
@@ -1769,7 +1768,9 @@ extern "system" fn window_proc(
                 (context.state.width * scaling_factor) as i32,
                 (context.state.get_field_height() * scaling_factor) as i32,
                 SWP_NOMOVE | SWP_NOZORDER,
-            ).is_ok() {
+            )
+            .is_ok()
+            {
                 let tokens = &context.state.qt.theme.tokens;
                 let typography_styles = context.state.get_typography_styles();
                 let font = CreateFontW(

@@ -7,7 +7,8 @@ use windows::Win32::Foundation::{
 };
 use windows::Win32::Graphics::Gdi::{BeginPaint, EndPaint, HDC, PAINTSTRUCT};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    SetCapture, VIRTUAL_KEY, VK_DOWN, VK_END, VK_F10, VK_HOME, VK_MENU, VK_RIGHT, VK_SHIFT, VK_UP,
+    ReleaseCapture, SetCapture, VIRTUAL_KEY, VK_DOWN, VK_END, VK_ESCAPE, VK_F10, VK_HOME, VK_LEFT,
+    VK_MENU, VK_RIGHT, VK_UP,
 };
 use windows::Win32::UI::WindowsAndMessaging::*;
 
@@ -28,6 +29,7 @@ pub enum MenuItem {
 
 pub struct Menu {
     items: Vec<MenuItem>,
+    window: Option<HWND>,
 }
 
 pub struct Context {
@@ -53,7 +55,10 @@ fn convert_menu_info_list_to_menu(menu_info_list: Vec<MenuInfo>) -> Menu {
             MenuInfo::MenuDivider => MenuItem::MenuDivider,
         })
         .collect();
-    Menu { items }
+    Menu {
+        items,
+        window: None,
+    }
 }
 
 const CLASS_NAME: PCWSTR = w!("QT_MENU");
@@ -79,20 +84,20 @@ impl QT {
             return Err(Error::from(ERROR_INVALID_WINDOW_HANDLE));
         }
         let menu = Rc::new(convert_menu_info_list_to_menu(menu_list));
-        let window = init_popup(self.clone(), parent_window, menu.clone(), x, y);
+        init_popup(self.clone(), parent_window, menu.clone(), x, y);
         init_tracking(parent_window)?;
-        track_menu(window, menu.clone(), 0, 0, parent_window).and(exit_tracking(parent_window))?;
+        track_menu(menu.clone(), 0, 0, parent_window).and(exit_tracking(parent_window))?;
         Ok(())
     }
 }
 
-unsafe fn init_popup(qt: QT, owning_window: HWND, menu: Rc<Menu>, x: i32, y: i32) -> HWND {
+unsafe fn init_popup(qt: QT, owning_window: HWND, menu: Rc<Menu>, x: i32, y: i32) {
     let boxed = Box::new(Context {
         qt,
-        menu,
+        menu: menu.clone(),
         owning_window,
     });
-    CreateWindowExW(
+    let window = CreateWindowExW(
         WINDOW_EX_STYLE::default(),
         CLASS_NAME,
         w!(""),
@@ -105,7 +110,8 @@ unsafe fn init_popup(qt: QT, owning_window: HWND, menu: Rc<Menu>, x: i32, y: i32
         None,
         HINSTANCE(GetWindowLongPtrW(owning_window, GWLP_HINSTANCE)),
         Some(Box::<Context>::into_raw(boxed) as _),
-    )
+    );
+    menu.window = Some(window)
 }
 
 unsafe fn init_tracking(owning_window: HWND) -> Result<()> {
@@ -140,31 +146,48 @@ fn menu_button_down(mt: &mut Tracker, message: u32, menu: Rc<Menu>) -> bool {
     false
 }
 
-fn menu_button_up(mt: &mut Tracker, menu: Rc<Menu>) -> i32 {
-    0
+fn menu_button_up(mt: &mut Tracker, menu: Rc<Menu>) -> ExecutionResult {
+    ExecutionResult::NoExecuted
 }
 
 fn menu_mouse_move(mt: &mut Tracker, menu: Rc<Menu>) -> bool {
     false
 }
 
-fn select_item(window: HWND, menu: &Menu, index: Option<i32>) {}
+fn select_item(owning_window: HWND, menu: &Menu, index: Option<i32>) {}
 
-fn select_previous(window: HWND, menu: &Menu) {}
+fn select_previous(menu: &Menu) {}
 
-fn select_next(window: HWND, menu: &Menu) {}
+fn select_next(menu: &Menu) {}
 
-fn select_first(window: HWND, menu: &Menu) {}
+fn select_first(menu: &Menu) {}
 
-fn select_last(window: HWND, menu: &Menu) {}
+fn select_last(menu: &Menu) {}
 
-unsafe fn track_menu(
-    window: HWND,
-    menu: Rc<Menu>,
-    x: i32,
-    y: i32,
-    owning_window: HWND,
-) -> Result<()> {
+fn menu_key_left(mt: &mut Tracker, message: u32) {}
+
+fn menu_key_right(mt: &mut Tracker, message: u32) {}
+
+fn menu_key_escape(mt: &mut Tracker) {}
+
+#[derive(PartialEq)]
+enum ExecutionResult {
+    Executed = 0,
+    NoExecuted = -1,
+    ShownPopup = -2,
+}
+fn execute_focused_item(mt: &mut Tracker, menu: &Menu) -> ExecutionResult {
+    ExecutionResult::NoExecuted
+}
+
+fn hide_sub_popups(owning_window: HWND, menu: &Menu) {}
+
+unsafe fn track_menu(menu: Rc<Menu>, x: i32, y: i32, owning_window: HWND) -> Result<bool> {
+    if menu.window.is_none() {
+        return Err(Error::from(ERROR_INVALID_WINDOW_HANDLE));
+    }
+    let window = menu.window.unwrap();
+
     SetCapture(window);
     let mut remove_message = false;
     let mut mt = Tracker {
@@ -175,6 +198,7 @@ unsafe fn track_menu(
     };
     let mut exit_menu = false;
     let mut enter_idle_sent = false;
+    let mut execution_result = ExecutionResult::NoExecuted;
     while !exit_menu {
         let mut msg = MSG::default();
         loop {
@@ -232,8 +256,8 @@ unsafe fn track_menu(
                 }
                 WM_RBUTTONUP | WM_LBUTTONUP => match menu_from_point_result {
                     Some(menu_from_point) => {
-                        let executed_menu_id = menu_button_up(&mut mt, menu_from_point);
-                        remove_message = executed_menu_id != -1;
+                        execution_result = menu_button_up(&mut mt, menu_from_point);
+                        remove_message = execution_result != ExecutionResult::NoExecuted;
                         exit_menu = remove_message;
                     }
                     None => exit_menu = false,
@@ -252,17 +276,42 @@ unsafe fn track_menu(
                     VK_MENU | VK_F10 => {
                         exit_menu = true;
                     }
-                    VK_HOME => select_first(window, menu.as_ref()),
-                    VK_END => select_last(window, menu.as_ref()),
-                    VK_UP => select_previous(window, menu.as_ref()),
-                    VK_DOWN => select_next(window, menu.as_ref()),
-                    _ => {}
+                    VK_HOME => select_first(menu.as_ref()),
+                    VK_END => select_last(menu.as_ref()),
+                    VK_UP => select_previous(menu.as_ref()),
+                    VK_DOWN => select_next(menu.as_ref()),
+                    VK_LEFT => menu_key_left(&mut mt, msg.message),
+                    VK_RIGHT => menu_key_right(&mut mt, msg.message),
+                    VK_ESCAPE => menu_key_escape(&mut mt),
+                    _ => {
+                        TranslateMessage(&mut msg)?;
+                    }
                 },
                 _ => {}
             }
+        } else {
+            PeekMessageW(&mut msg, None, msg.message, msg.message, PM_REMOVE)?;
+            DispatchMessageW(&msg);
+            continue;
+        }
+
+        if !exit_menu {
+            remove_message = true;
+        }
+
+        if remove_message {
+            PeekMessageW(&mut msg, None, msg.message, msg.message, PM_REMOVE)?;
         }
     }
-    Ok(())
+
+    ReleaseCapture()?;
+    if IsWindow(mt.owning_window).into() {
+        hide_sub_popups(mt.owning_window, mt.top_menu.as_ref());
+        DestroyWindow(window)?;
+        menu.window = None;
+        select_item(mt.owning_window, mt.top_menu.as_ref(), None);
+    }
+    Ok(execution_result != ExecutionResult::ShownPopup)
 }
 
 unsafe fn exit_tracking(owning_window: HWND) -> Result<()> {
@@ -278,7 +327,7 @@ unsafe fn exit_tracking(owning_window: HWND) -> Result<()> {
 
 unsafe fn show_popup(
     owning_window: HWND,
-    menu_list: &Menu,
+    menu: &Menu,
     id: usize,
     x: i32,
     y: i32,
