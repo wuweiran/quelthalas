@@ -1,6 +1,6 @@
-use std::cell::{RefCell, RefMut};
+use std::cell::RefCell;
 use std::mem::size_of;
-use std::ops::{Deref, DerefMut};
+use std::ops::Deref;
 use std::rc::Rc;
 
 use windows::core::*;
@@ -21,7 +21,10 @@ use crate::QT;
 
 pub enum MenuInfo {
     MenuItem {
-        sub_menu_list: Vec<MenuInfo>,
+        text: PCWSTR,
+    },
+    SubMenu {
+        menu_list: Vec<MenuInfo>,
         text: PCWSTR,
     },
     MenuDivider,
@@ -29,6 +32,9 @@ pub enum MenuInfo {
 
 pub enum MenuItem {
     MenuItem {
+        text: PCWSTR,
+    },
+    SubMenu {
         sub_menu: Rc<RefCell<Menu>>,
         text: PCWSTR,
     },
@@ -39,7 +45,7 @@ pub struct Menu {
     items: Vec<MenuItem>,
     window: Option<HWND>,
     focused_item_index: Option<usize>,
-    items_rect: RECT,
+    menu_list_rect: RECT,
 }
 
 pub struct Context {
@@ -52,12 +58,10 @@ fn convert_menu_info_list_to_menu(menu_info_list: Vec<MenuInfo>) -> Menu {
     let items = menu_info_list
         .into_iter()
         .map(|menu_info| match menu_info {
-            MenuInfo::MenuItem {
-                sub_menu_list,
-                text,
-            } => {
-                let sub_menu = convert_menu_info_list_to_menu(sub_menu_list);
-                MenuItem::MenuItem {
+            MenuInfo::MenuItem { text } => MenuItem::MenuItem { text },
+            MenuInfo::SubMenu { menu_list, text } => {
+                let sub_menu = convert_menu_info_list_to_menu(menu_list);
+                MenuItem::SubMenu {
                     sub_menu: Rc::new(RefCell::new(sub_menu)),
                     text,
                 }
@@ -69,7 +73,7 @@ fn convert_menu_info_list_to_menu(menu_info_list: Vec<MenuInfo>) -> Menu {
         items,
         window: None,
         focused_item_index: None,
-        items_rect: RECT::default(),
+        menu_list_rect: RECT::default(),
     }
 }
 
@@ -166,7 +170,7 @@ fn menu_mouse_move(mt: &mut Tracker, menu: Rc<RefCell<Menu>>) -> bool {
     false
 }
 
-fn select_item(owning_window: HWND, menu: &Menu, index: Option<i32>) {}
+fn select_item(menu: &mut Menu, index: Option<i32>) {}
 
 fn select_previous(menu: &Menu) {}
 
@@ -192,7 +196,16 @@ fn execute_focused_item(mt: &mut Tracker, menu: &Menu) -> ExecutionResult {
     ExecutionResult::NoExecuted
 }
 
-fn hide_sub_popups(owning_window: HWND, menu: &Menu) {}
+fn hide_sub_popups(menu: &mut Menu) {
+    if let Some(focused_item_index) = menu.focused_item_index {
+        let item = &menu.items[focused_item_index];
+        if let MenuItem::SubMenu { sub_menu, text } = item {
+            let mut submenu = sub_menu.borrow_mut();
+            hide_sub_popups(&mut submenu);
+            select_item(&mut submenu, None);
+        }
+    }
+}
 
 unsafe fn track_menu(menu: Rc<RefCell<Menu>>, x: i32, y: i32, owning_window: HWND) -> Result<bool> {
     let mut menu_mut = menu.borrow_mut();
@@ -319,10 +332,11 @@ unsafe fn track_menu(menu: Rc<RefCell<Menu>>, x: i32, y: i32, owning_window: HWN
 
     ReleaseCapture()?;
     if IsWindow(mt.owning_window).into() {
-        hide_sub_popups(mt.owning_window, mt.top_menu.borrow().deref());
+        let mut top_menu = mt.top_menu.borrow_mut();
+        hide_sub_popups(&mut top_menu);
         DestroyWindow(window)?;
         menu_mut.window = None;
-        select_item(mt.owning_window, mt.top_menu.borrow().deref(), None);
+        select_item(&mut top_menu, None);
     }
     Ok(execution_result != ExecutionResult::ShownPopup)
 }
@@ -338,19 +352,12 @@ unsafe fn exit_tracking(owning_window: HWND) -> Result<()> {
     Ok(())
 }
 
-unsafe fn calc_popup_menu_size(menu: RefMut<Menu>, max_height: i32) -> (i32, i32) {
-    SetRectEmpty(&mut menu.items_rect);
+unsafe fn calc_popup_menu_size(menu: &mut Menu, max_height: i32) -> (i32, i32) {
+    SetRectEmpty(&mut menu.menu_list_rect);
     (0, 0)
 }
 
-unsafe fn show_popup(
-    menu: &RefCell<Menu>,
-    x: i32,
-    y: i32,
-    x_anchor: i32,
-    y_anchor: i32,
-) -> Result<()> {
-    let mut menu = menu.borrow_mut();
+unsafe fn show_popup(menu: &mut Menu, x: i32, y: i32, x_anchor: i32, y_anchor: i32) -> Result<()> {
     if menu.window.is_none() {
         return Err(Error::from(ERROR_INVALID_WINDOW_HANDLE));
     }
@@ -398,7 +405,7 @@ unsafe fn show_popup(
         height,
         SWP_SHOWWINDOW | SWP_NOACTIVATE,
     )?;
-    RedrawWindow(window, None, None, RDW_UPDATENOW | RDW_ALLCHILDREN)?;
+    RedrawWindow(window, None, None, RDW_UPDATENOW | RDW_ALLCHILDREN);
     Ok(())
 }
 
@@ -417,7 +424,11 @@ extern "system" fn window_proc(
             let cs = l_param.0 as *const CREATESTRUCTW;
             let raw = (*cs).lpCreateParams as *mut Context;
             let context = Box::<Context>::from_raw(raw);
-            match show_popup(context.menu.as_ref(), (*cs).x, (*cs).y, 0, 0) {
+            let result = {
+                let mut menu = context.menu.borrow_mut();
+                show_popup(&mut menu, (*cs).x, (*cs).y, 0, 0)
+            };
+            match result {
                 Ok(_) => {
                     SetWindowLongPtrW(
                         window,
