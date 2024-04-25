@@ -22,6 +22,7 @@ use crate::QT;
 pub enum MenuInfo {
     MenuItem {
         text: PCWSTR,
+        command_id: u32
     },
     SubMenu {
         menu_list: Vec<MenuInfo>,
@@ -33,6 +34,7 @@ pub enum MenuInfo {
 pub enum MenuItem {
     MenuItem {
         text: PCWSTR,
+        id: u32
     },
     SubMenu {
         sub_menu: Rc<RefCell<Menu>>,
@@ -58,7 +60,7 @@ fn convert_menu_info_list_to_menu(menu_info_list: Vec<MenuInfo>) -> Menu {
     let items = menu_info_list
         .into_iter()
         .map(|menu_info| match menu_info {
-            MenuInfo::MenuItem { text } => MenuItem::MenuItem { text },
+            MenuInfo::MenuItem { text, command_id } => MenuItem::MenuItem { text, id: command_id },
             MenuInfo::SubMenu { menu_list, text } => {
                 let sub_menu = convert_menu_info_list_to_menu(menu_list);
                 MenuItem::SubMenu {
@@ -192,18 +194,44 @@ enum ExecutionResult {
     NoExecuted = -1,
     ShownPopup = -2,
 }
-fn execute_focused_item(mt: &mut Tracker, menu: &Menu) -> ExecutionResult {
-    ExecutionResult::NoExecuted
+
+fn show_sub_popup(menu: &mut Menu) -> Result<Rc<RefCell<Menu>>> {
+    Err(Error::from(HRESULT::default()))
 }
 
-fn hide_sub_popups(menu: &mut Menu) {
+fn hide_sub_popups(menu: &mut Menu) -> Result<()> {
     if let Some(focused_item_index) = menu.focused_item_index {
         let item = &menu.items[focused_item_index];
         if let MenuItem::SubMenu { sub_menu, text } = item {
-            let mut submenu = sub_menu.borrow_mut();
-            hide_sub_popups(&mut submenu);
-            select_item(&mut submenu, None);
+            let mut sub_menu = sub_menu.borrow_mut();
+            hide_sub_popups(&mut sub_menu)?;
+            select_item(&mut sub_menu, None);
+            if let Some(sub_menu_window) = sub_menu.window {
+                unsafe { DestroyWindow(sub_menu_window)? };
+                sub_menu.window = None;
+            }
         }
+    }
+    Ok(())
+}
+fn execute_focused_item(mt: &mut Tracker, menu: &Menu) -> Result<ExecutionResult> {
+    if let Some(focused_item_index) = menu.focused_item_index {
+        let item = &menu.items[focused_item_index];
+        match item {
+            MenuItem::MenuItem { text, id } => unsafe {
+                PostMessageW(mt.owning_window, WM_COMMAND, WPARAM(*id as usize), LPARAM(0))?;
+                Ok(ExecutionResult::Executed)
+            }
+            MenuItem::SubMenu { sub_menu, .. } => {
+                let mut sub_menu = sub_menu.borrow_mut();
+                mt.current_menu = show_sub_popup(&mut sub_menu)?;
+                Ok(ExecutionResult::ShownPopup)
+            }
+            MenuItem::MenuDivider =>
+                Ok(ExecutionResult::NoExecuted)
+        }
+    } else {
+        Ok(ExecutionResult::NoExecuted)
     }
 }
 
