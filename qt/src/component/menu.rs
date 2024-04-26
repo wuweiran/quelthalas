@@ -7,10 +7,7 @@ use windows::core::*;
 use windows::Win32::Foundation::{
     ERROR_INVALID_WINDOW_HANDLE, FALSE, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, TRUE, WPARAM,
 };
-use windows::Win32::Graphics::Gdi::{
-    BeginPaint, EndPaint, GetMonitorInfoW, MonitorFromPoint, RedrawWindow, SetRectEmpty, HDC,
-    MONITORINFO, MONITOR_DEFAULTTONEAREST, PAINTSTRUCT, RDW_ALLCHILDREN, RDW_UPDATENOW,
-};
+use windows::Win32::Graphics::Gdi::{BeginPaint, EndPaint, GetMonitorInfoW, MonitorFromPoint, RedrawWindow, SetRectEmpty, HDC, MONITORINFO, MONITOR_DEFAULTTONEAREST, PAINTSTRUCT, RDW_ALLCHILDREN, RDW_UPDATENOW, PtInRect};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     ReleaseCapture, SetCapture, VIRTUAL_KEY, VK_DOWN, VK_END, VK_ESCAPE, VK_F10, VK_HOME, VK_LEFT,
     VK_MENU, VK_RIGHT, VK_UP,
@@ -157,11 +154,61 @@ struct Tracker {
 }
 
 fn menu_from_point(root: Rc<RefCell<Menu>>, point: &POINT) -> Option<Rc<RefCell<Menu>>> {
-    None
+    let menu = root.borrow();
+    let mut result : Option<Rc<RefCell<Menu>>> = None;
+    if let Some(focused_item_index) = menu.focused_item_index {
+        let item = &menu.items[focused_item_index];
+        if let MenuItem::SubMenu {sub_menu, ..} = item {
+            result = menu_from_point(sub_menu.clone(), point)
+        }
+    }
+    if let None = result {
+        let hit_window = unsafe {WindowFromPoint(*point)};
+        if menu.window == Some(hit_window) {
+            result = Some(root.clone())
+        }
+    };
+    result
 }
 
-fn menu_button_down(mt: &mut Tracker, message: u32, menu: Rc<RefCell<Menu>>) -> bool {
-    false
+fn find_item_by_coordinates(menu: &Menu, point: &POINT) -> Option<usize> {
+    let mut rect = RECT::default();
+    if let Some(window) = menu.window {
+        unsafe {
+            GetWindowRect(window, &mut rect)?;
+            if !PtInRect(&rect, *point).as_bool() {
+                return None;
+            }
+            // TODO
+            None
+        }
+    } else {
+        None
+    }
+}
+
+fn switch_tracking(menu: &mut Menu, new_index: usize) -> Result<()> {
+    hide_sub_popups(menu)?;
+    select_item(menu, Some(new_index));
+    Ok(())
+}
+
+fn menu_button_down(mt: &mut Tracker, menu: &mut Menu) -> Result<bool> {
+    if let Some(item_index) = find_item_by_coordinates(menu, &mt.point) {
+        if menu.focused_item_index != Some(item_index) {
+            switch_tracking(menu, item_index)?;
+        }
+        let item = &menu.items[item_index];
+        if let MenuItem::SubMenu {sub_menu, ..} = item {
+            let mut sub_menu = sub_menu.borrow_mut();
+            if sub_menu.window.is_none() {
+                mt.current_menu = show_sub_popup(&mut sub_menu)?;
+            }
+        }
+        Ok(true)
+    } else {
+        Ok(false)
+    }
 }
 
 fn menu_button_up(mt: &mut Tracker, menu: Rc<RefCell<Menu>>) -> ExecutionResult {
@@ -172,7 +219,7 @@ fn menu_mouse_move(mt: &mut Tracker, menu: Rc<RefCell<Menu>>) -> bool {
     false
 }
 
-fn select_item(menu: &mut Menu, index: Option<i32>) {}
+fn select_item(menu: &mut Menu, index: Option<usize>) {}
 
 fn select_previous(menu: &Menu) {}
 
@@ -303,7 +350,8 @@ unsafe fn track_menu(menu: Rc<RefCell<Menu>>, x: i32, y: i32, owning_window: HWN
                     remove_message = match menu_from_point_result {
                         None => false,
                         Some(menu_from_point) => {
-                            menu_button_down(&mut mt, msg.message, menu_from_point)
+                            let mut menu_from_point_borrowed = menu_from_point.borrow_mut();
+                            menu_button_down(&mut mt, &mut menu_from_point_borrowed)?
                         }
                     };
                     exit_menu = !remove_message;
