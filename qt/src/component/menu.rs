@@ -7,7 +7,10 @@ use windows::core::*;
 use windows::Win32::Foundation::{
     ERROR_INVALID_WINDOW_HANDLE, FALSE, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, TRUE, WPARAM,
 };
-use windows::Win32::Graphics::Gdi::{BeginPaint, EndPaint, GetMonitorInfoW, MonitorFromPoint, RedrawWindow, SetRectEmpty, HDC, MONITORINFO, MONITOR_DEFAULTTONEAREST, PAINTSTRUCT, RDW_ALLCHILDREN, RDW_UPDATENOW, PtInRect};
+use windows::Win32::Graphics::Gdi::{
+    BeginPaint, EndPaint, GetMonitorInfoW, MonitorFromPoint, PtInRect, RedrawWindow, SetRectEmpty,
+    HDC, MONITORINFO, MONITOR_DEFAULTTONEAREST, PAINTSTRUCT, RDW_ALLCHILDREN, RDW_UPDATENOW,
+};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     ReleaseCapture, SetCapture, VIRTUAL_KEY, VK_DOWN, VK_END, VK_ESCAPE, VK_F10, VK_HOME, VK_LEFT,
     VK_MENU, VK_RIGHT, VK_UP,
@@ -19,7 +22,7 @@ use crate::QT;
 pub enum MenuInfo {
     MenuItem {
         text: PCWSTR,
-        command_id: u32
+        command_id: u32,
     },
     SubMenu {
         menu_list: Vec<MenuInfo>,
@@ -31,7 +34,7 @@ pub enum MenuInfo {
 pub enum MenuItem {
     MenuItem {
         text: PCWSTR,
-        id: u32
+        id: u32,
     },
     SubMenu {
         sub_menu: Rc<RefCell<Menu>>,
@@ -57,7 +60,10 @@ fn convert_menu_info_list_to_menu(menu_info_list: Vec<MenuInfo>) -> Menu {
     let items = menu_info_list
         .into_iter()
         .map(|menu_info| match menu_info {
-            MenuInfo::MenuItem { text, command_id } => MenuItem::MenuItem { text, id: command_id },
+            MenuInfo::MenuItem { text, command_id } => MenuItem::MenuItem {
+                text,
+                id: command_id,
+            },
             MenuInfo::SubMenu { menu_list, text } => {
                 let sub_menu = convert_menu_info_list_to_menu(menu_list);
                 MenuItem::SubMenu {
@@ -155,15 +161,15 @@ struct Tracker {
 
 fn menu_from_point(root: Rc<RefCell<Menu>>, point: &POINT) -> Option<Rc<RefCell<Menu>>> {
     let menu = root.borrow();
-    let mut result : Option<Rc<RefCell<Menu>>> = None;
+    let mut result: Option<Rc<RefCell<Menu>>> = None;
     if let Some(focused_item_index) = menu.focused_item_index {
         let item = &menu.items[focused_item_index];
-        if let MenuItem::SubMenu {sub_menu, ..} = item {
+        if let MenuItem::SubMenu { sub_menu, .. } = item {
             result = menu_from_point(sub_menu.clone(), point)
         }
     }
     if let None = result {
-        let hit_window = unsafe {WindowFromPoint(*point)};
+        let hit_window = unsafe { WindowFromPoint(*point) };
         if menu.window == Some(hit_window) {
             result = Some(root.clone())
         }
@@ -171,19 +177,19 @@ fn menu_from_point(root: Rc<RefCell<Menu>>, point: &POINT) -> Option<Rc<RefCell<
     result
 }
 
-fn find_item_by_coordinates(menu: &Menu, point: &POINT) -> Option<usize> {
+fn find_item_by_coordinates(menu: &Menu, point: &POINT) -> Result<Option<usize>> {
     let mut rect = RECT::default();
     if let Some(window) = menu.window {
         unsafe {
             GetWindowRect(window, &mut rect)?;
             if !PtInRect(&rect, *point).as_bool() {
-                return None;
+                return Ok(None);
             }
             // TODO
-            None
+            Ok(None)
         }
     } else {
-        None
+        Ok(None)
     }
 }
 
@@ -194,12 +200,12 @@ fn switch_tracking(menu: &mut Menu, new_index: usize) -> Result<()> {
 }
 
 fn menu_button_down(mt: &mut Tracker, menu: &mut Menu) -> Result<bool> {
-    if let Some(item_index) = find_item_by_coordinates(menu, &mt.point) {
+    if let Some(item_index) = find_item_by_coordinates(menu, &mt.point)? {
         if menu.focused_item_index != Some(item_index) {
             switch_tracking(menu, item_index)?;
         }
         let item = &menu.items[item_index];
-        if let MenuItem::SubMenu {sub_menu, ..} = item {
+        if let MenuItem::SubMenu { sub_menu, .. } = item {
             let mut sub_menu = sub_menu.borrow_mut();
             if sub_menu.window.is_none() {
                 mt.current_menu = show_sub_popup(&mut sub_menu)?;
@@ -266,16 +272,20 @@ fn execute_focused_item(mt: &mut Tracker, menu: &Menu) -> Result<ExecutionResult
         let item = &menu.items[focused_item_index];
         match item {
             MenuItem::MenuItem { text, id } => unsafe {
-                PostMessageW(mt.owning_window, WM_COMMAND, WPARAM(*id as usize), LPARAM(0))?;
+                PostMessageW(
+                    mt.owning_window,
+                    WM_COMMAND,
+                    WPARAM(*id as usize),
+                    LPARAM(0),
+                )?;
                 Ok(ExecutionResult::Executed)
-            }
+            },
             MenuItem::SubMenu { sub_menu, .. } => {
                 let mut sub_menu = sub_menu.borrow_mut();
                 mt.current_menu = show_sub_popup(&mut sub_menu)?;
                 Ok(ExecutionResult::ShownPopup)
             }
-            MenuItem::MenuDivider =>
-                Ok(ExecutionResult::NoExecuted)
+            MenuItem::MenuDivider => Ok(ExecutionResult::NoExecuted),
         }
     } else {
         Ok(ExecutionResult::NoExecuted)
