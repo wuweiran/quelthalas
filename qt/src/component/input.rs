@@ -15,14 +15,14 @@ use windows::Win32::Globalization::{
 };
 use windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F;
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, CreateFontW, CreateRoundRectRgn, CreateSolidBrush, DeleteObject, EndPaint, FillRgn,
-    GetBkColor, GetBkMode, GetClipBox, GetDC, GetObjectW, GetSysColor, GetTextColor,
-    GetTextExtentPoint32W, GetTextMetricsW, InflateRect, IntersectRect, InvalidateRect,
-    MapWindowPoints, PatBlt, RedrawWindow, ReleaseDC, SelectObject, SetBkColor, SetBkMode,
-    SetTextColor, SetWindowRgn, TextOutW, BACKGROUND_MODE, CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS,
-    COLOR_HIGHLIGHT, COLOR_HIGHLIGHTTEXT, DEFAULT_CHARSET, ETO_OPTIONS, HBRUSH, HDC, HFONT,
-    LOGFONTW, OPAQUE, OUT_OUTLINE_PRECIS, PAINTSTRUCT, PATCOPY, RDW_INVALIDATE, TEXTMETRICW,
-    VARIABLE_PITCH,
+    AngleArc, BeginPaint, CreateFontW, CreatePen, CreateRoundRectRgn, CreateSolidBrush,
+    DeleteObject, EndPaint, FillRect, GetBkColor, GetBkMode, GetClipBox, GetDC, GetObjectW,
+    GetSysColor, GetTextColor, GetTextExtentPoint32W, GetTextMetricsW, InflateRect, IntersectRect,
+    InvalidateRect, MapWindowPoints, MoveToEx, PatBlt, RedrawWindow, ReleaseDC, SelectObject,
+    SetBkColor, SetBkMode, SetTextColor, SetWindowRgn, TextOutW, BACKGROUND_MODE,
+    CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, COLOR_HIGHLIGHT, COLOR_HIGHLIGHTTEXT, DEFAULT_CHARSET,
+    ETO_OPTIONS, HBRUSH, HDC, HFONT, HPEN, LOGFONTW, OPAQUE, OUT_OUTLINE_PRECIS, PAINTSTRUCT,
+    PATCOPY, PS_SOLID, RDW_INVALIDATE, TEXTMETRICW, VARIABLE_PITCH,
 };
 use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
 use windows::Win32::System::DataExchange::{
@@ -193,9 +193,9 @@ pub struct Context {
     font: HFONT,
     background_color: COLORREF,
     background_color_brush: HBRUSH,
-    border_color_brush: HBRUSH,
-    border_color_focused_brush: HBRUSH,
-    border_bottom_color_brush: HBRUSH,
+    border_pen: HPEN,
+    border_pen_focused: HPEN,
+    border_bottom_pen: HPEN,
     border_bottom_color_focused_brush: HBRUSH,
     text_color: COLORREF,
     line_height: i32,
@@ -592,6 +592,7 @@ unsafe fn scroll_caret(window: HWND, context: &mut Context) -> Result<()> {
                 break;
             }
         }
+        InvalidateRect(window, Some(&context.format_rect), true);
     } else if x > context.format_rect.right {
         let len = context.get_text_length();
         let goal = context.format_rect.right - format_width / 3;
@@ -603,7 +604,7 @@ unsafe fn scroll_caret(window: HWND, context: &mut Context) -> Result<()> {
                 break;
             }
         }
-        InvalidateRect(window, None, true);
+        InvalidateRect(window, Some(&context.format_rect), true);
     }
 
     set_caret_position(window, context, context.selection_end)?;
@@ -911,10 +912,23 @@ unsafe fn on_create(window: HWND, state: State) -> Result<Context> {
         Appearance::FilledLighter => convert_to_color_ref(&tokens.color_neutral_background1),
         Appearance::FilledDarker => convert_to_color_ref(&tokens.color_neutral_background3),
     };
-    let border_color = convert_to_color_ref(&tokens.color_neutral_stroke1);
-    let border_color_focused = convert_to_color_ref(&tokens.color_neutral_stroke1_pressed);
-    let border_bottom_color = convert_to_color_ref(&tokens.color_neutral_stroke_accessible);
+    let border_pen = CreatePen(
+        PS_SOLID,
+        (1.0 * scaling_factor * 2f32) as i32,
+        convert_to_color_ref(&tokens.color_neutral_stroke1),
+    );
+    let border_pen_focused = CreatePen(
+        PS_SOLID,
+        (1.0 * scaling_factor * 2f32) as i32,
+        convert_to_color_ref(&tokens.color_neutral_stroke1_pressed),
+    );
+    let border_bottom_pen = CreatePen(
+        PS_SOLID,
+        (1.0 * scaling_factor * 2f32) as i32,
+        convert_to_color_ref(&tokens.color_neutral_stroke_accessible),
+    );
     let border_bottom_focused_color = convert_to_color_ref(&tokens.color_compound_brand_stroke);
+    let text_color = convert_to_color_ref(&tokens.color_neutral_foreground1);
     Ok(Context {
         state,
         animation_manager,
@@ -935,11 +949,11 @@ unsafe fn on_create(window: HWND, state: State) -> Result<Context> {
         font,
         background_color,
         background_color_brush: CreateSolidBrush(background_color),
-        border_color_brush: CreateSolidBrush(border_color),
-        border_color_focused_brush: CreateSolidBrush(border_color_focused),
-        border_bottom_color_brush: CreateSolidBrush(border_bottom_color),
+        border_pen,
+        border_pen_focused,
+        border_bottom_pen,
         border_bottom_color_focused_brush: CreateSolidBrush(border_bottom_focused_color),
-        text_color: Default::default(),
+        text_color,
         line_height: tm.tmHeight,
         char_width: tm.tmAveCharWidth,
         text_width: 0,
@@ -1364,16 +1378,49 @@ unsafe fn on_paint(window: HWND, context: &mut Context) -> Result<()> {
     let mut rc_rgn = RECT::default();
     GetClipBox(dc, &mut rc_rgn);
 
-    let tokens = &context.state.qt.theme.tokens;
     let scaling_factor = get_scaling_factor(&window);
-    let border_width = (1.0 * scaling_factor) as i32;
-    let border_bottom_width = (2.0 * scaling_factor) as i32;
     let mut rc = RECT::default();
     GetClientRect(window, &mut rc)?;
-    let diameter = (tokens.border_radius_medium * scaling_factor * 2f32) as i32;
-    let w = diameter.max(border_width);
-    let mut rc_intersect = RECT::default();
 
+    FillRect(dc, &rc, context.background_color_brush);
+
+    let mut rc_intersect = RECT::default();
+    let rc_line = get_single_line_rect(window, context, 0, None)?;
+    if IntersectRect(&mut rc_intersect, &rc_rgn, &rc_line).into() {
+        let old_font = SelectObject(dc, context.font);
+        SetTextColor(dc, context.text_color);
+        SetBkColor(dc, context.background_color);
+        context.invalidate_uniscribe_data()?;
+        update_uniscribe_data(window, context, Some(dc))?;
+        paint_line(window, context, dc, rev)?;
+        SelectObject(dc, old_font);
+
+        FillRect(
+            dc,
+            &RECT {
+                left: rc.left,
+                top: rc.top,
+                right: context.format_rect.left,
+                bottom: rc.bottom,
+            },
+            context.background_color_brush,
+        );
+        FillRect(
+            dc,
+            &RECT {
+                left: context.format_rect.right,
+                top: rc.top,
+                right: rc.right,
+                bottom: rc.bottom,
+            },
+            context.background_color_brush,
+        );
+    }
+
+    let border_width = (1.0 * scaling_factor) as i32;
+    let border_bottom_width = (2.0 * scaling_factor) as i32;
+
+    let tokens = &context.state.qt.theme.tokens;
     let need_draw_border = IntersectRect(
         &mut rc_intersect,
         &rc_rgn,
@@ -1389,20 +1436,52 @@ unsafe fn on_paint(window: HWND, context: &mut Context) -> Result<()> {
             Appearance::Outline => true,
             _ => false,
         };
-
     if need_draw_border {
-        let border_color_brush = if context.is_focused {
-            context.border_color_focused_brush
-        } else {
-            context.border_color_brush
-        };
-        SelectObject(dc, border_color_brush);
-        PatBlt(dc, rc.left, rc.top, rc.right - rc.left, w, PATCOPY);
-        PatBlt(dc, rc.left, rc.top, w, rc.bottom - rc.top, PATCOPY);
-        PatBlt(dc, rc.right - w, rc.top, w, rc.bottom - rc.top, PATCOPY);
+        SelectObject(
+            dc,
+            if context.is_focused {
+                context.border_pen_focused
+            } else {
+                context.border_pen
+            },
+        );
+        let radius = (tokens.border_radius_medium * scaling_factor) as i32;
+        MoveToEx(dc, rc.right - radius, rc.top, None);
+        AngleArc(
+            dc,
+            rc.left + radius,
+            rc.top + radius,
+            radius as u32,
+            90.0,
+            90.0,
+        );
+        AngleArc(
+            dc,
+            rc.left + radius,
+            rc.bottom - radius,
+            radius as u32,
+            180.0,
+            90.0,
+        );
+        AngleArc(
+            dc,
+            rc.right - radius,
+            rc.bottom - radius,
+            radius as u32,
+            270.0,
+            90.0,
+        );
+        AngleArc(
+            dc,
+            rc.right - radius,
+            rc.top + radius,
+            radius as u32,
+            0.0,
+            90.0,
+        );
     }
 
-    let need_draw_border_bottom = IntersectRect(
+    if IntersectRect(
         &mut rc_intersect,
         &rc_rgn,
         &RECT {
@@ -1412,58 +1491,40 @@ unsafe fn on_paint(window: HWND, context: &mut Context) -> Result<()> {
             bottom: rc.bottom,
         },
     )
-    .as_bool();
+    .into()
+    {
+        SelectObject(dc, context.border_bottom_pen);
 
-    if need_draw_border_bottom {
-        SelectObject(dc, context.border_bottom_color_brush);
-        PatBlt(
+        let radius = (tokens.border_radius_medium * scaling_factor) as i32;
+
+        MoveToEx(dc, radius, rc.bottom, None);
+        AngleArc(dc, radius, rc.bottom - radius, radius as u32, 270.0, -45.0);
+        MoveToEx(dc, radius, rc.bottom, None);
+        AngleArc(
             dc,
-            rc.left,
-            rc.bottom - border_bottom_width,
-            rc.right - rc.left,
-            border_bottom_width,
-            PATCOPY,
+            rc.right - radius,
+            rc.bottom - radius,
+            radius as u32,
+            270.0,
+            45.0,
         );
-    }
 
-    let foreground_region = CreateRoundRectRgn(
-        rc.left + border_width,
-        rc.top + border_width,
-        (rc.right - border_width).max(rc.left + border_width) + 1,
-        (rc.bottom - border_width).max(rc.top + border_width) + 1,
-        diameter,
-        diameter,
-    );
-    FillRgn(dc, foreground_region, context.background_color_brush);
-    DeleteObject(foreground_region);
-
-    if need_draw_border_bottom && context.is_focused {
-        SelectObject(dc, context.border_bottom_color_focused_brush);
-        let percentage = context.bottom_focus_border.GetValue()?;
-        PatBlt(
-            dc,
-            (rc.left as f64 * (1.0 + percentage) / 2.0 + rc.right as f64 * (1.0 - percentage) / 2.0)
-                as i32,
-            rc.bottom - border_bottom_width,
-            ((rc.right - rc.left) as f64 * percentage) as i32,
-            border_bottom_width,
-            PATCOPY,
-        );
-    }
-
-    let rc_line = get_single_line_rect(window, context, 0, None)?;
-    if IntersectRect(&mut rc_intersect, &rc_rgn, &rc_line).into() {
-        let old_font = SelectObject(dc, context.font);
-        SetTextColor(dc, context.text_color);
-        SetBkColor(dc, context.background_color);
-        context.invalidate_uniscribe_data()?;
-        update_uniscribe_data(window, context, Some(dc))?;
-        paint_line(window, context, dc, rev)?;
-        SelectObject(dc, old_font);
+        if context.is_focused {
+            SelectObject(dc, context.border_bottom_color_focused_brush);
+            let percentage = context.bottom_focus_border.GetValue()?;
+            PatBlt(
+                dc,
+                (rc.left as f64 * (1.0 + percentage) / 2.0
+                    + rc.right as f64 * (1.0 - percentage) / 2.0) as i32,
+                rc.bottom - border_bottom_width,
+                ((rc.right - rc.left) as f64 * percentage) as i32,
+                border_bottom_width,
+                PATCOPY,
+            );
+        }
     }
 
     EndPaint(window, &ps);
-
     Ok(())
 }
 
@@ -1554,9 +1615,10 @@ extern "system" fn window_proc(
             let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
             let context = Box::<Context>::from_raw(raw);
             DeleteObject(context.background_color_brush);
-            DeleteObject(context.border_color_brush);
-            DeleteObject(context.border_color_focused_brush);
-            DeleteObject(context.border_bottom_color_brush);
+            DeleteObject(context.border_pen);
+            DeleteObject(context.border_pen_focused);
+            DeleteObject(context.border_bottom_pen);
+            DeleteObject(context.border_bottom_color_focused_brush);
             LRESULT(0)
         },
         WM_CHAR => unsafe {
@@ -1798,6 +1860,21 @@ extern "system" fn window_proc(
                 context.font = font;
                 context.line_height = tm.tmHeight;
                 context.char_width = tm.tmAveCharWidth;
+                context.border_pen = CreatePen(
+                    PS_SOLID,
+                    (1.0 * scaling_factor * 2f32) as i32,
+                    convert_to_color_ref(&tokens.color_neutral_stroke1),
+                );
+                context.border_pen_focused = CreatePen(
+                    PS_SOLID,
+                    (1.0 * scaling_factor * 2f32) as i32,
+                    convert_to_color_ref(&tokens.color_neutral_stroke1_pressed),
+                );
+                context.border_bottom_pen = CreatePen(
+                    PS_SOLID,
+                    (1.0 * scaling_factor * 2f32) as i32,
+                    convert_to_color_ref(&tokens.color_neutral_stroke_accessible),
+                );
                 if set_rect_np(window, context).is_ok() {
                     _ = InvalidateRect(window, None, true);
                 }
