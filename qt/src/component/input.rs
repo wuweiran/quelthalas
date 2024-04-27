@@ -20,9 +20,9 @@ use windows::Win32::Graphics::Gdi::{
     GetSysColor, GetTextColor, GetTextExtentPoint32W, GetTextMetricsW, InflateRect, IntersectRect,
     InvalidateRect, MapWindowPoints, MoveToEx, PatBlt, RedrawWindow, ReleaseDC, SelectObject,
     SetBkColor, SetBkMode, SetTextColor, SetWindowRgn, TextOutW, BACKGROUND_MODE,
-    CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, COLOR_HIGHLIGHT, COLOR_HIGHLIGHTTEXT, DEFAULT_CHARSET,
-    ETO_OPTIONS, HBRUSH, HDC, HFONT, HPEN, LOGFONTW, OPAQUE, OUT_OUTLINE_PRECIS, PAINTSTRUCT,
-    PATCOPY, PS_SOLID, RDW_INVALIDATE, TEXTMETRICW, VARIABLE_PITCH,
+    CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, COLOR_GRAYTEXT, COLOR_HIGHLIGHT, COLOR_HIGHLIGHTTEXT,
+    DEFAULT_CHARSET, ETO_OPTIONS, HBRUSH, HDC, HFONT, HPEN, LOGFONTW, OPAQUE, OUT_OUTLINE_PRECIS,
+    PAINTSTRUCT, PATCOPY, PS_SOLID, RDW_INVALIDATE, TEXTMETRICW, VARIABLE_PITCH,
 };
 use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
 use windows::Win32::System::DataExchange::{
@@ -1388,11 +1388,23 @@ unsafe fn on_paint(window: HWND, context: &mut Context) -> Result<()> {
     let rc_line = get_single_line_rect(window, context, 0, None)?;
     if IntersectRect(&mut rc_intersect, &rc_rgn, &rc_line).into() {
         let old_font = SelectObject(dc, context.font);
-        SetTextColor(dc, context.text_color);
         SetBkColor(dc, context.background_color);
-        context.invalidate_uniscribe_data()?;
-        update_uniscribe_data(window, context, Some(dc))?;
-        paint_line(window, context, dc, rev)?;
+        if context.get_text_length() == 0 {
+            if let Some(placeholder) = context.state.placeholder {
+                SetTextColor(dc, COLORREF(GetSysColor(COLOR_GRAYTEXT)));
+                TextOutW(
+                    dc,
+                    context.format_rect.left,
+                    context.format_rect.top,
+                    &placeholder.as_wide(),
+                );
+            }
+        } else {
+            SetTextColor(dc, context.text_color);
+            context.invalidate_uniscribe_data()?;
+            update_uniscribe_data(window, context, Some(dc))?;
+            paint_line(window, context, dc, rev)?;
+        }
         SelectObject(dc, old_font);
 
         FillRect(
