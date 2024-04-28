@@ -502,7 +502,7 @@ unsafe fn replace_selection(
 
     start = start + replace.len();
     set_selection(window, context, Some(start), Some(start))?;
-    InvalidateRect(window, None, false);
+    InvalidateRect(window, Some(&context.format_rect), false);
 
     scroll_caret(window, context)?;
     update_scroll_info(window, context);
@@ -647,7 +647,12 @@ unsafe fn adjust_format_rect(window: HWND, context: &mut Context) -> Result<()> 
     context.format_rect.bottom = context.format_rect.top + context.line_height;
     let mut client_rect = RECT::default();
     GetClientRect(window, &mut client_rect)?;
-    context.format_rect.bottom = context.format_rect.bottom.min(client_rect.bottom);
+    let scaling_factor = get_scaling_factor(&window);
+    let border_bottom_width = (2.0 * scaling_factor) as i32;
+    context.format_rect.bottom = context
+        .format_rect
+        .bottom
+        .min(client_rect.bottom - border_bottom_width);
     set_caret_position(window, context, context.selection_end)
 }
 
@@ -1433,17 +1438,39 @@ unsafe fn on_paint(window: HWND, context: &mut Context) -> Result<()> {
     let border_bottom_width = (2.0 * scaling_factor) as i32;
 
     let tokens = &context.state.qt.theme.tokens;
-    let need_draw_border = IntersectRect(
+    let need_draw_border = (IntersectRect(
         &mut rc_intersect,
         &rc_rgn,
         &RECT {
             left: rc.left,
             top: rc.top,
-            right: rc.right,
-            bottom: (rc.bottom - border_bottom_width).max(rc.top + border_width),
+            right: rc.left + border_width,
+            bottom: rc.bottom - border_width,
         },
     )
     .as_bool()
+        || IntersectRect(
+            &mut rc_intersect,
+            &rc_rgn,
+            &RECT {
+                left: rc.left,
+                top: rc.top,
+                right: rc.right,
+                bottom: rc.top + border_width,
+            },
+        )
+        .as_bool()
+        || IntersectRect(
+            &mut rc_intersect,
+            &rc_rgn,
+            &RECT {
+                left: rc.right - border_width,
+                top: rc.top,
+                right: rc.right,
+                bottom: rc.bottom - border_width,
+            },
+        )
+        .as_bool())
         && match context.state.appearance {
             Appearance::Outline => true,
             _ => false,
@@ -1752,6 +1779,7 @@ extern "system" fn window_proc(
                 Err(_) => DefWindowProcW(window, message, w_param, l_param),
             }
         },
+        WM_ERASEBKGND => LRESULT(1),
         WM_PASTE => unsafe {
             let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
             let context = &mut *raw;
