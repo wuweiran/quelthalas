@@ -1575,7 +1575,8 @@ unsafe fn set_focus(window: HWND, context: &mut Context) -> Result<()> {
         context.selection_start,
         context.selection_end,
     )?;
-    CreateCaret(window, None, 1, context.line_height)?;
+    let scaling_factor = get_scaling_factor(&window);
+    CreateCaret(window, None, (1.0 * scaling_factor) as i32, context.line_height)?;
     set_caret_position(window, context, context.selection_end)?;
     ShowCaret(window)?;
     RedrawWindow(window, None, None, RDW_INVALIDATE);
