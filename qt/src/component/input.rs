@@ -334,7 +334,7 @@ unsafe fn invalidate_text(
     let line_rect = get_single_line_rect(window, context, actual_start, Some(actual_end))?;
     let mut rc = RECT::default();
     if IntersectRect(&mut rc, &line_rect, &context.format_rect).into() {
-        InvalidateRect(window, Some(&rc), true);
+        _ = InvalidateRect(window, Some(&rc), true);
     }
     Ok(())
 }
@@ -502,7 +502,7 @@ unsafe fn replace_selection(
 
     start = start + replace.len();
     set_selection(window, context, Some(start), Some(start))?;
-    InvalidateRect(window, Some(&context.format_rect), false);
+    _ = InvalidateRect(window, Some(&context.format_rect), false);
 
     scroll_caret(window, context)?;
     update_scroll_info(window, context);
@@ -592,7 +592,7 @@ unsafe fn scroll_caret(window: HWND, context: &mut Context) -> Result<()> {
                 break;
             }
         }
-        InvalidateRect(window, Some(&context.format_rect), true);
+        _ = InvalidateRect(window, Some(&context.format_rect), true);
     } else if x > context.format_rect.right {
         let len = context.get_text_length();
         let goal = context.format_rect.right - format_width / 3;
@@ -604,7 +604,7 @@ unsafe fn scroll_caret(window: HWND, context: &mut Context) -> Result<()> {
                 break;
             }
         }
-        InvalidateRect(window, Some(&context.format_rect), true);
+        _ = InvalidateRect(window, Some(&context.format_rect), true);
     }
 
     set_caret_position(window, context, context.selection_end)?;
@@ -671,10 +671,10 @@ unsafe fn set_rect_np(window: HWND, context: &mut Context) -> Result<()> {
     );
     SetWindowRgn(window, region, TRUE);
     let border_width = (1.0 * scaling_factor) as i32;
-    InflateRect(&mut context.format_rect, -border_width, 0);
+    _ = InflateRect(&mut context.format_rect, -border_width, 0);
     if context.format_rect.bottom - context.format_rect.top > context.line_height + 2 * border_width
     {
-        InflateRect(&mut context.format_rect, 0, -border_width);
+        _ = InflateRect(&mut context.format_rect, 0, -border_width);
     }
     let horizontal_padding = (context.state.get_horizontal_padding() * scaling_factor) as i32;
     context.format_rect.left = context.format_rect.left + horizontal_padding;
@@ -896,7 +896,9 @@ unsafe fn on_create(window: HWND, state: State) -> Result<Context> {
     let dc = GetDC(window);
     let old_font = SelectObject(dc, font);
     let mut tm = TEXTMETRICW::default();
-    GetTextMetricsW(dc, &mut tm);
+    if !GetTextMetricsW(dc, &mut tm).as_bool() {
+        return Err(Error::empty());
+    }
     SelectObject(dc, old_font);
     ReleaseDC(window, dc);
     let animation_timer: IUIAnimationTimer =
@@ -1161,7 +1163,7 @@ unsafe fn on_kill_focus(window: HWND, context: &mut Context) -> Result<()> {
         context.selection_start,
         context.selection_end,
     )?;
-    RedrawWindow(window, None, None, RDW_INVALIDATE);
+    _ = RedrawWindow(window, None, None, RDW_INVALIDATE);
     Ok(())
 }
 
@@ -1318,18 +1320,22 @@ unsafe fn paint_text(
         SetBkMode(dc, OPAQUE);
     }
 
-    TextOutW(
+    _ = TextOutW(
         dc,
         x,
         y,
         &context.buffer.as_wcs().as_wide()[col..col + count],
     );
     let mut size = SIZE::default();
-    GetTextExtentPoint32W(
+    if GetTextExtentPoint32W(
         dc,
         &context.buffer.as_wcs().as_wide()[col..col + count],
         &mut size,
-    );
+    )
+    .as_bool()
+    {
+        return Err(Error::empty());
+    }
 
     if rev {
         SetBkColor(dc, bk_color);
@@ -1397,7 +1403,7 @@ unsafe fn on_paint(window: HWND, context: &mut Context) -> Result<()> {
         if context.get_text_length() == 0 {
             if let Some(placeholder) = context.state.placeholder {
                 SetTextColor(dc, COLORREF(GetSysColor(COLOR_GRAYTEXT)));
-                TextOutW(
+                _ = TextOutW(
                     dc,
                     context.format_rect.left,
                     context.format_rect.top,
@@ -1485,39 +1491,43 @@ unsafe fn on_paint(window: HWND, context: &mut Context) -> Result<()> {
             },
         );
         let radius = (tokens.border_radius_medium * scaling_factor) as i32;
-        MoveToEx(dc, rc.right - radius, rc.top, None);
-        AngleArc(
-            dc,
-            rc.left + radius,
-            rc.top + radius,
-            radius as u32,
-            90.0,
-            90.0,
-        );
-        AngleArc(
-            dc,
-            rc.left + radius,
-            rc.bottom - radius,
-            radius as u32,
-            180.0,
-            90.0,
-        );
-        AngleArc(
-            dc,
-            rc.right - radius,
-            rc.bottom - radius,
-            radius as u32,
-            270.0,
-            90.0,
-        );
-        AngleArc(
-            dc,
-            rc.right - radius,
-            rc.top + radius,
-            radius as u32,
-            0.0,
-            90.0,
-        );
+        _ = MoveToEx(dc, rc.right - radius, rc.top, None).as_bool()
+            && AngleArc(
+                dc,
+                rc.left + radius,
+                rc.top + radius,
+                radius as u32,
+                90.0,
+                90.0,
+            )
+            .as_bool()
+            && AngleArc(
+                dc,
+                rc.left + radius,
+                rc.bottom - radius,
+                radius as u32,
+                180.0,
+                90.0,
+            )
+            .as_bool()
+            && AngleArc(
+                dc,
+                rc.right - radius,
+                rc.bottom - radius,
+                radius as u32,
+                270.0,
+                90.0,
+            )
+            .as_bool()
+            && AngleArc(
+                dc,
+                rc.right - radius,
+                rc.top + radius,
+                radius as u32,
+                0.0,
+                90.0,
+            )
+            .as_bool();
     }
 
     if IntersectRect(
@@ -1536,22 +1546,23 @@ unsafe fn on_paint(window: HWND, context: &mut Context) -> Result<()> {
 
         let radius = (tokens.border_radius_medium * scaling_factor) as i32;
 
-        MoveToEx(dc, radius, rc.bottom, None);
-        AngleArc(dc, radius, rc.bottom - radius, radius as u32, 270.0, -45.0);
-        MoveToEx(dc, radius, rc.bottom, None);
-        AngleArc(
-            dc,
-            rc.right - radius,
-            rc.bottom - radius,
-            radius as u32,
-            270.0,
-            45.0,
-        );
+        _ = MoveToEx(dc, radius, rc.bottom, None).as_bool()
+            && AngleArc(dc, radius, rc.bottom - radius, radius as u32, 270.0, -45.0).as_bool();
+        _ = MoveToEx(dc, radius, rc.bottom, None).as_bool()
+            && AngleArc(
+                dc,
+                rc.right - radius,
+                rc.bottom - radius,
+                radius as u32,
+                270.0,
+                45.0,
+            )
+            .as_bool();
 
         if context.is_focused {
             SelectObject(dc, context.border_bottom_color_focused_brush);
             let percentage = context.bottom_focus_border.GetValue()?;
-            PatBlt(
+            _ = PatBlt(
                 dc,
                 (rc.left as f64 * (1.0 + percentage) / 2.0
                     + rc.right as f64 * (1.0 - percentage) / 2.0) as i32,
@@ -1563,7 +1574,7 @@ unsafe fn on_paint(window: HWND, context: &mut Context) -> Result<()> {
         }
     }
 
-    EndPaint(window, &ps);
+    _ = EndPaint(window, &ps);
     Ok(())
 }
 
@@ -1576,10 +1587,15 @@ unsafe fn set_focus(window: HWND, context: &mut Context) -> Result<()> {
         context.selection_end,
     )?;
     let scaling_factor = get_scaling_factor(&window);
-    CreateCaret(window, None, (1.0 * scaling_factor) as i32, context.line_height)?;
+    CreateCaret(
+        window,
+        None,
+        (1.0 * scaling_factor) as i32,
+        context.line_height,
+    )?;
     set_caret_position(window, context, context.selection_end)?;
     ShowCaret(window)?;
-    RedrawWindow(window, None, None, RDW_INVALIDATE);
+    _ = RedrawWindow(window, None, None, RDW_INVALIDATE);
     let tokens = &context.state.qt.theme.tokens;
     let transition = context
         .transition_library
@@ -1608,8 +1624,8 @@ unsafe fn update_imm_composition_window(window: HWND, context: &Context, x: i32,
         rcArea: context.format_rect,
     };
     let himc = ImmGetContext(window);
-    ImmSetCompositionWindow(himc, &form);
-    ImmReleaseContext(window, himc);
+    _ = ImmSetCompositionWindow(himc, &form);
+    _ = ImmReleaseContext(window, himc);
 }
 
 unsafe fn update_imm_composition_font(window: HWND, context: &Context) {
@@ -1620,8 +1636,8 @@ unsafe fn update_imm_composition_font(window: HWND, context: &Context) {
         size_of::<LOGFONTW>() as i32,
         Some(&mut composition_font as *mut LOGFONTW as _),
     );
-    ImmSetCompositionFontW(himc, &composition_font);
-    ImmReleaseContext(window, himc);
+    _ = ImmSetCompositionFontW(himc, &composition_font);
+    _ = ImmReleaseContext(window, himc);
 }
 
 extern "system" fn window_proc(
@@ -1654,11 +1670,11 @@ extern "system" fn window_proc(
         WM_DESTROY => unsafe {
             let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
             let context = Box::<Context>::from_raw(raw);
-            DeleteObject(context.background_color_brush);
-            DeleteObject(context.border_pen);
-            DeleteObject(context.border_pen_focused);
-            DeleteObject(context.border_bottom_pen);
-            DeleteObject(context.border_bottom_color_focused_brush);
+            _ = DeleteObject(context.background_color_brush);
+            _ = DeleteObject(context.border_pen);
+            _ = DeleteObject(context.border_pen_focused);
+            _ = DeleteObject(context.border_bottom_pen);
+            _ = DeleteObject(context.border_bottom_color_focused_brush);
             LRESULT(0)
         },
         WM_CHAR => unsafe {
@@ -1895,12 +1911,13 @@ extern "system" fn window_proc(
                 let dc = GetDC(window);
                 let old_font = SelectObject(dc, font);
                 let mut tm = TEXTMETRICW::default();
-                GetTextMetricsW(dc, &mut tm);
+                if GetTextMetricsW(dc, &mut tm).into() {
+                    context.line_height = tm.tmHeight;
+                    context.char_width = tm.tmAveCharWidth;
+                }
                 SelectObject(dc, old_font);
                 ReleaseDC(window, dc);
                 context.font = font;
-                context.line_height = tm.tmHeight;
-                context.char_width = tm.tmAveCharWidth;
                 context.border_pen = CreatePen(
                     PS_SOLID,
                     (1.0 * scaling_factor * 2f32) as i32,
