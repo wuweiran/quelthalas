@@ -235,7 +235,7 @@ unsafe fn on_create(window: HWND, state: State) -> Result<Context> {
         Size::Large => tokens.font_weight_semibold,
     };
     let text_format = direct_write_factory.CreateTextFormat(
-        tokens.font_family_name,
+        tokens.font_family_base,
         None,
         font_weight,
         DWRITE_FONT_STYLE_NORMAL,

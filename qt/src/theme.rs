@@ -27,7 +27,7 @@ pub(crate) struct Tokens {
     pub color_neutral_stroke1_pressed: D2D1_COLOR_F,
     pub color_neutral_stroke_accessible: D2D1_COLOR_F,
     pub stroke_width_thin: f32,
-    pub font_family_name: PCWSTR,
+    pub font_family_base: PCWSTR,
     pub font_weight_regular: DWRITE_FONT_WEIGHT,
     pub font_weight_semibold: DWRITE_FONT_WEIGHT,
     pub font_size_base200: f32,
@@ -92,7 +92,7 @@ impl Tokens {
             color_neutral_stroke1_pressed: rgb!("#b3b3b3"),
             color_neutral_stroke_accessible: rgb!("#616161"),
             stroke_width_thin: 1.0,
-            font_family_name: w!("Segoe UI"),
+            font_family_base: w!("Segoe UI"),
             font_weight_regular: DWRITE_FONT_WEIGHT_REGULAR,
             font_weight_semibold: DWRITE_FONT_WEIGHT_SEMI_BOLD,
             font_size_base200: 12f32,
@@ -119,7 +119,7 @@ impl Tokens {
 }
 
 pub(crate) struct TypographyStyle {
-    pub font_family_name: PCWSTR,
+    pub font_family: PCWSTR,
     pub font_size: f32,
     pub font_weight: DWRITE_FONT_WEIGHT,
     pub line_height: f32,
@@ -131,7 +131,7 @@ impl TypographyStyle {
         factory: &IDWriteFactory,
     ) -> Result<IDWriteTextFormat> {
         let title_text_format = factory.CreateTextFormat(
-            self.font_family_name,
+            self.font_family,
             None,
             self.font_weight,
             DWRITE_FONT_STYLE_NORMAL,
@@ -159,25 +159,25 @@ impl TypographyStyles {
     pub(crate) fn from(tokens: &Tokens) -> Self {
         TypographyStyles {
             caption1: TypographyStyle {
-                font_family_name: tokens.font_family_name,
+                font_family: tokens.font_family_base,
                 font_size: tokens.font_size_base200,
                 font_weight: tokens.font_weight_regular,
                 line_height: tokens.line_height_base200,
             },
             body1: TypographyStyle {
-                font_family_name: tokens.font_family_name,
+                font_family: tokens.font_family_base,
                 font_size: tokens.font_size_base300,
                 font_weight: tokens.font_weight_regular,
                 line_height: tokens.line_height_base300,
             },
             body2: TypographyStyle {
-                font_family_name: tokens.font_family_name,
+                font_family: tokens.font_family_base,
                 font_size: tokens.font_size_base400,
                 font_weight: tokens.font_weight_regular,
                 line_height: tokens.line_height_base400,
             },
             subtitle1: TypographyStyle {
-                font_family_name: tokens.font_family_name,
+                font_family: tokens.font_family_base,
                 font_size: tokens.font_size_base500,
                 font_weight: tokens.font_weight_semibold,
                 line_height: tokens.line_height_base500,

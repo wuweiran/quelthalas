@@ -21,8 +21,9 @@ use windows::Win32::Graphics::Gdi::{
     InvalidateRect, MapWindowPoints, MoveToEx, PatBlt, RedrawWindow, ReleaseDC, SelectObject,
     SetBkColor, SetBkMode, SetTextColor, SetWindowRgn, TextOutW, BACKGROUND_MODE,
     CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, COLOR_GRAYTEXT, COLOR_HIGHLIGHT, COLOR_HIGHLIGHTTEXT,
-    DEFAULT_CHARSET, ETO_OPTIONS, HBRUSH, HDC, HFONT, HPEN, LOGFONTW, OPAQUE, OUT_OUTLINE_PRECIS,
-    PAINTSTRUCT, PATCOPY, PS_SOLID, RDW_INVALIDATE, TEXTMETRICW, VARIABLE_PITCH,
+    DEFAULT_CHARSET, ETO_OPTIONS, FF_SWISS, HBRUSH, HDC, HFONT, HPEN, LOGFONTW, OPAQUE,
+    OUT_OUTLINE_PRECIS, PAINTSTRUCT, PATCOPY, PS_SOLID, RDW_INVALIDATE, TEXTMETRICW,
+    VARIABLE_PITCH,
 };
 use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
 use windows::Win32::System::DataExchange::{
@@ -109,7 +110,7 @@ impl State {
         }
     }
 
-    fn get_typography_styles(&self) -> &TypographyStyle {
+    fn get_typography_style(&self) -> &TypographyStyle {
         let typography_styles = &self.qt.theme.typography_styles;
         match self.size {
             Size::Small => &typography_styles.caption1,
@@ -837,6 +838,28 @@ fn convert_to_color_ref(from: &D2D1_COLOR_F) -> COLORREF {
     COLORREF(b << 16 | g << 8 | r)
 }
 
+unsafe fn create_font_from_typography_style(
+    typography_style: &TypographyStyle,
+    scaling_factor: f32,
+) -> HFONT {
+    CreateFontW(
+        (typography_style.line_height * scaling_factor) as i32,
+        0,                                      // Width of the font (0 for default)
+        0,                                      // Angle of escapement
+        0,                                      // Orientation angle
+        typography_style.font_weight.0,         // Font weight
+        0,                                      // Italic (not italic)
+        0,                                      // Underline (not underlined)
+        0,                                      // Strikeout (not struck out)
+        DEFAULT_CHARSET.0 as u32,               // Character set (default)
+        OUT_OUTLINE_PRECIS.0 as u32,            // Output precision (outline)
+        CLIP_DEFAULT_PRECIS.0 as u32,           // Clipping precision (default)
+        CLEARTYPE_QUALITY.0 as u32,             // Font quality (ClearType)
+        (FF_SWISS.0 | VARIABLE_PITCH.0) as u32, // Pitch and family (variable pitch)
+        typography_style.font_family,
+    )
+}
+
 #[implement(IUIAnimationTimerEventHandler)]
 struct AnimationTimerEventHandler {
     window: HWND,
@@ -876,23 +899,8 @@ impl IUIAnimationTimerEventHandler_Impl for AnimationTimerEventHandler {
 unsafe fn on_create(window: HWND, state: State) -> Result<Context> {
     let tokens = &state.qt.theme.tokens;
     let scaling_factor = get_scaling_factor(&window);
-    let typography_styles = state.get_typography_styles();
-    let font = CreateFontW(
-        (typography_styles.line_height * scaling_factor) as i32,
-        0,                               // Width of the font (0 for default)
-        0,                               // Angle of escapement (0 for default)
-        0,                               // Orientation angle (0 for default)
-        typography_styles.font_weight.0, // Font weight
-        0,                               // Italic (not italic)
-        0,                               // Underline (not underlined)
-        0,                               // Strikeout (not struck out)
-        DEFAULT_CHARSET.0 as u32,        // Character set (default)
-        OUT_OUTLINE_PRECIS.0 as u32,     // Output precision (outline)
-        CLIP_DEFAULT_PRECIS.0 as u32,    // Clipping precision (default)
-        CLEARTYPE_QUALITY.0 as u32,      // Font quality (ClearType)
-        VARIABLE_PITCH.0 as u32,         // Pitch and family (variable pitch)
-        tokens.font_family_name,
-    );
+    let typography_style = state.get_typography_style();
+    let font = create_font_from_typography_style(typography_style, scaling_factor);
     let dc = GetDC(window);
     let old_font = SelectObject(dc, font);
     let mut tm = TEXTMETRICW::default();
@@ -1669,7 +1677,9 @@ extern "system" fn window_proc(
         },
         WM_DESTROY => unsafe {
             let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
-            let context = Box::<Context>::from_raw(raw);
+            let mut context = Box::<Context>::from_raw(raw);
+            _ = context.invalidate_uniscribe_data();
+            _ = DeleteObject(context.font);
             _ = DeleteObject(context.background_color_brush);
             _ = DeleteObject(context.border_pen);
             _ = DeleteObject(context.border_pen_focused);
@@ -1891,23 +1901,8 @@ extern "system" fn window_proc(
             .is_ok()
             {
                 let tokens = &context.state.qt.theme.tokens;
-                let typography_styles = context.state.get_typography_styles();
-                let font = CreateFontW(
-                    (typography_styles.line_height * scaling_factor) as i32,
-                    0,
-                    0,
-                    0,
-                    typography_styles.font_weight.0,
-                    0,
-                    0,
-                    0,
-                    DEFAULT_CHARSET.0 as u32,
-                    OUT_OUTLINE_PRECIS.0 as u32,
-                    CLIP_DEFAULT_PRECIS.0 as u32,
-                    CLEARTYPE_QUALITY.0 as u32,
-                    VARIABLE_PITCH.0 as u32,
-                    tokens.font_family_name,
-                );
+                let typography_style = context.state.get_typography_style();
+                let font = create_font_from_typography_style(typography_style, scaling_factor);
                 let dc = GetDC(window);
                 let old_font = SelectObject(dc, font);
                 let mut tm = TEXTMETRICW::default();
