@@ -8,8 +8,9 @@ use windows::Win32::Foundation::{
     ERROR_INVALID_WINDOW_HANDLE, FALSE, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, TRUE, WPARAM,
 };
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, EndPaint, GetMonitorInfoW, MonitorFromPoint, PtInRect, RedrawWindow, SetRectEmpty,
-    HDC, MONITORINFO, MONITOR_DEFAULTTONEAREST, PAINTSTRUCT, RDW_ALLCHILDREN, RDW_UPDATENOW,
+    BeginPaint, EndPaint, GetMonitorInfoW, MonitorFromPoint, OffsetRect, PtInRect, RedrawWindow,
+    SetRectEmpty, HDC, MONITORINFO, MONITOR_DEFAULTTONEAREST, PAINTSTRUCT, RDW_ALLCHILDREN,
+    RDW_UPDATENOW,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     ReleaseCapture, SetCapture, VIRTUAL_KEY, VK_DOWN, VK_END, VK_ESCAPE, VK_F10, VK_HOME, VK_LEFT,
@@ -35,6 +36,7 @@ pub enum MenuItem {
     MenuItem {
         text: PCWSTR,
         id: u32,
+        rect: RECT,
     },
     SubMenu {
         sub_menu: Rc<RefCell<Menu>>,
@@ -48,6 +50,8 @@ pub struct Menu {
     window: Option<HWND>,
     focused_item_index: Option<usize>,
     menu_list_rect: RECT,
+    is_scrolling: bool,
+    scroll_position: i32,
 }
 
 pub struct Context {
@@ -63,6 +67,7 @@ fn convert_menu_info_list_to_menu(menu_info_list: Vec<MenuInfo>) -> Menu {
             MenuInfo::MenuItem { text, command_id } => MenuItem::MenuItem {
                 text,
                 id: command_id,
+                rect: RECT::default(),
             },
             MenuInfo::SubMenu { menu_list, text } => {
                 let sub_menu = convert_menu_info_list_to_menu(menu_list);
@@ -79,6 +84,8 @@ fn convert_menu_info_list_to_menu(menu_info_list: Vec<MenuInfo>) -> Menu {
         window: None,
         focused_item_index: None,
         menu_list_rect: RECT::default(),
+        is_scrolling: false,
+        scroll_position: 0,
     }
 }
 
@@ -177,20 +184,75 @@ fn menu_from_point(root: Rc<RefCell<Menu>>, point: &POINT) -> Option<Rc<RefCell<
     result
 }
 
-fn find_item_by_coordinates(menu: &Menu, point: &POINT) -> Result<Option<usize>> {
+fn adjust_menu_item_rect(menu: &Menu, rect: &RECT) -> RECT {
+    let scroll_offset = if menu.is_scrolling {
+        menu.scroll_position
+    } else {
+        0
+    };
+    let mut rect = rect.clone();
+    unsafe {
+        let _ = OffsetRect(
+            &mut rect,
+            menu.menu_list_rect.left,
+            menu.menu_list_rect.top - scroll_offset,
+        );
+    }
+    rect
+}
+
+#[derive(PartialEq)]
+enum HitTest {
+    Nowhere,
+    Border,
+    Item(usize),
+    ScrollUp,
+    ScrollDown,
+}
+
+fn find_item_by_coordinates(menu: &Menu, point: &mut POINT) -> Result<HitTest> {
     let mut rect = RECT::default();
     if let Some(window) = menu.window {
         unsafe {
             GetWindowRect(window, &mut rect)?;
             if !PtInRect(&rect, *point).as_bool() {
-                return Ok(None);
+                return Ok(HitTest::Nowhere);
             }
-            // TODO
-            Ok(None)
+
+            if !PtInRect(&menu.menu_list_rect, *point).as_bool() {
+                if !menu.is_scrolling
+                    || point.x < menu.menu_list_rect.left
+                    || point.x >= menu.menu_list_rect.right
+                {
+                    return Ok(HitTest::Border);
+                }
+
+                // On a scroll arrow. Update point so that it points to the item just outside menu_list_rect
+                if point.y < menu.menu_list_rect.top {
+                    point.y = menu.menu_list_rect.top - 1;
+                    return Ok(HitTest::ScrollUp);
+                } else {
+                    point.y = menu.menu_list_rect.bottom;
+                    return Ok(HitTest::ScrollDown);
+                }
+            }
+
+            for (index, item) in menu.items.iter().enumerate() {
+                if let MenuItem::MenuItem {
+                    text: _text,
+                    id: _id,
+                    rect: item_rect,
+                } = item
+                {
+                    let rect = adjust_menu_item_rect(menu, item_rect);
+                    if PtInRect(&rect, *point).as_bool() {
+                        return Ok(HitTest::Item(index));
+                    }
+                }
+            }
         }
-    } else {
-        Ok(None)
     }
+    return Ok(HitTest::Nowhere);
 }
 
 fn switch_tracking(menu: &mut Menu, new_index: usize) -> Result<()> {
@@ -200,7 +262,7 @@ fn switch_tracking(menu: &mut Menu, new_index: usize) -> Result<()> {
 }
 
 fn menu_button_down(mt: &mut Tracker, menu: &mut Menu) -> Result<bool> {
-    if let Some(item_index) = find_item_by_coordinates(menu, &mt.point)? {
+    if let HitTest::Item(item_index) = find_item_by_coordinates(menu, &mut mt.point)? {
         if menu.focused_item_index != Some(item_index) {
             switch_tracking(menu, item_index)?;
         }
@@ -217,8 +279,23 @@ fn menu_button_down(mt: &mut Tracker, menu: &mut Menu) -> Result<bool> {
     }
 }
 
-fn menu_button_up(mt: &mut Tracker, menu: Rc<RefCell<Menu>>) -> ExecutionResult {
-    ExecutionResult::NoExecuted
+fn menu_button_up(mt: &mut Tracker, menu: &mut Menu) -> Result<ExecutionResult> {
+    if let HitTest::Item(item_index) = find_item_by_coordinates(menu, &mut mt.point)? {
+        if menu.focused_item_index == Some(item_index) {
+            if let MenuItem::SubMenu { .. } = menu.items[item_index] {
+            } else {
+                let execution_result = execute_focused_item(mt, &menu)?;
+                if execution_result == ExecutionResult::NoExecuted
+                    || execution_result == ExecutionResult::ShownPopup
+                {
+                    return Ok(ExecutionResult::NoExecuted);
+                } else {
+                    return Ok(execution_result);
+                }
+            }
+        }
+    }
+    return Ok(ExecutionResult::NoExecuted);
 }
 
 fn menu_mouse_move(mt: &mut Tracker, menu: Rc<RefCell<Menu>>) -> bool {
@@ -271,7 +348,11 @@ fn execute_focused_item(mt: &mut Tracker, menu: &Menu) -> Result<ExecutionResult
     if let Some(focused_item_index) = menu.focused_item_index {
         let item = &menu.items[focused_item_index];
         match item {
-            MenuItem::MenuItem { text, id } => unsafe {
+            MenuItem::MenuItem {
+                text: _text,
+                id,
+                rect: _rect,
+            } => unsafe {
                 PostMessageW(
                     mt.owning_window,
                     WM_COMMAND,
@@ -368,7 +449,8 @@ unsafe fn track_menu(menu: Rc<RefCell<Menu>>, x: i32, y: i32, owning_window: HWN
                 }
                 WM_RBUTTONUP | WM_LBUTTONUP => match menu_from_point_result {
                     Some(menu_from_point) => {
-                        execution_result = menu_button_up(&mut mt, menu_from_point);
+                        let mut menu_from_point_borrowed = menu_from_point.borrow_mut();
+                        execution_result = menu_button_up(&mut mt, &mut menu_from_point_borrowed)?;
                         remove_message = execution_result != ExecutionResult::NoExecuted;
                         exit_menu = remove_message;
                     }
