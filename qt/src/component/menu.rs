@@ -210,13 +210,15 @@ enum HitTest {
     ScrollDown,
 }
 
-fn find_item_by_coordinates(menu: &Menu, point: &mut POINT) -> Result<HitTest> {
+fn find_item_by_coordinates(menu: &Menu, point: &mut POINT) -> HitTest {
     let mut rect = RECT::default();
     if let Some(window) = menu.window {
         unsafe {
-            GetWindowRect(window, &mut rect)?;
+            if GetWindowRect(window, &mut rect).is_err() {
+                return HitTest::Nowhere;
+            }
             if !PtInRect(&rect, *point).as_bool() {
-                return Ok(HitTest::Nowhere);
+                return HitTest::Nowhere;
             }
 
             if !PtInRect(&menu.menu_list_rect, *point).as_bool() {
@@ -224,16 +226,16 @@ fn find_item_by_coordinates(menu: &Menu, point: &mut POINT) -> Result<HitTest> {
                     || point.x < menu.menu_list_rect.left
                     || point.x >= menu.menu_list_rect.right
                 {
-                    return Ok(HitTest::Border);
+                    return HitTest::Border;
                 }
 
                 // On a scroll arrow. Update point so that it points to the item just outside menu_list_rect
                 if point.y < menu.menu_list_rect.top {
                     point.y = menu.menu_list_rect.top - 1;
-                    return Ok(HitTest::ScrollUp);
+                    return HitTest::ScrollUp;
                 } else {
                     point.y = menu.menu_list_rect.bottom;
-                    return Ok(HitTest::ScrollDown);
+                    return HitTest::ScrollDown;
                 }
             }
 
@@ -246,13 +248,13 @@ fn find_item_by_coordinates(menu: &Menu, point: &mut POINT) -> Result<HitTest> {
                 {
                     let rect = adjust_menu_item_rect(menu, item_rect);
                     if PtInRect(&rect, *point).as_bool() {
-                        return Ok(HitTest::Item(index));
+                        return HitTest::Item(index);
                     }
                 }
             }
         }
     }
-    return Ok(HitTest::Nowhere);
+    return HitTest::Nowhere;
 }
 
 fn switch_tracking(menu: &mut Menu, new_index: usize) -> Result<()> {
@@ -262,7 +264,7 @@ fn switch_tracking(menu: &mut Menu, new_index: usize) -> Result<()> {
 }
 
 fn menu_button_down(mt: &mut Tracker, menu: &mut Menu) -> Result<bool> {
-    if let HitTest::Item(item_index) = find_item_by_coordinates(menu, &mut mt.point)? {
+    if let HitTest::Item(item_index) = find_item_by_coordinates(menu, &mut mt.point) {
         if menu.focused_item_index != Some(item_index) {
             switch_tracking(menu, item_index)?;
         }
@@ -280,7 +282,7 @@ fn menu_button_down(mt: &mut Tracker, menu: &mut Menu) -> Result<bool> {
 }
 
 fn menu_button_up(mt: &mut Tracker, menu: &mut Menu) -> Result<ExecutionResult> {
-    if let HitTest::Item(item_index) = find_item_by_coordinates(menu, &mut mt.point)? {
+    if let HitTest::Item(item_index) = find_item_by_coordinates(menu, &mut mt.point) {
         if menu.focused_item_index == Some(item_index) {
             if let MenuItem::SubMenu { .. } = menu.items[item_index] {
             } else {
@@ -298,8 +300,16 @@ fn menu_button_up(mt: &mut Tracker, menu: &mut Menu) -> Result<ExecutionResult> 
     return Ok(ExecutionResult::NoExecuted);
 }
 
-fn menu_mouse_move(mt: &mut Tracker, menu: Rc<RefCell<Menu>>) -> bool {
-    false
+fn menu_mouse_move(mt: &mut Tracker, menu: &mut Menu) -> Result<bool> {
+    if let HitTest::Item(item_index) = find_item_by_coordinates(menu, &mut mt.point) {
+        if menu.focused_item_index != Some(item_index) {
+            switch_tracking(menu, item_index)?;
+            mt.current_menu = show_sub_popup(menu)?;
+        }
+    } else {
+        select_item(menu, None);
+    }
+    return Ok(true);
 }
 
 fn select_item(menu: &mut Menu, index: Option<usize>) {}
@@ -458,7 +468,9 @@ unsafe fn track_menu(menu: Rc<RefCell<Menu>>, x: i32, y: i32, owning_window: HWN
                 },
                 WM_MOUSEMOVE => {
                     if let Some(menu_from_point) = menu_from_point_result {
-                        exit_menu = exit_menu | !menu_mouse_move(&mut mt, menu_from_point)
+                        let mut menu_from_point_borrowed = menu_from_point.borrow_mut();
+                        exit_menu =
+                            exit_menu | !menu_mouse_move(&mut mt, &mut menu_from_point_borrowed)?
                     }
                 }
                 _ => {}
