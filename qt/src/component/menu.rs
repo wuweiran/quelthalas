@@ -287,13 +287,13 @@ fn menu_button_up(mt: &mut Tracker, menu: &mut Menu) -> Result<ExecutionResult> 
             if let MenuItem::SubMenu { .. } = menu.items[item_index] {
             } else {
                 let execution_result = execute_focused_item(mt, &menu)?;
-                if execution_result == ExecutionResult::NoExecuted
+                return if execution_result == ExecutionResult::NoExecuted
                     || execution_result == ExecutionResult::ShownPopup
                 {
-                    return Ok(ExecutionResult::NoExecuted);
+                    Ok(ExecutionResult::NoExecuted)
                 } else {
-                    return Ok(execution_result);
-                }
+                    Ok(execution_result)
+                };
             }
         }
     }
@@ -312,21 +312,103 @@ fn menu_mouse_move(mt: &mut Tracker, menu: &mut Menu) -> Result<bool> {
     return Ok(true);
 }
 
-fn select_item(menu: &mut Menu, index: Option<usize>) {}
+fn select_item(menu: &mut Menu, index: Option<usize>) {
+    // TODO
+}
 
-fn select_previous(menu: &Menu) {}
+fn select_previous(menu: &mut Menu) {
+    if let Some(mut item_index) = menu.focused_item_index {
+        while item_index > 0 {
+            item_index = item_index - 1;
+            if let MenuItem::MenuDivider = menu.items[item_index] {
+                continue;
+            }
+            select_item(menu, Some(item_index));
+            break;
+        }
+    }
+}
 
-fn select_next(menu: &Menu) {}
+fn select_next(menu: &mut Menu) {
+    if let Some(mut item_index) = menu.focused_item_index {
+        while item_index + 1 < menu.items.len() {
+            item_index = item_index + 1;
+            if let MenuItem::MenuDivider = menu.items[item_index] {
+                continue;
+            }
+            select_item(menu, Some(item_index));
+            break;
+        }
+    }
+}
 
-fn select_first(menu: &Menu) {}
+fn select_first(menu: &mut Menu) {
+    let mut item_index = 0;
+    while item_index < menu.items.len() {
+        if let MenuItem::MenuDivider = menu.items[item_index] {
+            item_index = item_index + 1;
+            continue;
+        }
+        select_item(menu, Some(item_index));
+        break;
+    }
+}
 
-fn select_last(menu: &Menu) {}
+fn select_last(menu: &mut Menu) {
+    let mut item_index = menu.items.len() - 1;
+    while item_index >= 0 {
+        if let MenuItem::MenuDivider = menu.items[item_index] {
+            item_index = item_index - 1;
+            continue;
+        }
+        select_item(menu, Some(item_index));
+        break;
+    }
+}
 
-fn menu_key_left(mt: &mut Tracker, message: u32) {}
+fn menu_key_left(mt: &mut Tracker, message: u32) {
+    // TODO
+}
 
-fn menu_key_right(mt: &mut Tracker, message: u32) {}
+fn menu_key_right(mt: &mut Tracker, message: u32) {
+    // TODO
+}
 
-fn menu_key_escape(mt: &mut Tracker) {}
+fn get_sub_popup(menu: &Menu) -> Option<Rc<RefCell<Menu>>> {
+    if let Some(item_index) = menu.focused_item_index {
+        if let MenuItem::SubMenu { sub_menu, .. } = &menu.items[item_index] {
+            let sub_menu_borrowed = sub_menu.borrow();
+            if sub_menu_borrowed.window.is_some() {
+                return Some(sub_menu.clone());
+            }
+        }
+    }
+    return None;
+}
+
+fn menu_key_escape(mt: &mut Tracker) -> Result<bool> {
+    if !Rc::ptr_eq(&mt.current_menu, &mt.top_menu) {
+        let mut top = mt.top_menu.clone();
+        let mut prev_menu = top.clone();
+        while !Rc::ptr_eq(&top, &mt.current_menu) {
+            prev_menu = top;
+            let prev_menu_borrowed = prev_menu.borrow();
+            match get_sub_popup(&prev_menu_borrowed) {
+                None => {
+                    break;
+                }
+                Some(sub_popup) => {
+                    top = sub_popup;
+                }
+            }
+        }
+        let mut prev_menu_borrowed = prev_menu.borrow_mut();
+        hide_sub_popups(&mut prev_menu_borrowed)?;
+        mt.current_menu = prev_menu.clone();
+        return Ok(false);
+    }
+    return Ok(true);
+}
 
 #[derive(PartialEq)]
 enum ExecutionResult {
@@ -477,18 +559,19 @@ unsafe fn track_menu(menu: Rc<RefCell<Menu>>, x: i32, y: i32, owning_window: HWN
             }
         } else if msg.message >= WM_KEYFIRST && msg.message <= WM_KEYLAST {
             remove_message = true;
+            let mut menu = menu.borrow_mut();
             match msg.message {
                 WM_KEYDOWN | WM_SYSKEYDOWN => match VIRTUAL_KEY(msg.wParam.0 as u16) {
                     VK_MENU | VK_F10 => {
                         exit_menu = true;
                     }
-                    VK_HOME => select_first(menu.borrow().deref()),
-                    VK_END => select_last(menu.borrow().deref()),
-                    VK_UP => select_previous(menu.borrow().deref()),
-                    VK_DOWN => select_next(menu.borrow().deref()),
+                    VK_HOME => select_first(&mut menu),
+                    VK_END => select_last(&mut menu),
+                    VK_UP => select_previous(&mut menu),
+                    VK_DOWN => select_next(&mut menu),
                     VK_LEFT => menu_key_left(&mut mt, msg.message),
                     VK_RIGHT => menu_key_right(&mut mt, msg.message),
-                    VK_ESCAPE => menu_key_escape(&mut mt),
+                    VK_ESCAPE => exit_menu = menu_key_escape(&mut mt)?,
                     _ => {
                         let _ = TranslateMessage(&mut msg);
                     }
@@ -534,6 +617,7 @@ unsafe fn exit_tracking(owning_window: HWND) -> Result<()> {
 
 unsafe fn calc_popup_menu_size(menu: &mut Menu, max_height: i32) -> (i32, i32) {
     SetRectEmpty(&mut menu.menu_list_rect);
+    // TODO
     (0, 0)
 }
 
@@ -590,6 +674,7 @@ unsafe fn show_popup(menu: &mut Menu, x: i32, y: i32, x_anchor: i32, y_anchor: i
 }
 
 unsafe fn draw_popup_menu(window: HWND, dc: HDC, menu: &Menu) -> Result<()> {
+    // TODO
     Ok(())
 }
 
