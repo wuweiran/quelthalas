@@ -7,11 +7,18 @@ use windows::core::*;
 use windows::Win32::Foundation::{
     ERROR_INVALID_WINDOW_HANDLE, FALSE, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, TRUE, WPARAM,
 };
-use windows::Win32::Graphics::Gdi::{
-    BeginPaint, EndPaint, GetMonitorInfoW, MonitorFromPoint, OffsetRect, PtInRect, RedrawWindow,
-    SetRectEmpty, HDC, MONITORINFO, MONITOR_DEFAULTTONEAREST, PAINTSTRUCT, RDW_ALLCHILDREN,
-    RDW_UPDATENOW,
+use windows::Win32::Graphics::Direct2D::Common::D2D_SIZE_U;
+use windows::Win32::Graphics::Direct2D::{
+    D2D1CreateFactory, ID2D1Factory1, ID2D1HwndRenderTarget, D2D1_FACTORY_OPTIONS,
+    D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_HWND_RENDER_TARGET_PROPERTIES,
+    D2D1_RENDER_TARGET_PROPERTIES,
 };
+use windows::Win32::Graphics::Gdi::{
+    BeginPaint, EndPaint, FillRect, GetMonitorInfoW, MonitorFromPoint, OffsetRect, PtInRect,
+    RedrawWindow, SetRectEmpty, HDC, MONITORINFO, MONITOR_DEFAULTTONEAREST, PAINTSTRUCT,
+    RDW_ALLCHILDREN, RDW_UPDATENOW,
+};
+use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     ReleaseCapture, SetCapture, VIRTUAL_KEY, VK_DOWN, VK_END, VK_ESCAPE, VK_F10, VK_HOME, VK_LEFT,
     VK_MENU, VK_RIGHT, VK_UP,
@@ -58,6 +65,7 @@ pub struct Context {
     qt: QT,
     menu: Rc<RefCell<Menu>>,
     owning_window: HWND,
+    render_target: ID2D1HwndRenderTarget,
 }
 
 fn convert_menu_info_list_to_menu(menu_info_list: Vec<MenuInfo>) -> Menu {
@@ -119,8 +127,14 @@ impl QT {
     }
 }
 
+pub struct CreateParams {
+    qt: QT,
+    menu: Rc<RefCell<Menu>>,
+    owning_window: HWND,
+}
+
 unsafe fn init_popup(qt: QT, owning_window: HWND, menu: Rc<RefCell<Menu>>, x: i32, y: i32) {
-    let boxed = Box::new(Context {
+    let boxed = Box::new(CreateParams {
         qt,
         menu: menu.clone(),
         owning_window,
@@ -137,7 +151,7 @@ unsafe fn init_popup(qt: QT, owning_window: HWND, menu: Rc<RefCell<Menu>>, x: i3
         owning_window,
         None,
         HINSTANCE(GetWindowLongPtrW(owning_window, GWLP_HINSTANCE)),
-        Some(Box::<Context>::into_raw(boxed) as _),
+        Some(Box::<CreateParams>::into_raw(boxed) as _),
     );
     menu.borrow_mut().window = Some(window)
 }
@@ -441,9 +455,7 @@ fn execute_focused_item(mt: &mut Tracker, menu: &Menu) -> Result<ExecutionResult
         let item = &menu.items[focused_item_index];
         match item {
             MenuItem::MenuItem {
-                text: _text,
-                id,
-                rect: _rect,
+                text: _text, id, ..
             } => unsafe {
                 PostMessageW(
                     mt.owning_window,
@@ -673,9 +685,62 @@ unsafe fn show_popup(menu: &mut Menu, x: i32, y: i32, x_anchor: i32, y_anchor: i
     Ok(())
 }
 
-unsafe fn draw_popup_menu(window: HWND, dc: HDC, menu: &Menu) -> Result<()> {
+unsafe fn draw_menu_item(window: HWND, menu_item: &MenuItem, context: &Context) -> Result<()> {
     // TODO
     Ok(())
+}
+
+unsafe fn draw_scroll_arrows(window: HWND, context: &Context) -> Result<()> {
+    // TODO
+    Ok(())
+}
+
+unsafe fn draw_popup_menu(window: HWND, context: &Context) -> Result<()> {
+    let tokens = &context.qt.theme.tokens;
+    context
+        .render_target
+        .Clear(Some(&tokens.color_neutral_background1));
+    let menu = context.menu.borrow();
+    for item in menu.items.iter() {
+        draw_menu_item(window, item, context)?;
+    }
+    if menu.is_scrolling {
+        draw_scroll_arrows(window, context)?;
+    }
+    Ok(())
+}
+
+unsafe fn on_create(window: HWND, params: CreateParams, x: i32, y: i32) -> Result<Context> {
+    let dpi = GetDpiForWindow(window);
+    let factory = D2D1CreateFactory::<ID2D1Factory1>(
+        D2D1_FACTORY_TYPE_SINGLE_THREADED,
+        Some(&D2D1_FACTORY_OPTIONS::default()),
+    )?;
+    let render_target = factory.CreateHwndRenderTarget(
+        &D2D1_RENDER_TARGET_PROPERTIES {
+            dpiX: dpi as f32,
+            dpiY: dpi as f32,
+            ..Default::default()
+        },
+        &D2D1_HWND_RENDER_TARGET_PROPERTIES {
+            hwnd: window,
+            pixelSize: D2D_SIZE_U {
+                width: 600u32,
+                height: 400u32,
+            },
+            presentOptions: Default::default(),
+        },
+    )?;
+    {
+        let mut menu = params.menu.borrow_mut();
+        show_popup(&mut menu, x, y, 0, 0)?;
+    }
+    Ok(Context {
+        qt: params.qt,
+        menu: params.menu,
+        owning_window: params.owning_window,
+        render_target,
+    })
 }
 
 extern "system" fn window_proc(
@@ -687,19 +752,12 @@ extern "system" fn window_proc(
     match message {
         WM_CREATE => unsafe {
             let cs = l_param.0 as *const CREATESTRUCTW;
-            let raw = (*cs).lpCreateParams as *mut Context;
-            let context = Box::<Context>::from_raw(raw);
-            let result = {
-                let mut menu = context.menu.borrow_mut();
-                show_popup(&mut menu, (*cs).x, (*cs).y, 0, 0)
-            };
-            match result {
-                Ok(_) => {
-                    SetWindowLongPtrW(
-                        window,
-                        GWLP_USERDATA,
-                        Box::<Context>::into_raw(context) as _,
-                    );
+            let raw = (*cs).lpCreateParams as *mut CreateParams;
+            let params = Box::<CreateParams>::from_raw(raw);
+            match on_create(window, *params, (*cs).x, (*cs).y) {
+                Ok(context) => {
+                    let boxed = Box::new(context);
+                    SetWindowLongPtrW(window, GWLP_USERDATA, Box::<Context>::into_raw(boxed) as _);
                     LRESULT(TRUE.0 as isize)
                 }
                 Err(_) => LRESULT(FALSE.0 as isize),
@@ -711,18 +769,14 @@ extern "system" fn window_proc(
             let context = &*raw;
             let mut ps = PAINTSTRUCT::default();
             let dc = BeginPaint(window, &mut ps);
-            _ = draw_popup_menu(window, dc, context.menu.borrow().deref());
+            _ = draw_popup_menu(window, context);
             _ = EndPaint(window, &ps);
             LRESULT(0)
         },
         WM_PRINTCLIENT => unsafe {
             let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
             let context = &*raw;
-            _ = draw_popup_menu(
-                window,
-                HDC(w_param.0 as isize),
-                context.menu.borrow().deref(),
-            );
+            _ = draw_popup_menu(window, context);
             LRESULT(0)
         },
         WM_ERASEBKGND => LRESULT(1),
