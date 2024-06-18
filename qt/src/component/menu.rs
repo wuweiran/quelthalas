@@ -634,7 +634,7 @@ unsafe fn exit_tracking(owning_window: HWND) -> Result<()> {
     Ok(())
 }
 
-unsafe fn calc_menu_item_size(menu_item: &mut MenuItem, org_x: i32, org_y: i32, menu: &Menu) {
+unsafe fn calc_menu_item_size(menu_item: &mut MenuItem, org_x: i32, org_y: i32) {
     //TODO
 }
 
@@ -649,7 +649,7 @@ unsafe fn calc_popup_menu_size(menu: &mut Menu, max_height: i32) -> (i32, i32) {
         let mut i = start;
         while i < menu.items.len() {
             let item = &mut menu.items[i];
-            calc_menu_item_size(item, org_x, org_y, menu);
+            calc_menu_item_size(item, org_x, org_y);
             let desired_width = match item {
                 MenuItem::MenuItem { rect, .. } => rect.right,
                 MenuItem::SubMenu { rect, .. } => rect.right,
