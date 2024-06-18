@@ -1,8 +1,8 @@
 use std::cell::RefCell;
 use std::mem::size_of;
-use std::ops::Deref;
 use std::rc::Rc;
 
+use crate::component::button::Size;
 use windows::core::*;
 use windows::Win32::Foundation::{
     ERROR_INVALID_WINDOW_HANDLE, FALSE, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, TRUE, WPARAM,
@@ -13,10 +13,14 @@ use windows::Win32::Graphics::Direct2D::{
     D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_HWND_RENDER_TARGET_PROPERTIES,
     D2D1_RENDER_TARGET_PROPERTIES,
 };
+use windows::Win32::Graphics::DirectWrite::{
+    DWriteCreateFactory, IDWriteFactory, IDWriteTextFormat, DWRITE_FACTORY_TYPE_SHARED,
+    DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL,
+};
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, EndPaint, FillRect, GetMonitorInfoW, MonitorFromPoint, OffsetRect, PtInRect,
-    RedrawWindow, SetRectEmpty, HDC, MONITORINFO, MONITOR_DEFAULTTONEAREST, PAINTSTRUCT,
-    RDW_ALLCHILDREN, RDW_UPDATENOW,
+    BeginPaint, EndPaint, GetMonitorInfoW, MonitorFromPoint, OffsetRect, PtInRect, RedrawWindow,
+    SetRectEmpty, MONITORINFO, MONITOR_DEFAULTTONEAREST, PAINTSTRUCT, RDW_ALLCHILDREN,
+    RDW_UPDATENOW,
 };
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
@@ -48,6 +52,7 @@ pub enum MenuItem {
     SubMenu {
         sub_menu: Rc<RefCell<Menu>>,
         text: PCWSTR,
+        rect: RECT,
     },
     MenuDivider,
 }
@@ -66,6 +71,7 @@ pub struct Context {
     menu: Rc<RefCell<Menu>>,
     owning_window: HWND,
     render_target: ID2D1HwndRenderTarget,
+    text_format: IDWriteTextFormat,
 }
 
 fn convert_menu_info_list_to_menu(menu_info_list: Vec<MenuInfo>) -> Menu {
@@ -82,6 +88,7 @@ fn convert_menu_info_list_to_menu(menu_info_list: Vec<MenuInfo>) -> Menu {
                 MenuItem::SubMenu {
                     sub_menu: Rc::new(RefCell::new(sub_menu)),
                     text,
+                    rect: RECT::default(),
                 }
             }
             MenuInfo::MenuDivider => MenuItem::MenuDivider,
@@ -438,7 +445,7 @@ fn show_sub_popup(menu: &mut Menu) -> Result<Rc<RefCell<Menu>>> {
 fn hide_sub_popups(menu: &mut Menu) -> Result<()> {
     if let Some(focused_item_index) = menu.focused_item_index {
         let item = &menu.items[focused_item_index];
-        if let MenuItem::SubMenu { sub_menu, text } = item {
+        if let MenuItem::SubMenu { sub_menu, .. } = item {
             let mut sub_menu = sub_menu.borrow_mut();
             hide_sub_popups(&mut sub_menu)?;
             select_item(&mut sub_menu, None);
@@ -627,10 +634,54 @@ unsafe fn exit_tracking(owning_window: HWND) -> Result<()> {
     Ok(())
 }
 
+unsafe fn calc_menu_item_size(menu_item: &mut MenuItem, org_x: i32, org_y: i32, menu: &Menu) {
+    //TODO
+}
+
 unsafe fn calc_popup_menu_size(menu: &mut Menu, max_height: i32) -> (i32, i32) {
     SetRectEmpty(&mut menu.menu_list_rect);
-    // TODO
-    (0, 0)
+    let mut start = 0;
+    while start < menu.items.len() {
+        let item = &menu.items[start];
+        let org_x = menu.menu_list_rect.right;
+        let mut org_y = menu.menu_list_rect.top;
+
+        let mut i = start;
+        while i < menu.items.len() {
+            let item = &mut menu.items[i];
+            calc_menu_item_size(item, org_x, org_y, menu);
+            let desired_width = match item {
+                MenuItem::MenuItem { rect, .. } => rect.right,
+                MenuItem::SubMenu { rect, .. } => rect.right,
+                MenuItem::MenuDivider => 0,
+            };
+            let desired_height = match item {
+                MenuItem::MenuItem { rect, .. } => rect.bottom,
+                MenuItem::SubMenu { rect, .. } => rect.bottom,
+                MenuItem::MenuDivider => 5,
+            };
+
+            menu.menu_list_rect.right = menu.menu_list_rect.right.max(desired_width);
+            org_y = desired_height;
+
+            i = i + 1;
+        }
+        menu.menu_list_rect.bottom = menu.menu_list_rect.bottom.max(org_y);
+
+        start = start + 1;
+    }
+
+    OffsetRect(&mut menu.menu_list_rect, 5, 5);
+    let mut height = menu.menu_list_rect.bottom + 5;
+    let width = menu.menu_list_rect.right + 5;
+    if height >= max_height {
+        height = max_height;
+        menu.is_scrolling = true;
+        menu.menu_list_rect.top = 4;
+        menu.menu_list_rect.bottom = height - 4;
+    }
+
+    (height, width)
 }
 
 unsafe fn show_popup(menu: &mut Menu, x: i32, y: i32, x_anchor: i32, y_anchor: i32) -> Result<()> {
@@ -711,6 +762,13 @@ unsafe fn draw_popup_menu(window: HWND, context: &Context) -> Result<()> {
 }
 
 unsafe fn on_create(window: HWND, params: CreateParams, x: i32, y: i32) -> Result<Context> {
+    {
+        let mut menu = params.menu.borrow_mut();
+        show_popup(&mut menu, x, y, 0, 0)?;
+    }
+
+    let mut client_rect = RECT::default();
+    GetClientRect(window, &mut client_rect)?;
     let dpi = GetDpiForWindow(window);
     let factory = D2D1CreateFactory::<ID2D1Factory1>(
         D2D1_FACTORY_TYPE_SINGLE_THREADED,
@@ -725,21 +783,29 @@ unsafe fn on_create(window: HWND, params: CreateParams, x: i32, y: i32) -> Resul
         &D2D1_HWND_RENDER_TARGET_PROPERTIES {
             hwnd: window,
             pixelSize: D2D_SIZE_U {
-                width: 600u32,
-                height: 400u32,
+                width: (client_rect.right - client_rect.left) as u32,
+                height: (client_rect.bottom - client_rect.top) as u32,
             },
             presentOptions: Default::default(),
         },
     )?;
-    {
-        let mut menu = params.menu.borrow_mut();
-        show_popup(&mut menu, x, y, 0, 0)?;
-    }
+    let direct_write_factory = DWriteCreateFactory::<IDWriteFactory>(DWRITE_FACTORY_TYPE_SHARED)?;
+    let tokens = &params.qt.theme.tokens;
+    let text_format = direct_write_factory.CreateTextFormat(
+        tokens.font_family_base,
+        None,
+        tokens.font_weight_regular,
+        DWRITE_FONT_STYLE_NORMAL,
+        DWRITE_FONT_STRETCH_NORMAL,
+        tokens.font_size_base300,
+        w!(""),
+    )?;
     Ok(Context {
         qt: params.qt,
         menu: params.menu,
         owning_window: params.owning_window,
         render_target,
+        text_format,
     })
 }
 
