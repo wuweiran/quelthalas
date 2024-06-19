@@ -2,7 +2,6 @@ use std::cell::RefCell;
 use std::mem::size_of;
 use std::rc::Rc;
 
-use crate::component::button::Size;
 use windows::core::*;
 use windows::Win32::Foundation::{
     ERROR_INVALID_WINDOW_HANDLE, FALSE, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, TRUE, WPARAM,
@@ -15,11 +14,11 @@ use windows::Win32::Graphics::Direct2D::{
 };
 use windows::Win32::Graphics::DirectWrite::{
     DWriteCreateFactory, IDWriteFactory, IDWriteTextFormat, DWRITE_FACTORY_TYPE_SHARED,
-    DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL,
+    DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_TEXT_METRICS,
 };
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, EndPaint, GetMonitorInfoW, MonitorFromPoint, OffsetRect, PtInRect, RedrawWindow,
-    SetRectEmpty, MONITORINFO, MONITOR_DEFAULTTONEAREST, PAINTSTRUCT, RDW_ALLCHILDREN,
+    SetRect, SetRectEmpty, MONITORINFO, MONITOR_DEFAULTTONEAREST, PAINTSTRUCT, RDW_ALLCHILDREN,
     RDW_UPDATENOW,
 };
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
@@ -29,6 +28,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::WindowsAndMessaging::*;
 
+use crate::theme::Theme;
 use crate::QT;
 
 pub enum MenuInfo {
@@ -127,7 +127,7 @@ impl QT {
             return Err(Error::from(ERROR_INVALID_WINDOW_HANDLE));
         }
         let menu = Rc::new(RefCell::new(convert_menu_info_list_to_menu(menu_list)));
-        init_popup(self.clone(), parent_window, menu.clone(), x, y);
+        init_popup(self.clone(), parent_window, menu.clone(), x, y, 0, 0);
         init_tracking(parent_window)?;
         track_menu(menu.clone(), 0, 0, parent_window).and(exit_tracking(parent_window))?;
         Ok(())
@@ -138,13 +138,25 @@ pub struct CreateParams {
     qt: QT,
     menu: Rc<RefCell<Menu>>,
     owning_window: HWND,
+    x_anchor: i32,
+    y_anchor: i32,
 }
 
-unsafe fn init_popup(qt: QT, owning_window: HWND, menu: Rc<RefCell<Menu>>, x: i32, y: i32) {
+unsafe fn init_popup(
+    qt: QT,
+    owning_window: HWND,
+    menu: Rc<RefCell<Menu>>,
+    x: i32,
+    y: i32,
+    x_anchor: i32,
+    y_anchor: i32,
+) {
     let boxed = Box::new(CreateParams {
         qt,
         menu: menu.clone(),
         owning_window,
+        x_anchor,
+        y_anchor,
     });
     let window = CreateWindowExW(
         WINDOW_EX_STYLE::default(),
@@ -284,16 +296,16 @@ fn switch_tracking(menu: &mut Menu, new_index: usize) -> Result<()> {
     Ok(())
 }
 
-fn menu_button_down(mt: &mut Tracker, menu: &mut Menu) -> Result<bool> {
+unsafe fn menu_button_down(context: &Context, mt: &mut Tracker, menu: &mut Menu) -> Result<bool> {
     if let HitTest::Item(item_index) = find_item_by_coordinates(menu, &mut mt.point) {
         if menu.focused_item_index != Some(item_index) {
             switch_tracking(menu, item_index)?;
         }
         let item = &menu.items[item_index];
         if let MenuItem::SubMenu { sub_menu, .. } = item {
-            let mut sub_menu = sub_menu.borrow_mut();
-            if sub_menu.window.is_none() {
-                mt.current_menu = show_sub_popup(&mut sub_menu)?;
+            if sub_menu.borrow().window.is_none() {
+                mt.current_menu =
+                    show_sub_popup(&context.qt, context.owning_window, sub_menu.clone())?;
             }
         }
         Ok(true)
@@ -302,12 +314,16 @@ fn menu_button_down(mt: &mut Tracker, menu: &mut Menu) -> Result<bool> {
     }
 }
 
-fn menu_button_up(mt: &mut Tracker, menu: &mut Menu) -> Result<ExecutionResult> {
+unsafe fn menu_button_up(
+    context: &Context,
+    mt: &mut Tracker,
+    menu: &mut Menu,
+) -> Result<ExecutionResult> {
     if let HitTest::Item(item_index) = find_item_by_coordinates(menu, &mut mt.point) {
         if menu.focused_item_index == Some(item_index) {
             if let MenuItem::SubMenu { .. } = menu.items[item_index] {
             } else {
-                let execution_result = execute_focused_item(mt, &menu)?;
+                let execution_result = execute_focused_item(context, mt, &menu)?;
                 return if execution_result == ExecutionResult::NoExecuted
                     || execution_result == ExecutionResult::ShownPopup
                 {
@@ -321,16 +337,35 @@ fn menu_button_up(mt: &mut Tracker, menu: &mut Menu) -> Result<ExecutionResult> 
     return Ok(ExecutionResult::NoExecuted);
 }
 
-fn menu_mouse_move(mt: &mut Tracker, menu: &mut Menu) -> Result<bool> {
-    if let HitTest::Item(item_index) = find_item_by_coordinates(menu, &mut mt.point) {
-        if menu.focused_item_index != Some(item_index) {
-            switch_tracking(menu, item_index)?;
-            mt.current_menu = show_sub_popup(menu)?;
+unsafe fn menu_mouse_move(
+    context: &Context,
+    mt: &mut Tracker,
+    menu: Rc<RefCell<Menu>>,
+) -> Result<bool> {
+    let item_index_option = {
+        let mut menu_borrow = menu.borrow_mut();
+        find_item_by_coordinates(&menu_borrow, &mut mt.point)
+    };
+
+    if let HitTest::Item(item_index) = item_index_option {
+        let focused_item_index = {
+            let menu_borrow = menu.borrow();
+            menu_borrow.focused_item_index
+        };
+
+        if focused_item_index != Some(item_index) {
+            {
+                let mut menu_borrow = menu.borrow_mut();
+                switch_tracking(&mut menu_borrow, item_index)?;
+            }
+            mt.current_menu = show_sub_popup(&context.qt, context.owning_window, menu)?;
         }
     } else {
-        select_item(menu, None);
+        let mut menu_borrow = menu.borrow_mut();
+        select_item(&mut menu_borrow, None);
     }
-    return Ok(true);
+
+    Ok(true)
 }
 
 fn select_item(menu: &mut Menu, index: Option<usize>) {
@@ -438,8 +473,40 @@ enum ExecutionResult {
     ShownPopup = -2,
 }
 
-fn show_sub_popup(menu: &mut Menu) -> Result<Rc<RefCell<Menu>>> {
-    Err(Error::from(HRESULT::default()))
+unsafe fn show_sub_popup(
+    qt: &QT,
+    owning_window: HWND,
+    menu: Rc<RefCell<Menu>>,
+) -> Result<Rc<RefCell<Menu>>> {
+    {
+        let menu = menu.borrow_mut();
+        if let Some(focused_item_index) = menu.focused_item_index {
+            let item = &menu.items[focused_item_index];
+            if let MenuItem::SubMenu {
+                sub_menu,
+                rect: item_rect,
+                ..
+            } = item
+            {
+                let mut rect = item_rect.clone();
+                rect.left += item_rect.right - 1;
+                rect.top += item_rect.top - 4;
+                rect.right = item_rect.left - item_rect.right + 1;
+                rect.bottom = item_rect.top - item_rect.bottom - 2 * 4;
+                init_popup(
+                    qt.clone(),
+                    owning_window,
+                    sub_menu.clone(),
+                    rect.left,
+                    rect.top,
+                    rect.right,
+                    rect.bottom,
+                );
+                return Ok(sub_menu.clone());
+            }
+        }
+    }
+    return Ok(menu);
 }
 
 fn hide_sub_popups(menu: &mut Menu) -> Result<()> {
@@ -457,7 +524,11 @@ fn hide_sub_popups(menu: &mut Menu) -> Result<()> {
     }
     Ok(())
 }
-fn execute_focused_item(mt: &mut Tracker, menu: &Menu) -> Result<ExecutionResult> {
+unsafe fn execute_focused_item(
+    context: &Context,
+    mt: &mut Tracker,
+    menu: &Menu,
+) -> Result<ExecutionResult> {
     if let Some(focused_item_index) = menu.focused_item_index {
         let item = &menu.items[focused_item_index];
         match item {
@@ -473,8 +544,8 @@ fn execute_focused_item(mt: &mut Tracker, menu: &Menu) -> Result<ExecutionResult
                 Ok(ExecutionResult::Executed)
             },
             MenuItem::SubMenu { sub_menu, .. } => {
-                let mut sub_menu = sub_menu.borrow_mut();
-                mt.current_menu = show_sub_popup(&mut sub_menu)?;
+                mt.current_menu =
+                    show_sub_popup(&context.qt, context.owning_window, sub_menu.clone())?;
                 Ok(ExecutionResult::ShownPopup)
             }
             MenuItem::MenuDivider => Ok(ExecutionResult::NoExecuted),
@@ -553,7 +624,9 @@ unsafe fn track_menu(menu: Rc<RefCell<Menu>>, x: i32, y: i32, owning_window: HWN
                         None => false,
                         Some(menu_from_point) => {
                             let mut menu_from_point_borrowed = menu_from_point.borrow_mut();
-                            menu_button_down(&mut mt, &mut menu_from_point_borrowed)?
+                            let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
+                            let context = &*raw;
+                            menu_button_down(context, &mut mt, &mut menu_from_point_borrowed)?
                         }
                     };
                     exit_menu = !remove_message;
@@ -561,7 +634,10 @@ unsafe fn track_menu(menu: Rc<RefCell<Menu>>, x: i32, y: i32, owning_window: HWN
                 WM_RBUTTONUP | WM_LBUTTONUP => match menu_from_point_result {
                     Some(menu_from_point) => {
                         let mut menu_from_point_borrowed = menu_from_point.borrow_mut();
-                        execution_result = menu_button_up(&mut mt, &mut menu_from_point_borrowed)?;
+                        let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
+                        let context = &*raw;
+                        execution_result =
+                            menu_button_up(context, &mut mt, &mut menu_from_point_borrowed)?;
                         remove_message = execution_result != ExecutionResult::NoExecuted;
                         exit_menu = remove_message;
                     }
@@ -569,9 +645,9 @@ unsafe fn track_menu(menu: Rc<RefCell<Menu>>, x: i32, y: i32, owning_window: HWN
                 },
                 WM_MOUSEMOVE => {
                     if let Some(menu_from_point) = menu_from_point_result {
-                        let mut menu_from_point_borrowed = menu_from_point.borrow_mut();
-                        exit_menu =
-                            exit_menu | !menu_mouse_move(&mut mt, &mut menu_from_point_borrowed)?
+                        let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
+                        let context = &*raw;
+                        exit_menu = exit_menu | !menu_mouse_move(context, &mut mt, menu_from_point)?
                     }
                 }
                 _ => {}
@@ -634,31 +710,70 @@ unsafe fn exit_tracking(owning_window: HWND) -> Result<()> {
     Ok(())
 }
 
-unsafe fn calc_menu_item_size(menu_item: &mut MenuItem, org_x: i32, org_y: i32) {
-    //TODO
+unsafe fn calc_menu_item_size(
+    menu_item: &mut MenuItem,
+    org_x: i32,
+    org_y: i32,
+    text_format: &IDWriteTextFormat,
+) -> Result<()> {
+    match menu_item {
+        MenuItem::MenuItem { rect, text, .. } | MenuItem::SubMenu { rect, text, .. } => {
+            SetRect(rect, org_x, org_y, org_x, org_y);
+            let direct_write_factory =
+                DWriteCreateFactory::<IDWriteFactory>(DWRITE_FACTORY_TYPE_SHARED)?;
+            let text_layout = direct_write_factory.CreateTextLayout(
+                text.as_wide(),
+                text_format,
+                290f32,
+                500f32,
+            )?;
+            let mut metrics = DWRITE_TEXT_METRICS::default();
+            text_layout.GetMetrics(&mut metrics)?;
+            rect.right = rect.right + metrics.width.ceil() as i32;
+            rect.bottom = rect.bottom + (metrics.height.ceil() as i32).max(32);
+        }
+        MenuItem::MenuDivider => {}
+    }
+    if let MenuItem::SubMenu { rect, .. } = menu_item {
+        rect.right = rect.right + 4 + 20;
+    }
+    Ok(())
 }
 
-unsafe fn calc_popup_menu_size(menu: &mut Menu, max_height: i32) -> (i32, i32) {
+unsafe fn get_text_format(theme: &Theme) -> Result<IDWriteTextFormat> {
+    let direct_write_factory = DWriteCreateFactory::<IDWriteFactory>(DWRITE_FACTORY_TYPE_SHARED)?;
+    let tokens = &theme.tokens;
+    direct_write_factory.CreateTextFormat(
+        tokens.font_family_base,
+        None,
+        tokens.font_weight_regular,
+        DWRITE_FONT_STYLE_NORMAL,
+        DWRITE_FONT_STRETCH_NORMAL,
+        tokens.font_size_base300,
+        w!(""),
+    )
+}
+
+unsafe fn calc_popup_menu_size(menu: &mut Menu, max_height: i32, qt: &QT) -> Result<(i32, i32)> {
     SetRectEmpty(&mut menu.menu_list_rect);
     let mut start = 0;
+    let text_format = get_text_format(&qt.theme)?;
+    let tokens = &qt.theme.tokens;
     while start < menu.items.len() {
-        let item = &menu.items[start];
         let org_x = menu.menu_list_rect.right;
         let mut org_y = menu.menu_list_rect.top;
 
         let mut i = start;
         while i < menu.items.len() {
             let item = &mut menu.items[i];
-            calc_menu_item_size(item, org_x, org_y);
+            calc_menu_item_size(item, org_x, org_y, &text_format);
             let desired_width = match item {
-                MenuItem::MenuItem { rect, .. } => rect.right,
-                MenuItem::SubMenu { rect, .. } => rect.right,
+                MenuItem::MenuItem { rect, .. } | MenuItem::SubMenu { rect, .. } => rect.right,
                 MenuItem::MenuDivider => 0,
             };
             let desired_height = match item {
-                MenuItem::MenuItem { rect, .. } => rect.bottom,
-                MenuItem::SubMenu { rect, .. } => rect.bottom,
-                MenuItem::MenuDivider => 5,
+                MenuItem::MenuItem { rect, .. } | MenuItem::SubMenu { rect, .. } => rect.bottom,
+                MenuItem::MenuDivider => 4 + tokens.stroke_width_thin as i32,
             };
 
             menu.menu_list_rect.right = menu.menu_list_rect.right.max(desired_width);
@@ -666,9 +781,18 @@ unsafe fn calc_popup_menu_size(menu: &mut Menu, max_height: i32) -> (i32, i32) {
 
             i = i + 1;
         }
+        menu.menu_list_rect.right = menu.menu_list_rect.right.max(138);
+        while start < i {
+            let item = &mut menu.items[start];
+            match item {
+                MenuItem::MenuItem { rect, .. } | MenuItem::SubMenu { rect, .. } => {
+                    rect.right = menu.menu_list_rect.right
+                }
+                MenuItem::MenuDivider => {}
+            }
+            start = start + 1;
+        }
         menu.menu_list_rect.bottom = menu.menu_list_rect.bottom.max(org_y);
-
-        start = start + 1;
     }
 
     OffsetRect(&mut menu.menu_list_rect, 5, 5);
@@ -681,10 +805,17 @@ unsafe fn calc_popup_menu_size(menu: &mut Menu, max_height: i32) -> (i32, i32) {
         menu.menu_list_rect.bottom = height - 4;
     }
 
-    (height, width)
+    Ok((height, width))
 }
 
-unsafe fn show_popup(menu: &mut Menu, x: i32, y: i32, x_anchor: i32, y_anchor: i32) -> Result<()> {
+unsafe fn show_popup(
+    qt: &QT,
+    menu: &mut Menu,
+    x: i32,
+    y: i32,
+    x_anchor: i32,
+    y_anchor: i32,
+) -> Result<()> {
     if menu.window.is_none() {
         return Err(Error::from(ERROR_INVALID_WINDOW_HANDLE));
     }
@@ -698,7 +829,7 @@ unsafe fn show_popup(menu: &mut Menu, x: i32, y: i32, x_anchor: i32, y_anchor: i
     };
     GetMonitorInfoW(monitor, &mut info);
     let max_height = info.rcWork.bottom - info.rcWork.top;
-    let (width, height) = calc_popup_menu_size(menu, max_height);
+    let (width, height) = calc_popup_menu_size(menu, max_height, qt)?;
     let mut x = x;
     if x + width > info.rcWork.right {
         if x_anchor != 0 && x >= width - x_anchor {
@@ -764,7 +895,14 @@ unsafe fn draw_popup_menu(window: HWND, context: &Context) -> Result<()> {
 unsafe fn on_create(window: HWND, params: CreateParams, x: i32, y: i32) -> Result<Context> {
     {
         let mut menu = params.menu.borrow_mut();
-        show_popup(&mut menu, x, y, 0, 0)?;
+        show_popup(
+            &params.qt,
+            &mut menu,
+            x,
+            y,
+            params.x_anchor,
+            params.y_anchor,
+        )?;
     }
 
     let mut client_rect = RECT::default();
@@ -789,17 +927,7 @@ unsafe fn on_create(window: HWND, params: CreateParams, x: i32, y: i32) -> Resul
             presentOptions: Default::default(),
         },
     )?;
-    let direct_write_factory = DWriteCreateFactory::<IDWriteFactory>(DWRITE_FACTORY_TYPE_SHARED)?;
-    let tokens = &params.qt.theme.tokens;
-    let text_format = direct_write_factory.CreateTextFormat(
-        tokens.font_family_base,
-        None,
-        tokens.font_weight_regular,
-        DWRITE_FONT_STYLE_NORMAL,
-        DWRITE_FONT_STRETCH_NORMAL,
-        tokens.font_size_base300,
-        w!(""),
-    )?;
+    let text_format = get_text_format(&params.qt.theme)?;
     Ok(Context {
         qt: params.qt,
         menu: params.menu,
@@ -834,7 +962,7 @@ extern "system" fn window_proc(
             let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
             let context = &*raw;
             let mut ps = PAINTSTRUCT::default();
-            let dc = BeginPaint(window, &mut ps);
+            BeginPaint(window, &mut ps);
             _ = draw_popup_menu(window, context);
             _ = EndPaint(window, &ps);
             LRESULT(0)
