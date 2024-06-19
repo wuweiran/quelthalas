@@ -147,7 +147,7 @@ unsafe fn on_create(window: HWND, state: State) -> Result<Context> {
         },
     )?;
 
-    let ok_button = qt.creat_button(
+    let ok_button = qt.create_button(
         &window,
         &instance,
         0,
@@ -166,7 +166,7 @@ unsafe fn on_create(window: HWND, state: State) -> Result<Context> {
             }),
         },
     )?;
-    let cancel_button = qt.creat_button(
+    let cancel_button = qt.create_button(
         &window,
         &instance,
         0,

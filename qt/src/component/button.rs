@@ -157,7 +157,7 @@ struct Context {
 }
 
 impl QT {
-    pub fn creat_button(
+    pub fn create_button(
         &self,
         parent_window: &HWND,
         instance: &HINSTANCE,

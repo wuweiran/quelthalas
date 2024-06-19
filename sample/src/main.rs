@@ -13,6 +13,7 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 
 use quelthalas::component::button::IconPosition;
 use quelthalas::component::dialog::DialogResult;
+use quelthalas::component::menu::MenuInfo;
 use quelthalas::component::{button, dialog, input, progress_bar};
 use quelthalas::icon::Icon;
 use quelthalas::{MouseEvent, QT};
@@ -74,7 +75,7 @@ extern "system" fn window_process(
                 let scaling_factor = GetDpiForWindow(window) / USER_DEFAULT_SCREEN_DPI;
                 let icon = Icon::calendar_month_regular();
 
-                _ = qt.creat_button(
+                _ = qt.create_button(
                     &window,
                     &instance,
                     20,
@@ -87,7 +88,7 @@ extern "system" fn window_process(
                     &button::Size::Medium,
                     MouseEvent::default(),
                 );
-                _ = qt.creat_button(
+                _ = qt.create_button(
                     &window,
                     &instance,
                     20 + 110 * scaling_factor as i32,
@@ -100,7 +101,7 @@ extern "system" fn window_process(
                     &button::Size::Medium,
                     MouseEvent::default(),
                 );
-                _ = qt.creat_button(
+                _ = qt.create_button(
                     &window,
                     &instance,
                     20 + 220 * scaling_factor as i32,
@@ -113,7 +114,7 @@ extern "system" fn window_process(
                     &button::Size::Medium,
                     MouseEvent::default(),
                 );
-                _ = qt.creat_button(
+                _ = qt.create_button(
                     &window,
                     &instance,
                     20 + 330 * scaling_factor as i32,
@@ -126,7 +127,7 @@ extern "system" fn window_process(
                     &button::Size::Medium,
                     MouseEvent::default(),
                 );
-                _ = qt.creat_button(
+                _ = qt.create_button(
                     &window,
                     &instance,
                     20,
@@ -139,7 +140,7 @@ extern "system" fn window_process(
                     &button::Size::Small,
                     MouseEvent::default(),
                 );
-                _ = qt.creat_button(
+                _ = qt.create_button(
                     &window,
                     &instance,
                     20,
@@ -152,7 +153,7 @@ extern "system" fn window_process(
                     &button::Size::Medium,
                     MouseEvent::default(),
                 );
-                _ = qt.creat_button(
+                _ = qt.create_button(
                     &window,
                     &instance,
                     20,
@@ -260,6 +261,29 @@ extern "system" fn window_process(
                 FillRect(hdc, &ps.rcPaint, CreateSolidBrush(COLORREF(0xfafafa)));
                 EndPaint(window, &ps);
                 LRESULT(0)
+            }
+            WM_CONTEXTMENU => {
+                let x = l_param.0 as i16 as i32;
+                let y = (l_param.0 >> 16) as i16 as i32;
+
+                let qt = QT::default();
+                let menu_list = vec![
+                    MenuInfo::MenuItem {
+                        text: w!("New"),
+                        command_id: 0,
+                    },
+                    MenuInfo::MenuItem {
+                        text: w!("New window"),
+                        command_id: 1,
+                    },
+                ];
+                match qt.open_menu(window, menu_list, x, y) {
+                    Ok(_) => {}
+                    Err(err) => {
+                        println!("err: {}", err);
+                    }
+                }
+                LRESULT::default()
             }
             _ => DefWindowProcW(window, message, w_param, l_param),
         }
