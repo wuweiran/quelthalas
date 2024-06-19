@@ -2,19 +2,26 @@ use std::cell::RefCell;
 use std::mem::size_of;
 use std::rc::Rc;
 
+use crate::component::button::{Appearance, IconPosition};
+use crate::icon::Icon;
 use windows::core::*;
+use windows::Foundation::Numerics::Matrix3x2;
 use windows::Win32::Foundation::{
     ERROR_INVALID_WINDOW_HANDLE, FALSE, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, TRUE, WPARAM,
 };
-use windows::Win32::Graphics::Direct2D::Common::D2D_SIZE_U;
+use windows::Win32::Graphics::Direct2D::Common::{
+    D2D_POINT_2F, D2D_RECT_F, D2D_SIZE_F, D2D_SIZE_U,
+};
 use windows::Win32::Graphics::Direct2D::{
-    D2D1CreateFactory, ID2D1Factory1, ID2D1HwndRenderTarget, D2D1_FACTORY_OPTIONS,
+    D2D1CreateFactory, ID2D1DeviceContext5, ID2D1Factory1, ID2D1HwndRenderTarget,
+    ID2D1SolidColorBrush, ID2D1SvgDocument, D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_FACTORY_OPTIONS,
     D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_HWND_RENDER_TARGET_PROPERTIES,
     D2D1_RENDER_TARGET_PROPERTIES,
 };
 use windows::Win32::Graphics::DirectWrite::{
     DWriteCreateFactory, IDWriteFactory, IDWriteTextFormat, DWRITE_FACTORY_TYPE_SHARED,
-    DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_TEXT_METRICS,
+    DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_MEASURING_MODE_NATURAL,
+    DWRITE_TEXT_METRICS,
 };
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, EndPaint, GetMonitorInfoW, MonitorFromPoint, OffsetRect, PtInRect, RedrawWindow,
@@ -26,6 +33,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     ReleaseCapture, SetCapture, VIRTUAL_KEY, VK_DOWN, VK_END, VK_ESCAPE, VK_F10, VK_HOME, VK_LEFT,
     VK_MENU, VK_RIGHT, VK_UP,
 };
+use windows::Win32::UI::Shell::SHCreateMemStream;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 use crate::theme::Theme;
@@ -54,7 +62,9 @@ pub enum MenuItem {
         text: PCWSTR,
         rect: RECT,
     },
-    MenuDivider,
+    MenuDivider {
+        rect: RECT,
+    },
 }
 
 pub struct Menu {
@@ -72,6 +82,8 @@ pub struct Context {
     owning_window: HWND,
     render_target: ID2D1HwndRenderTarget,
     text_format: IDWriteTextFormat,
+    text_brush: ID2D1SolidColorBrush,
+    sub_menu_indicator_svg: ID2D1SvgDocument,
 }
 
 fn convert_menu_info_list_to_menu(menu_info_list: Vec<MenuInfo>) -> Menu {
@@ -91,7 +103,9 @@ fn convert_menu_info_list_to_menu(menu_info_list: Vec<MenuInfo>) -> Menu {
                     rect: RECT::default(),
                 }
             }
-            MenuInfo::MenuDivider => MenuItem::MenuDivider,
+            MenuInfo::MenuDivider => MenuItem::MenuDivider {
+                rect: RECT::default(),
+            },
         })
         .collect();
     Menu {
@@ -376,7 +390,7 @@ fn select_previous(menu: &mut Menu) {
     if let Some(mut item_index) = menu.focused_item_index {
         while item_index > 0 {
             item_index = item_index - 1;
-            if let MenuItem::MenuDivider = menu.items[item_index] {
+            if let MenuItem::MenuDivider { .. } = menu.items[item_index] {
                 continue;
             }
             select_item(menu, Some(item_index));
@@ -389,7 +403,7 @@ fn select_next(menu: &mut Menu) {
     if let Some(mut item_index) = menu.focused_item_index {
         while item_index + 1 < menu.items.len() {
             item_index = item_index + 1;
-            if let MenuItem::MenuDivider = menu.items[item_index] {
+            if let MenuItem::MenuDivider { .. } = menu.items[item_index] {
                 continue;
             }
             select_item(menu, Some(item_index));
@@ -401,7 +415,7 @@ fn select_next(menu: &mut Menu) {
 fn select_first(menu: &mut Menu) {
     let mut item_index = 0;
     while item_index < menu.items.len() {
-        if let MenuItem::MenuDivider = menu.items[item_index] {
+        if let MenuItem::MenuDivider { .. } = menu.items[item_index] {
             item_index = item_index + 1;
             continue;
         }
@@ -413,7 +427,7 @@ fn select_first(menu: &mut Menu) {
 fn select_last(menu: &mut Menu) {
     let mut item_index = menu.items.len() - 1;
     while item_index >= 0 {
-        if let MenuItem::MenuDivider = menu.items[item_index] {
+        if let MenuItem::MenuDivider { .. } = menu.items[item_index] {
             item_index = item_index - 1;
             continue;
         }
@@ -466,6 +480,10 @@ fn menu_key_escape(mt: &mut Tracker) -> Result<bool> {
     return Ok(true);
 }
 
+const MENU_MARGIN: i32 = 4;
+const MENU_BORDER_WIDTH: i32 = 1;
+const MENU_LIST_GAP: i32 = 2;
+
 #[derive(PartialEq)]
 enum ExecutionResult {
     Executed = 0,
@@ -489,10 +507,10 @@ unsafe fn show_sub_popup(
             } = item
             {
                 let mut rect = item_rect.clone();
-                rect.left += item_rect.right - 1;
-                rect.top += item_rect.top - 4;
-                rect.right = item_rect.left - item_rect.right + 1;
-                rect.bottom = item_rect.top - item_rect.bottom - 2 * 4;
+                rect.left += item_rect.right - MENU_BORDER_WIDTH;
+                rect.top += item_rect.top - MENU_MARGIN;
+                rect.right = item_rect.left - item_rect.right + MENU_BORDER_WIDTH;
+                rect.bottom = item_rect.top - item_rect.bottom - 2 * MENU_MARGIN;
                 init_popup(
                     qt.clone(),
                     owning_window,
@@ -548,7 +566,7 @@ unsafe fn execute_focused_item(
                     show_sub_popup(&context.qt, context.owning_window, sub_menu.clone())?;
                 Ok(ExecutionResult::ShownPopup)
             }
-            MenuItem::MenuDivider => Ok(ExecutionResult::NoExecuted),
+            MenuItem::MenuDivider { .. } => Ok(ExecutionResult::NoExecuted),
         }
     } else {
         Ok(ExecutionResult::NoExecuted)
@@ -711,11 +729,13 @@ unsafe fn exit_tracking(owning_window: HWND) -> Result<()> {
 }
 
 unsafe fn calc_menu_item_size(
+    qt: &QT,
     menu_item: &mut MenuItem,
     org_x: i32,
     org_y: i32,
     text_format: &IDWriteTextFormat,
 ) -> Result<()> {
+    let tokens = &qt.theme.tokens;
     match menu_item {
         MenuItem::MenuItem { rect, text, .. } | MenuItem::SubMenu { rect, text, .. } => {
             SetRect(rect, org_x, org_y, org_x, org_y);
@@ -729,10 +749,14 @@ unsafe fn calc_menu_item_size(
             )?;
             let mut metrics = DWRITE_TEXT_METRICS::default();
             text_layout.GetMetrics(&mut metrics)?;
-            rect.right = rect.right + metrics.width.ceil() as i32;
-            rect.bottom = rect.bottom + (metrics.height.ceil() as i32).max(32);
+            rect.right += metrics.width.ceil() as i32 + 2 * tokens.spacing_vertical_s_nudge as i32;
+            rect.bottom +=
+                (metrics.height.ceil() as i32 + 2 * tokens.spacing_vertical_s_nudge as i32).max(32);
         }
-        MenuItem::MenuDivider => {}
+        MenuItem::MenuDivider { rect } => {
+            SetRect(rect, org_x, org_y, org_x, org_y);
+            rect.bottom += 4 + tokens.stroke_width_thin as i32;
+        }
     }
     if let MenuItem::SubMenu { rect, .. } = menu_item {
         rect.right = rect.right + 4 + 20;
@@ -740,9 +764,9 @@ unsafe fn calc_menu_item_size(
     Ok(())
 }
 
-unsafe fn get_text_format(theme: &Theme) -> Result<IDWriteTextFormat> {
+unsafe fn get_text_format(qt: &QT) -> Result<IDWriteTextFormat> {
     let direct_write_factory = DWriteCreateFactory::<IDWriteFactory>(DWRITE_FACTORY_TYPE_SHARED)?;
-    let tokens = &theme.tokens;
+    let tokens = &qt.theme.tokens;
     direct_write_factory.CreateTextFormat(
         tokens.font_family_base,
         None,
@@ -754,11 +778,10 @@ unsafe fn get_text_format(theme: &Theme) -> Result<IDWriteTextFormat> {
     )
 }
 
-unsafe fn calc_popup_menu_size(menu: &mut Menu, max_height: i32, qt: &QT) -> Result<(i32, i32)> {
+unsafe fn calc_popup_menu_size(qt: &QT, menu: &mut Menu, max_height: i32) -> Result<(i32, i32)> {
     SetRectEmpty(&mut menu.menu_list_rect);
     let mut start = 0;
-    let text_format = get_text_format(&qt.theme)?;
-    let tokens = &qt.theme.tokens;
+    let text_format = get_text_format(qt)?;
     while start < menu.items.len() {
         let org_x = menu.menu_list_rect.right;
         let mut org_y = menu.menu_list_rect.top;
@@ -766,18 +789,20 @@ unsafe fn calc_popup_menu_size(menu: &mut Menu, max_height: i32, qt: &QT) -> Res
         let mut i = start;
         while i < menu.items.len() {
             let item = &mut menu.items[i];
-            calc_menu_item_size(item, org_x, org_y, &text_format);
+            calc_menu_item_size(qt, item, org_x, org_y, &text_format)?;
             let desired_width = match item {
-                MenuItem::MenuItem { rect, .. } | MenuItem::SubMenu { rect, .. } => rect.right,
-                MenuItem::MenuDivider => 0,
+                MenuItem::MenuItem { rect, .. }
+                | MenuItem::SubMenu { rect, .. }
+                | MenuItem::MenuDivider { rect } => rect.right,
             };
             let desired_height = match item {
-                MenuItem::MenuItem { rect, .. } | MenuItem::SubMenu { rect, .. } => rect.bottom,
-                MenuItem::MenuDivider => 4 + tokens.stroke_width_thin as i32,
+                MenuItem::MenuItem { rect, .. }
+                | MenuItem::SubMenu { rect, .. }
+                | MenuItem::MenuDivider { rect } => rect.bottom,
             };
 
             menu.menu_list_rect.right = menu.menu_list_rect.right.max(desired_width);
-            org_y = desired_height;
+            org_y = desired_height + 2;
 
             i = i + 1;
         }
@@ -785,24 +810,27 @@ unsafe fn calc_popup_menu_size(menu: &mut Menu, max_height: i32, qt: &QT) -> Res
         while start < i {
             let item = &mut menu.items[start];
             match item {
-                MenuItem::MenuItem { rect, .. } | MenuItem::SubMenu { rect, .. } => {
-                    rect.right = menu.menu_list_rect.right
-                }
-                MenuItem::MenuDivider => {}
+                MenuItem::MenuItem { rect, .. }
+                | MenuItem::SubMenu { rect, .. }
+                | MenuItem::MenuDivider { rect } => rect.right = menu.menu_list_rect.right,
             }
             start = start + 1;
         }
         menu.menu_list_rect.bottom = menu.menu_list_rect.bottom.max(org_y);
     }
 
-    OffsetRect(&mut menu.menu_list_rect, 5, 5);
-    let mut height = menu.menu_list_rect.bottom + 5;
-    let width = menu.menu_list_rect.right + 5;
+    OffsetRect(
+        &mut menu.menu_list_rect,
+        MENU_BORDER_WIDTH + MENU_MARGIN,
+        MENU_BORDER_WIDTH + MENU_MARGIN,
+    );
+    let mut height = menu.menu_list_rect.bottom + MENU_BORDER_WIDTH + MENU_MARGIN;
+    let width = menu.menu_list_rect.right + MENU_BORDER_WIDTH + MENU_MARGIN;
     if height >= max_height {
         height = max_height;
         menu.is_scrolling = true;
-        menu.menu_list_rect.top = 4;
-        menu.menu_list_rect.bottom = height - 4;
+        menu.menu_list_rect.top = MENU_MARGIN;
+        menu.menu_list_rect.bottom = height - MENU_MARGIN;
     }
 
     Ok((height, width))
@@ -829,7 +857,7 @@ unsafe fn show_popup(
     };
     GetMonitorInfoW(monitor, &mut info);
     let max_height = info.rcWork.bottom - info.rcWork.top;
-    let (width, height) = calc_popup_menu_size(menu, max_height, qt)?;
+    let (width, height) = calc_popup_menu_size(qt, menu, max_height)?;
     let mut x = x;
     if x + width > info.rcWork.right {
         if x_anchor != 0 && x >= width - x_anchor {
@@ -867,8 +895,80 @@ unsafe fn show_popup(
     Ok(())
 }
 
-unsafe fn draw_menu_item(window: HWND, menu_item: &MenuItem, context: &Context) -> Result<()> {
-    // TODO
+unsafe fn draw_menu_item(menu: &Menu, menu_item: &MenuItem, context: &Context) -> Result<()> {
+    let tokens = &context.qt.theme.tokens;
+    match menu_item {
+        MenuItem::MenuItem {
+            text,
+            rect: item_rect,
+            ..
+        } => {
+            let rect = adjust_menu_item_rect(menu, item_rect);
+            let text_rect = D2D_RECT_F {
+                left: rect.left as f32 + tokens.spacing_vertical_s_nudge,
+                top: rect.top as f32 + tokens.spacing_vertical_s_nudge,
+                right: rect.right as f32 - tokens.spacing_vertical_s_nudge,
+                bottom: rect.bottom as f32 - tokens.spacing_vertical_s_nudge,
+            };
+            context.render_target.DrawText(
+                text.as_wide(),
+                &context.text_format,
+                &text_rect,
+                &context.text_brush,
+                D2D1_DRAW_TEXT_OPTIONS_NONE,
+                DWRITE_MEASURING_MODE_NATURAL,
+            );
+        }
+        MenuItem::SubMenu {
+            text,
+            rect: item_rect,
+            ..
+        } => {
+            let rect = adjust_menu_item_rect(menu, item_rect);
+            let text_rect = D2D_RECT_F {
+                left: rect.left as f32 + tokens.spacing_vertical_s_nudge,
+                top: rect.top as f32 + tokens.spacing_vertical_s_nudge,
+                right: (rect.right - 4 - 20) as f32 - tokens.spacing_vertical_s_nudge,
+                bottom: rect.bottom as f32 - tokens.spacing_vertical_s_nudge,
+            };
+            context.render_target.DrawText(
+                text.as_wide(),
+                &context.text_format,
+                &text_rect,
+                &context.text_brush,
+                D2D1_DRAW_TEXT_OPTIONS_NONE,
+                DWRITE_MEASURING_MODE_NATURAL,
+            );
+            let device_context5 = context.render_target.cast::<ID2D1DeviceContext5>()?;
+            device_context5.SetTransform(&Matrix3x2::translation(
+                rect.left as f32 + tokens.spacing_vertical_s_nudge + 4f32,
+                rect.top as f32 + tokens.spacing_vertical_s_nudge,
+            ));
+            device_context5.DrawSvgDocument(&context.sub_menu_indicator_svg);
+            device_context5.SetTransform(&Matrix3x2::identity());
+        }
+        MenuItem::MenuDivider { rect: item_rect } => {
+            let rect = adjust_menu_item_rect(menu, item_rect);
+            let start = D2D_POINT_2F {
+                x: (rect.left - MENU_MARGIN) as f32,
+                y: rect.top as f32 + 2.0,
+            };
+            let end = D2D_POINT_2F {
+                x: (rect.right + MENU_MARGIN) as f32,
+                y: rect.top as f32 + 2.0,
+            };
+            let divider_brush = context
+                .render_target
+                .CreateSolidColorBrush(&tokens.color_neutral_stroke2, None)?;
+            context.render_target.DrawLine(
+                start,
+                end,
+                &divider_brush,
+                tokens.stroke_width_thin,
+                None,
+            );
+        }
+    }
     Ok(())
 }
 
@@ -884,7 +984,7 @@ unsafe fn draw_popup_menu(window: HWND, context: &Context) -> Result<()> {
         .Clear(Some(&tokens.color_neutral_background1));
     let menu = context.menu.borrow();
     for item in menu.items.iter() {
-        draw_menu_item(window, item, context)?;
+        draw_menu_item(&menu, item, context)?;
     }
     if menu.is_scrolling {
         draw_scroll_arrows(window, context)?;
@@ -927,13 +1027,37 @@ unsafe fn on_create(window: HWND, params: CreateParams, x: i32, y: i32) -> Resul
             presentOptions: Default::default(),
         },
     )?;
-    let text_format = get_text_format(&params.qt.theme)?;
+    let text_format = get_text_format(&params.qt)?;
+    let tokens = &params.qt.theme.tokens;
+    let text_brush =
+        render_target.CreateSolidColorBrush(&tokens.color_neutral_foreground2, None)?;
+    let sub_menu_indicator_icon = Icon::chevron_right_regular();
+    let device_context5 = render_target.cast::<ID2D1DeviceContext5>()?;
+    let sub_menu_indicator_svg =
+        match SHCreateMemStream(Some(sub_menu_indicator_icon.svg.as_bytes())) {
+            None => device_context5.CreateSvgDocument(
+                None,
+                D2D_SIZE_F {
+                    width: sub_menu_indicator_icon.size as f32,
+                    height: sub_menu_indicator_icon.size as f32,
+                },
+            )?,
+            Some(svg_stream) => device_context5.CreateSvgDocument(
+                &svg_stream,
+                D2D_SIZE_F {
+                    width: sub_menu_indicator_icon.size as f32,
+                    height: sub_menu_indicator_icon.size as f32,
+                },
+            )?,
+        };
     Ok(Context {
         qt: params.qt,
         menu: params.menu,
         owning_window: params.owning_window,
         render_target,
         text_format,
+        text_brush,
+        sub_menu_indicator_svg,
     })
 }
 
