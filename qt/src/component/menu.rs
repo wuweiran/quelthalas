@@ -14,7 +14,7 @@ use windows::Win32::Graphics::Direct2D::{
     D2D1CreateFactory, ID2D1DeviceContext5, ID2D1Factory1, ID2D1HwndRenderTarget,
     ID2D1SolidColorBrush, ID2D1SvgDocument, D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_FACTORY_OPTIONS,
     D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_HWND_RENDER_TARGET_PROPERTIES,
-    D2D1_RENDER_TARGET_PROPERTIES,
+    D2D1_RENDER_TARGET_PROPERTIES, D2D1_ROUNDED_RECT,
 };
 use windows::Win32::Graphics::DirectWrite::{
     DWriteCreateFactory, IDWriteFactory, IDWriteTextFormat, DWRITE_FACTORY_TYPE_SHARED,
@@ -22,9 +22,9 @@ use windows::Win32::Graphics::DirectWrite::{
     DWRITE_TEXT_METRICS,
 };
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, CreateRoundRectRgn, EndPaint, GetMonitorInfoW, MonitorFromPoint, OffsetRect,
-    PtInRect, SetRect, SetRectEmpty, SetWindowRgn, MONITORINFO, MONITOR_DEFAULTTONEAREST,
-    PAINTSTRUCT,
+    BeginPaint, ClientToScreen, CreateRoundRectRgn, EndPaint, GetMonitorInfoW, MonitorFromPoint,
+    OffsetRect, PtInRect, RedrawWindow, SetRect, SetRectEmpty, SetWindowRgn, MONITORINFO,
+    MONITOR_DEFAULTTONEAREST, PAINTSTRUCT, RDW_INVALIDATE, RDW_NOCHILDREN,
 };
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
@@ -83,6 +83,7 @@ pub struct Context {
     render_target: ID2D1HwndRenderTarget,
     text_format: IDWriteTextFormat,
     text_brush: ID2D1SolidColorBrush,
+    text_focused_brush: ID2D1SolidColorBrush,
     text_disabled_brush: ID2D1SolidColorBrush,
     sub_menu_indicator_svg: ID2D1SvgDocument,
 }
@@ -274,6 +275,13 @@ fn find_item_by_coordinates(menu: &Menu, point: &mut POINT) -> HitTest {
                 return HitTest::Nowhere;
             }
 
+            point.x -= rect.left;
+            point.y -= rect.top;
+
+            let scaling_factor = get_scaling_factor(&window);
+            point.x = (point.x as f32 / scaling_factor) as i32;
+            point.y = (point.y as f32 / scaling_factor) as i32;
+
             if !PtInRect(&menu.menu_list_rect, *point).as_bool() {
                 if !menu.is_scrolling
                     || point.x < menu.menu_list_rect.left
@@ -391,7 +399,15 @@ unsafe fn menu_mouse_move(
 }
 
 fn select_item(menu: &mut Menu, index: Option<usize>) {
-    // TODO
+    if menu.focused_item_index == index {
+        return;
+    }
+    menu.focused_item_index = index;
+    unsafe {
+        if let Some(window) = menu.window {
+            _ = RedrawWindow(window, None, None, RDW_INVALIDATE | RDW_NOCHILDREN);
+        }
+    }
 }
 
 fn select_previous(menu: &mut Menu) {
@@ -641,6 +657,7 @@ unsafe fn track_menu(menu: Rc<RefCell<Menu>>, x: i32, y: i32, owning_window: HWN
         if msg.message >= WM_MOUSEFIRST && msg.message <= WM_MOUSELAST {
             mt.point.x = msg.lParam.0 as i16 as i32;
             mt.point.y = (msg.lParam.0 >> 16) as i16 as i32;
+            _ = ClientToScreen(window, &mut mt.point);
 
             let menu_from_point_result = menu_from_point(menu.clone(), &mt.point);
 
@@ -907,7 +924,7 @@ unsafe fn show_popup(
         scaled_height,
         SWP_SHOWWINDOW | SWP_NOACTIVATE,
     )?;
-    let corner_diameter = (qt.theme.tokens.border_radius_medium * scaling_factor) as i32;
+    let corner_diameter = (qt.theme.tokens.border_radius_medium * 2f32 * scaling_factor) as i32;
     let region = CreateRoundRectRgn(
         0,
         0,
@@ -920,16 +937,42 @@ unsafe fn show_popup(
     Ok(())
 }
 
-unsafe fn draw_menu_item(menu: &Menu, menu_item: &MenuItem, context: &Context) -> Result<()> {
+unsafe fn draw_menu_item(
+    menu: &Menu,
+    menu_item: &MenuItem,
+    context: &Context,
+    focused: bool,
+) -> Result<()> {
     let tokens = &context.qt.theme.tokens;
-    match menu_item {
+    let rect = match menu_item {
         MenuItem::MenuItem {
-            text,
-            rect: item_rect,
-            disabled,
-            ..
-        } => {
-            let rect = adjust_menu_item_rect(menu, item_rect);
+            rect: item_rect, ..
+        }
+        | MenuItem::SubMenu {
+            rect: item_rect, ..
+        }
+        | MenuItem::MenuDivider { rect: item_rect } => adjust_menu_item_rect(menu, item_rect),
+    };
+    if focused {
+        let focused_brush = context
+            .render_target
+            .CreateSolidColorBrush(&tokens.color_neutral_background1_hover, None)?;
+        let rounded_rect = D2D1_ROUNDED_RECT {
+            rect: D2D_RECT_F {
+                left: rect.left as f32,
+                top: rect.top as f32,
+                right: rect.right as f32,
+                bottom: rect.bottom as f32,
+            },
+            radiusX: tokens.border_radius_medium,
+            radiusY: tokens.border_radius_medium,
+        };
+        context
+            .render_target
+            .FillRoundedRectangle(&rounded_rect, &focused_brush);
+    }
+    match menu_item {
+        MenuItem::MenuItem { text, disabled, .. } => {
             let text_rect = D2D_RECT_F {
                 left: rect.left as f32 + tokens.spacing_vertical_s_nudge,
                 top: rect.top as f32 + tokens.spacing_vertical_s_nudge,
@@ -938,6 +981,8 @@ unsafe fn draw_menu_item(menu: &Menu, menu_item: &MenuItem, context: &Context) -
             };
             let text_brush = if *disabled {
                 &context.text_disabled_brush
+            } else if focused {
+                &context.text_focused_brush
             } else {
                 &context.text_brush
             };
@@ -950,12 +995,7 @@ unsafe fn draw_menu_item(menu: &Menu, menu_item: &MenuItem, context: &Context) -
                 DWRITE_MEASURING_MODE_NATURAL,
             );
         }
-        MenuItem::SubMenu {
-            text,
-            rect: item_rect,
-            ..
-        } => {
-            let rect = adjust_menu_item_rect(menu, item_rect);
+        MenuItem::SubMenu { text, .. } => {
             let text_rect = D2D_RECT_F {
                 left: rect.left as f32 + tokens.spacing_vertical_s_nudge,
                 top: rect.top as f32 + tokens.spacing_vertical_s_nudge,
@@ -978,8 +1018,7 @@ unsafe fn draw_menu_item(menu: &Menu, menu_item: &MenuItem, context: &Context) -
             device_context5.DrawSvgDocument(&context.sub_menu_indicator_svg);
             device_context5.SetTransform(&Matrix3x2::identity());
         }
-        MenuItem::MenuDivider { rect: item_rect } => {
-            let rect = adjust_menu_item_rect(menu, item_rect);
+        MenuItem::MenuDivider { .. } => {
             let start = D2D_POINT_2F {
                 x: (rect.left - MENU_MARGIN) as f32,
                 y: rect.top as f32 + 2.0,
@@ -1015,8 +1054,8 @@ unsafe fn draw_popup_menu(window: HWND, context: &Context) -> Result<()> {
         .render_target
         .Clear(Some(&tokens.color_neutral_background1));
     let menu = context.menu.borrow();
-    for item in menu.items.iter() {
-        draw_menu_item(&menu, item, context)?;
+    for (index, item) in menu.items.iter().enumerate() {
+        draw_menu_item(&menu, item, context, Some(index) == menu.focused_item_index)?;
     }
     if menu.is_scrolling {
         draw_scroll_arrows(window, context)?;
@@ -1065,6 +1104,8 @@ unsafe fn on_create(window: HWND, params: CreateParams, x: i32, y: i32) -> Resul
     let tokens = &params.qt.theme.tokens;
     let text_brush =
         render_target.CreateSolidColorBrush(&tokens.color_neutral_foreground2, None)?;
+    let text_focused_brush =
+        render_target.CreateSolidColorBrush(&tokens.color_neutral_foreground1_hover, None)?;
     let text_disabled_brush =
         render_target.CreateSolidColorBrush(&tokens.color_neutral_foreground_disabled, None)?;
     let sub_menu_indicator_icon = Icon::chevron_right_regular();
@@ -1093,6 +1134,7 @@ unsafe fn on_create(window: HWND, params: CreateParams, x: i32, y: i32) -> Resul
         render_target,
         text_format,
         text_brush,
+        text_focused_brush,
         text_disabled_brush,
         sub_menu_indicator_svg,
     })
