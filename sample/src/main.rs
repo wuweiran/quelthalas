@@ -276,13 +276,52 @@ extern "system" fn window_process(
                         text: w!("New window"),
                         command_id: 1,
                     },
+                    MenuInfo::MenuItem {
+                        text: w!("Open folder"),
+                        command_id: 2,
+                    },
+                    MenuInfo::MenuDivider,
+                    MenuInfo::SubMenu {
+                        text: w!("Preferences"),
+                        menu_list: vec![
+                            MenuInfo::MenuItem {
+                                text: w!("Settings"),
+                                command_id: 30,
+                            },
+                            MenuInfo::MenuItem {
+                                text: w!("Online services settings"),
+                                command_id: 31,
+                            },
+                            MenuInfo::MenuDivider,
+                            MenuInfo::MenuItem {
+                                text: w!("Extensions"),
+                                command_id: 32,
+                            },
+                            MenuInfo::SubMenu {
+                                text: w!("Appearance"),
+                                menu_list: vec![
+                                    MenuInfo::MenuItem {
+                                        text: w!("Centered layout"),
+                                        command_id: 30,
+                                    },
+                                    MenuInfo::MenuItem {
+                                        text: w!("Zen"),
+                                        command_id: 31,
+                                    },
+                                    MenuInfo::MenuItem {
+                                        text: w!("Zoom in"),
+                                        command_id: 32,
+                                    },
+                                    MenuInfo::MenuItem {
+                                        text: w!("Zoom out"),
+                                        command_id: 32,
+                                    },
+                                ],
+                            },
+                        ],
+                    },
                 ];
-                match qt.open_menu(window, menu_list, x, y) {
-                    Ok(_) => {}
-                    Err(err) => {
-                        println!("err: {}", err);
-                    }
-                }
+                _ = qt.open_menu(window, menu_list, x, y);
                 LRESULT::default()
             }
             _ => DefWindowProcW(window, message, w_param, l_param),

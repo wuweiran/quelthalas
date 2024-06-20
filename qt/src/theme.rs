@@ -94,7 +94,7 @@ impl Tokens {
             color_neutral_stroke1: rgb!("#d1d1d1"),
             color_neutral_stroke1_hover: rgb!("#c7c7c7"),
             color_neutral_stroke1_pressed: rgb!("#b3b3b3"),
-            color_neutral_stroke2: Default::default(),
+            color_neutral_stroke2: rgb!("#e0e0e0"),
             color_neutral_stroke_accessible: rgb!("#616161"),
             stroke_width_thin: 1.0,
             font_family_base: w!("Segoe UI"),

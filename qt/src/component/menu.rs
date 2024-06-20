@@ -22,8 +22,9 @@ use windows::Win32::Graphics::DirectWrite::{
     DWRITE_TEXT_METRICS,
 };
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, EndPaint, GetMonitorInfoW, MonitorFromPoint, OffsetRect, PtInRect, SetRect,
-    SetRectEmpty, MONITORINFO, MONITOR_DEFAULTTONEAREST, PAINTSTRUCT,
+    BeginPaint, CreateRoundRectRgn, EndPaint, GetMonitorInfoW, MonitorFromPoint, OffsetRect,
+    PtInRect, SetRect, SetRectEmpty, SetWindowRgn, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+    PAINTSTRUCT,
 };
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
@@ -885,15 +886,27 @@ unsafe fn show_popup(
         y = info.rcWork.top;
     }
     let scaling_factor = get_scaling_factor(&window);
+    let scaled_width = (width as f32 * scaling_factor) as i32;
+    let scaled_height = (height as f32 * scaling_factor) as i32;
     SetWindowPos(
         window,
         HWND_TOPMOST,
         x,
         y,
-        (width as f32 * scaling_factor) as i32,
-        (height as f32 * scaling_factor) as i32,
+        scaled_width,
+        scaled_height,
         SWP_SHOWWINDOW | SWP_NOACTIVATE,
     )?;
+    let corner_diameter = (qt.theme.tokens.border_radius_medium * scaling_factor) as i32;
+    let region = CreateRoundRectRgn(
+        0,
+        0,
+        scaled_width + 1,
+        scaled_height + 1,
+        corner_diameter,
+        corner_diameter,
+    );
+    SetWindowRgn(window, region, FALSE);
     Ok(())
 }
 
@@ -943,7 +956,7 @@ unsafe fn draw_menu_item(menu: &Menu, menu_item: &MenuItem, context: &Context) -
             );
             let device_context5 = context.render_target.cast::<ID2D1DeviceContext5>()?;
             device_context5.SetTransform(&Matrix3x2::translation(
-                rect.left as f32 + tokens.spacing_vertical_s_nudge + 4f32,
+                rect.right as f32 - tokens.spacing_vertical_s_nudge - 4f32 - 20f32,
                 rect.top as f32 + tokens.spacing_vertical_s_nudge,
             ));
             device_context5.DrawSvgDocument(&context.sub_menu_indicator_svg);
