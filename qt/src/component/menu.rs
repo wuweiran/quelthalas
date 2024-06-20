@@ -41,6 +41,7 @@ pub enum MenuInfo {
     MenuItem {
         text: PCWSTR,
         command_id: u32,
+        disabled: bool,
     },
     SubMenu {
         menu_list: Vec<MenuInfo>,
@@ -54,6 +55,7 @@ enum MenuItem {
         text: PCWSTR,
         id: u32,
         rect: RECT,
+        disabled: bool,
     },
     SubMenu {
         sub_menu: Rc<RefCell<Menu>>,
@@ -81,6 +83,7 @@ pub struct Context {
     render_target: ID2D1HwndRenderTarget,
     text_format: IDWriteTextFormat,
     text_brush: ID2D1SolidColorBrush,
+    text_disabled_brush: ID2D1SolidColorBrush,
     sub_menu_indicator_svg: ID2D1SvgDocument,
 }
 
@@ -88,10 +91,15 @@ fn convert_menu_info_list_to_menu(menu_info_list: Vec<MenuInfo>) -> Menu {
     let items = menu_info_list
         .into_iter()
         .map(|menu_info| match menu_info {
-            MenuInfo::MenuItem { text, command_id } => MenuItem::MenuItem {
+            MenuInfo::MenuItem {
+                text,
+                command_id,
+                disabled,
+            } => MenuItem::MenuItem {
                 text,
                 id: command_id,
                 rect: RECT::default(),
+                disabled,
             },
             MenuInfo::SubMenu { menu_list, text } => {
                 let sub_menu = convert_menu_info_list_to_menu(menu_list);
@@ -286,14 +294,16 @@ fn find_item_by_coordinates(menu: &Menu, point: &mut POINT) -> HitTest {
 
             for (index, item) in menu.items.iter().enumerate() {
                 if let MenuItem::MenuItem {
-                    text: _text,
-                    id: _id,
                     rect: item_rect,
+                    disabled,
+                    ..
                 } = item
                 {
-                    let rect = adjust_menu_item_rect(menu, item_rect);
-                    if PtInRect(&rect, *point).as_bool() {
-                        return HitTest::Item(index);
+                    if !disabled {
+                        let rect = adjust_menu_item_rect(menu, item_rect);
+                        if PtInRect(&rect, *point).as_bool() {
+                            return HitTest::Item(index);
+                        }
                     }
                 }
             }
@@ -916,6 +926,7 @@ unsafe fn draw_menu_item(menu: &Menu, menu_item: &MenuItem, context: &Context) -
         MenuItem::MenuItem {
             text,
             rect: item_rect,
+            disabled,
             ..
         } => {
             let rect = adjust_menu_item_rect(menu, item_rect);
@@ -925,11 +936,16 @@ unsafe fn draw_menu_item(menu: &Menu, menu_item: &MenuItem, context: &Context) -
                 right: rect.right as f32 - tokens.spacing_vertical_s_nudge,
                 bottom: rect.bottom as f32 - tokens.spacing_vertical_s_nudge,
             };
+            let text_brush = if *disabled {
+                &context.text_disabled_brush
+            } else {
+                &context.text_brush
+            };
             context.render_target.DrawText(
                 text.as_wide(),
                 &context.text_format,
                 &text_rect,
-                &context.text_brush,
+                text_brush,
                 D2D1_DRAW_TEXT_OPTIONS_NONE,
                 DWRITE_MEASURING_MODE_NATURAL,
             );
@@ -1049,6 +1065,8 @@ unsafe fn on_create(window: HWND, params: CreateParams, x: i32, y: i32) -> Resul
     let tokens = &params.qt.theme.tokens;
     let text_brush =
         render_target.CreateSolidColorBrush(&tokens.color_neutral_foreground2, None)?;
+    let text_disabled_brush =
+        render_target.CreateSolidColorBrush(&tokens.color_neutral_foreground_disabled, None)?;
     let sub_menu_indicator_icon = Icon::chevron_right_regular();
     let device_context5 = render_target.cast::<ID2D1DeviceContext5>()?;
     let sub_menu_indicator_svg =
@@ -1075,6 +1093,7 @@ unsafe fn on_create(window: HWND, params: CreateParams, x: i32, y: i32) -> Resul
         render_target,
         text_format,
         text_brush,
+        text_disabled_brush,
         sub_menu_indicator_svg,
     })
 }

@@ -271,14 +271,17 @@ extern "system" fn window_process(
                     MenuInfo::MenuItem {
                         text: w!("New"),
                         command_id: 0,
+                        disabled: false,
                     },
                     MenuInfo::MenuItem {
                         text: w!("New window"),
                         command_id: 1,
+                        disabled: false,
                     },
                     MenuInfo::MenuItem {
-                        text: w!("Open folder"),
+                        text: w!("Open file"),
                         command_id: 2,
+                        disabled: true,
                     },
                     MenuInfo::MenuDivider,
                     MenuInfo::SubMenu {
@@ -287,15 +290,18 @@ extern "system" fn window_process(
                             MenuInfo::MenuItem {
                                 text: w!("Settings"),
                                 command_id: 30,
+                                disabled: false,
                             },
                             MenuInfo::MenuItem {
                                 text: w!("Online services settings"),
                                 command_id: 31,
+                                disabled: false,
                             },
                             MenuInfo::MenuDivider,
                             MenuInfo::MenuItem {
                                 text: w!("Extensions"),
                                 command_id: 32,
+                                disabled: false,
                             },
                             MenuInfo::SubMenu {
                                 text: w!("Appearance"),
@@ -303,18 +309,22 @@ extern "system" fn window_process(
                                     MenuInfo::MenuItem {
                                         text: w!("Centered layout"),
                                         command_id: 30,
+                                        disabled: false,
                                     },
                                     MenuInfo::MenuItem {
                                         text: w!("Zen"),
                                         command_id: 31,
+                                        disabled: false,
                                     },
                                     MenuInfo::MenuItem {
                                         text: w!("Zoom in"),
                                         command_id: 32,
+                                        disabled: false,
                                     },
                                     MenuInfo::MenuItem {
                                         text: w!("Zoom out"),
                                         command_id: 32,
+                                        disabled: false,
                                     },
                                 ],
                             },
