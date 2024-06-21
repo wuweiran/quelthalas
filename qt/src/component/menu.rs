@@ -301,13 +301,16 @@ fn find_item_by_coordinates(menu: &Menu, point: &mut POINT) -> HitTest {
             }
 
             for (index, item) in menu.items.iter().enumerate() {
-                if let MenuItem::MenuItem {
-                    rect: item_rect,
-                    disabled,
-                    ..
-                } = item
-                {
-                    if !disabled {
+                match item {
+                    MenuItem::MenuItem {
+                        rect: item_rect, ..
+                    }
+                    | MenuItem::SubMenu {
+                        rect: item_rect, ..
+                    }
+                    | MenuItem::MenuDivider {
+                        rect: item_rect, ..
+                    } => {
                         let rect = adjust_menu_item_rect(menu, item_rect);
                         if PtInRect(&rect, *point).as_bool() {
                             return HitTest::Item(index);
@@ -327,7 +330,8 @@ fn switch_tracking(menu: &mut Menu, new_index: usize) -> Result<()> {
 }
 
 unsafe fn menu_button_down(context: &Context, mt: &mut Tracker, menu: &mut Menu) -> Result<bool> {
-    if let HitTest::Item(item_index) = find_item_by_coordinates(menu, &mut mt.point) {
+    let ht = find_item_by_coordinates(menu, &mut mt.point);
+    if let HitTest::Item(item_index) = ht {
         if menu.focused_item_index != Some(item_index) {
             switch_tracking(menu, item_index)?;
         }
@@ -338,9 +342,12 @@ unsafe fn menu_button_down(context: &Context, mt: &mut Tracker, menu: &mut Menu)
                     show_sub_popup(&context.qt, context.owning_window, sub_menu.clone())?;
             }
         }
-        Ok(true)
-    } else {
-        Ok(false)
+    }
+
+    match ht {
+        HitTest::Nowhere => Ok(false),
+        HitTest::Item(_) => Ok(true),
+        _ => Ok(true),
     }
 }
 
@@ -392,6 +399,7 @@ unsafe fn menu_mouse_move(
         }
     } else {
         let mut menu_borrow = menu.borrow_mut();
+        hide_sub_popups(&mut menu_borrow)?;
         select_item(&mut menu_borrow, None);
     }
 
@@ -530,21 +538,29 @@ unsafe fn show_sub_popup(
                 ..
             } = item
             {
-                let mut rect = item_rect.clone();
-                rect.left += item_rect.right - MENU_BORDER_WIDTH;
-                rect.top += item_rect.top - MENU_MARGIN;
-                rect.right = item_rect.left - item_rect.right + MENU_BORDER_WIDTH;
-                rect.bottom = item_rect.top - item_rect.bottom - 2 * MENU_MARGIN;
-                init_popup(
-                    qt.clone(),
-                    owning_window,
-                    sub_menu.clone(),
-                    rect.left,
-                    rect.top,
-                    rect.right,
-                    rect.bottom,
-                );
-                return Ok(sub_menu.clone());
+                if let Some(window) = menu.window {
+                    let item_rect = adjust_menu_item_rect(&menu, &item_rect);
+                    let mut rect = RECT::default();
+                    GetWindowRect(window, &mut rect)?;
+                    let scaling_factor = get_scaling_factor(&window);
+                    rect.left +=
+                        ((item_rect.right - MENU_BORDER_WIDTH) as f32 * scaling_factor) as i32;
+                    rect.top += (item_rect.top as f32 * scaling_factor) as i32;
+                    rect.right = ((item_rect.left - item_rect.right + MENU_BORDER_WIDTH) as f32
+                        * scaling_factor) as i32;
+                    rect.bottom = ((item_rect.top - item_rect.bottom - 2 * MENU_MARGIN) as f32
+                        * scaling_factor) as i32;
+                    init_popup(
+                        qt.clone(),
+                        owning_window,
+                        sub_menu.clone(),
+                        rect.left,
+                        rect.top,
+                        rect.right,
+                        rect.bottom,
+                    );
+                    return Ok(sub_menu.clone());
+                }
             }
         }
     }
@@ -574,16 +590,18 @@ unsafe fn execute_focused_item(
     if let Some(focused_item_index) = menu.focused_item_index {
         let item = &menu.items[focused_item_index];
         match item {
-            MenuItem::MenuItem {
-                text: _text, id, ..
-            } => unsafe {
-                PostMessageW(
-                    mt.owning_window,
-                    WM_COMMAND,
-                    WPARAM(*id as usize),
-                    LPARAM(0),
-                )?;
-                Ok(ExecutionResult::Executed)
+            MenuItem::MenuItem { id, disabled, .. } => unsafe {
+                if *disabled {
+                    Ok(ExecutionResult::NoExecuted)
+                } else {
+                    PostMessageW(
+                        mt.owning_window,
+                        WM_COMMAND,
+                        WPARAM(*id as usize),
+                        LPARAM(0),
+                    )?;
+                    Ok(ExecutionResult::Executed)
+                }
             },
             MenuItem::SubMenu { sub_menu, .. } => {
                 mt.current_menu =
@@ -954,22 +972,29 @@ unsafe fn draw_menu_item(
         | MenuItem::MenuDivider { rect: item_rect } => adjust_menu_item_rect(menu, item_rect),
     };
     if focused {
-        let focused_brush = context
-            .render_target
-            .CreateSolidColorBrush(&tokens.color_neutral_background1_hover, None)?;
-        let rounded_rect = D2D1_ROUNDED_RECT {
-            rect: D2D_RECT_F {
-                left: rect.left as f32,
-                top: rect.top as f32,
-                right: rect.right as f32,
-                bottom: rect.bottom as f32,
-            },
-            radiusX: tokens.border_radius_medium,
-            radiusY: tokens.border_radius_medium,
+        let show_focused = match menu_item {
+            MenuItem::MenuItem { disabled, .. } => !*disabled,
+            MenuItem::SubMenu { .. } => true,
+            MenuItem::MenuDivider { .. } => false,
         };
-        context
-            .render_target
-            .FillRoundedRectangle(&rounded_rect, &focused_brush);
+        if show_focused {
+            let focused_brush = context
+                .render_target
+                .CreateSolidColorBrush(&tokens.color_neutral_background1_hover, None)?;
+            let rounded_rect = D2D1_ROUNDED_RECT {
+                rect: D2D_RECT_F {
+                    left: rect.left as f32,
+                    top: rect.top as f32,
+                    right: rect.right as f32,
+                    bottom: rect.bottom as f32,
+                },
+                radiusX: tokens.border_radius_medium,
+                radiusY: tokens.border_radius_medium,
+            };
+            context
+                .render_target
+                .FillRoundedRectangle(&rounded_rect, &focused_brush);
+        }
     }
     match menu_item {
         MenuItem::MenuItem { text, disabled, .. } => {
