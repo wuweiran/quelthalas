@@ -86,6 +86,7 @@ pub struct Context {
     text_focused_brush: ID2D1SolidColorBrush,
     text_disabled_brush: ID2D1SolidColorBrush,
     sub_menu_indicator_svg: ID2D1SvgDocument,
+    sub_menu_indicator_focused_svg: ID2D1SvgDocument,
 }
 
 fn convert_menu_info_list_to_menu(menu_info_list: Vec<MenuInfo>) -> Menu {
@@ -1040,7 +1041,12 @@ unsafe fn draw_menu_item(
                 rect.right as f32 - tokens.spacing_vertical_s_nudge - 4f32 - 20f32,
                 rect.top as f32 + tokens.spacing_vertical_s_nudge,
             ));
-            device_context5.DrawSvgDocument(&context.sub_menu_indicator_svg);
+            let svg = if focused {
+                &context.sub_menu_indicator_focused_svg
+            } else {
+                &context.sub_menu_indicator_svg
+            };
+            device_context5.DrawSvgDocument(svg);
             device_context5.SetTransform(&Matrix3x2::identity());
         }
         MenuItem::MenuDivider { .. } => {
@@ -1133,8 +1139,8 @@ unsafe fn on_create(window: HWND, params: CreateParams, x: i32, y: i32) -> Resul
         render_target.CreateSolidColorBrush(&tokens.color_neutral_foreground1_hover, None)?;
     let text_disabled_brush =
         render_target.CreateSolidColorBrush(&tokens.color_neutral_foreground_disabled, None)?;
-    let sub_menu_indicator_icon = Icon::chevron_right_regular();
     let device_context5 = render_target.cast::<ID2D1DeviceContext5>()?;
+    let sub_menu_indicator_icon = Icon::chevron_right_regular();
     let sub_menu_indicator_svg =
         match SHCreateMemStream(Some(sub_menu_indicator_icon.svg.as_bytes())) {
             None => device_context5.CreateSvgDocument(
@@ -1152,6 +1158,24 @@ unsafe fn on_create(window: HWND, params: CreateParams, x: i32, y: i32) -> Resul
                 },
             )?,
         };
+    let sub_menu_indicator_focused_icon = Icon::chevron_right_filled();
+    let sub_menu_indicator_focused_svg =
+        match SHCreateMemStream(Some(sub_menu_indicator_focused_icon.svg.as_bytes())) {
+            None => device_context5.CreateSvgDocument(
+                None,
+                D2D_SIZE_F {
+                    width: sub_menu_indicator_focused_icon.size as f32,
+                    height: sub_menu_indicator_focused_icon.size as f32,
+                },
+            )?,
+            Some(svg_stream) => device_context5.CreateSvgDocument(
+                &svg_stream,
+                D2D_SIZE_F {
+                    width: sub_menu_indicator_focused_icon.size as f32,
+                    height: sub_menu_indicator_focused_icon.size as f32,
+                },
+            )?,
+        };
     Ok(Context {
         qt: params.qt,
         menu: params.menu,
@@ -1162,6 +1186,7 @@ unsafe fn on_create(window: HWND, params: CreateParams, x: i32, y: i32) -> Resul
         text_focused_brush,
         text_disabled_brush,
         sub_menu_indicator_svg,
+        sub_menu_indicator_focused_svg,
     })
 }
 
