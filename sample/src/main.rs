@@ -319,11 +319,11 @@ extern "system" fn window_process(
                                     MenuInfo::MenuItem {
                                         text: w!("Zoom in"),
                                         command_id: 32,
-                                        disabled: false,
+                                        disabled: true,
                                     },
                                     MenuInfo::MenuItem {
                                         text: w!("Zoom out"),
-                                        command_id: 32,
+                                        command_id: 33,
                                         disabled: false,
                                     },
                                 ],
