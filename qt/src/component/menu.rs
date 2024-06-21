@@ -439,6 +439,7 @@ fn select_next(menu: &mut Menu) {
             if let MenuItem::MenuDivider { .. } = menu.items[item_index] {
                 continue;
             }
+            println!("select {}", item_index);
             select_item(menu, Some(item_index));
             break;
         }
@@ -716,16 +717,27 @@ unsafe fn track_menu(menu: Rc<RefCell<Menu>>, x: i32, y: i32, owning_window: HWN
             }
         } else if msg.message >= WM_KEYFIRST && msg.message <= WM_KEYLAST {
             remove_message = true;
-            let mut menu = menu.borrow_mut();
             match msg.message {
                 WM_KEYDOWN | WM_SYSKEYDOWN => match VIRTUAL_KEY(msg.wParam.0 as u16) {
                     VK_MENU | VK_F10 => {
                         exit_menu = true;
                     }
-                    VK_HOME => select_first(&mut menu),
-                    VK_END => select_last(&mut menu),
-                    VK_UP => select_previous(&mut menu),
-                    VK_DOWN => select_next(&mut menu),
+                    VK_HOME => {
+                        let mut menu = mt.current_menu.borrow_mut();
+                        select_first(&mut menu)
+                    }
+                    VK_END => {
+                        let mut menu = mt.current_menu.borrow_mut();
+                        select_last(&mut menu)
+                    }
+                    VK_UP => {
+                        let mut menu = mt.current_menu.borrow_mut();
+                        select_previous(&mut menu)
+                    }
+                    VK_DOWN => {
+                        let mut menu = mt.current_menu.borrow_mut();
+                        select_next(&mut menu)
+                    }
                     VK_LEFT => menu_key_left(&mut mt, msg.message),
                     VK_RIGHT => menu_key_right(&mut mt, msg.message),
                     VK_ESCAPE => exit_menu = menu_key_escape(&mut mt)?,
@@ -736,8 +748,9 @@ unsafe fn track_menu(menu: Rc<RefCell<Menu>>, x: i32, y: i32, owning_window: HWN
                 _ => {}
             }
         } else {
-            PeekMessageW(&mut msg, None, msg.message, msg.message, PM_REMOVE);
-            DispatchMessageW(&msg);
+            if PeekMessageW(&mut msg, None, msg.message, msg.message, PM_REMOVE).as_bool() {
+                DispatchMessageW(&msg);
+            }
             continue;
         }
 
@@ -858,6 +871,7 @@ unsafe fn calc_popup_menu_size(qt: &QT, menu: &mut Menu, max_height: i32) -> Res
 
             i = i + 1;
         }
+        org_y -= MENU_LIST_GAP;
         menu.menu_list_rect.right = menu.menu_list_rect.right.max(138);
         while start < i {
             let item = &mut menu.items[start];
