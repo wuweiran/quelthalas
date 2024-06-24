@@ -266,7 +266,8 @@ extern "system" fn window_process(
                 let x = l_param.0 as i16 as i32;
                 let y = (l_param.0 >> 16) as i16 as i32;
 
-                let qt = QT::default();
+                let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *const QT;
+                let qt = &*raw;
                 let menu_list = vec![
                     MenuInfo::MenuItem {
                         text: w!("New"),
