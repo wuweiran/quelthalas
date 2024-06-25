@@ -49,11 +49,11 @@ fn main() -> Result<()> {
             None,
         );
 
-        ShowWindow(window, SW_SHOW);
+        let _ = ShowWindow(window, SW_SHOW);
 
         let mut message = MSG::default();
         while GetMessageW(&mut message, None, 0, 0).into() {
-            TranslateMessage(&message);
+            let _ = TranslateMessage(&message);
             DispatchMessageW(&message);
         }
 
@@ -259,7 +259,7 @@ extern "system" fn window_process(
                 let mut ps = PAINTSTRUCT::default();
                 let hdc = BeginPaint(window, &mut ps);
                 FillRect(hdc, &ps.rcPaint, CreateSolidBrush(COLORREF(0xfafafa)));
-                EndPaint(window, &ps);
+                _ = EndPaint(window, &ps);
                 LRESULT(0)
             }
             WM_CONTEXTMENU => {
