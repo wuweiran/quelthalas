@@ -149,7 +149,7 @@ impl QT {
             return Err(Error::from(ERROR_INVALID_WINDOW_HANDLE));
         }
         let menu = Rc::new(RefCell::new(convert_menu_info_list_to_menu(menu_list)));
-        init_popup(self.clone(), parent_window, menu.clone(), x, y, 0, 0);
+        init_popup(self.clone(), parent_window, menu.clone(), x, y, 0, 0)?;
         init_tracking(parent_window)?;
         track_menu(menu.clone(), 0, 0, parent_window).and(exit_tracking(parent_window))?;
         Ok(())
@@ -172,7 +172,7 @@ unsafe fn init_popup(
     y: i32,
     x_anchor: i32,
     y_anchor: i32,
-) {
+) -> Result<()> {
     let boxed = Box::new(CreateParams {
         qt,
         menu: menu.clone(),
@@ -191,10 +191,11 @@ unsafe fn init_popup(
         0,
         owning_window,
         None,
-        HINSTANCE(GetWindowLongPtrW(owning_window, GWLP_HINSTANCE)),
+        HINSTANCE(GetWindowLongPtrW(owning_window, GWLP_HINSTANCE) as _),
         Some(Box::<CreateParams>::into_raw(boxed) as _),
-    );
-    menu.borrow_mut().window = Some(window)
+    )?;
+    menu.borrow_mut().window = Some(window);
+    Ok(())
 }
 
 unsafe fn init_tracking(owning_window: HWND) -> Result<()> {
@@ -279,7 +280,7 @@ fn find_item_by_coordinates(menu: &Menu, point: &mut POINT) -> HitTest {
             point.x -= rect.left;
             point.y -= rect.top;
 
-            let scaling_factor = get_scaling_factor(&window);
+            let scaling_factor = get_scaling_factor(window);
             point.x = (point.x as f32 / scaling_factor) as i32;
             point.y = (point.y as f32 / scaling_factor) as i32;
 
@@ -544,7 +545,7 @@ unsafe fn show_sub_popup(
                     let item_rect = adjust_menu_item_rect(&menu, &item_rect);
                     let mut rect = RECT::default();
                     GetWindowRect(window, &mut rect)?;
-                    let scaling_factor = get_scaling_factor(&window);
+                    let scaling_factor = get_scaling_factor(window);
                     rect.left +=
                         ((item_rect.right - MENU_BORDER_WIDTH) as f32 * scaling_factor) as i32;
                     rect.top += (item_rect.top as f32 * scaling_factor) as i32;
@@ -560,7 +561,7 @@ unsafe fn show_sub_popup(
                         rect.top,
                         rect.right,
                         rect.bottom,
-                    );
+                    )?;
                     return Ok(sub_menu.clone());
                 }
             }
@@ -651,7 +652,7 @@ unsafe fn track_menu(menu: Rc<RefCell<Menu>>, x: i32, y: i32, owning_window: HWN
                         owning_window,
                         WM_ENTERIDLE,
                         WPARAM(MSGF_MENU as usize),
-                        LPARAM(window.0),
+                        LPARAM(window.0 as _),
                     );
                     MsgWaitForMultipleObjectsEx(
                         None,
@@ -945,7 +946,7 @@ unsafe fn show_popup(
     if y < info.rcWork.top {
         y = info.rcWork.top;
     }
-    let scaling_factor = get_scaling_factor(&window);
+    let scaling_factor = get_scaling_factor(window);
     let scaled_width = (width as f32 * scaling_factor) as i32;
     let scaled_height = (height as f32 * scaling_factor) as i32;
     SetWindowPos(

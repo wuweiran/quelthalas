@@ -159,8 +159,7 @@ struct Context {
 impl QT {
     pub fn create_button(
         &self,
-        parent_window: &HWND,
-        instance: &HINSTANCE,
+        parent_window: HWND,
         x: i32,
         y: i32,
         text: PCWSTR,
@@ -193,7 +192,7 @@ impl QT {
                 mouse_event,
             });
             let scaling_factor = get_scaling_factor(parent_window);
-            let window = CreateWindowExW(
+            CreateWindowExW(
                 WINDOW_EX_STYLE::default(),
                 class_name,
                 w!(""),
@@ -202,12 +201,11 @@ impl QT {
                 y,
                 (boxed.as_ref().get_min_width() * scaling_factor) as i32,
                 (boxed.as_ref().get_min_height() * scaling_factor) as i32,
-                *parent_window,
+                parent_window,
                 None,
-                *instance,
+                HINSTANCE(GetWindowLongPtrW(parent_window, GWLP_HINSTANCE) as _),
                 Some(Box::<State>::into_raw(boxed) as _),
-            );
-            Ok(window)
+            )
         }
     }
 }
@@ -360,7 +358,7 @@ unsafe fn layout(window: HWND, context: &Context) -> Result<()> {
     let mut metrics = DWRITE_TEXT_METRICS::default();
     text_layout.GetMetrics(&mut metrics)?;
 
-    let scaling_factor = get_scaling_factor(&window);
+    let scaling_factor = get_scaling_factor(window);
     let icon_and_space_width = if state.has_icon() {
         state.get_desired_icon_spacing() + state.get_desired_icon_size()
     } else {
@@ -416,7 +414,7 @@ struct AnimationTimerEventHandler {
     window: HWND,
 }
 
-impl IUIAnimationTimerEventHandler_Impl for AnimationTimerEventHandler {
+impl IUIAnimationTimerEventHandler_Impl for AnimationTimerEventHandler_Impl {
     fn OnPreUpdate(&self) -> Result<()> {
         Ok(())
     }
@@ -439,7 +437,7 @@ unsafe fn paint(window: HWND, context: &Context) -> Result<()> {
 
     let mut button_rect = RECT::default();
     GetClientRect(window, &mut button_rect)?;
-    let scaling_factor = get_scaling_factor(&window);
+    let scaling_factor = get_scaling_factor(window);
     let width = button_rect.right as f32 / scaling_factor;
     let height = button_rect.bottom as f32 / scaling_factor;
     let corner_radius = match state.shape {

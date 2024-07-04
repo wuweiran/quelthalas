@@ -33,8 +33,8 @@ impl QT {
     }
 }
 
-pub(crate) fn get_scaling_factor(window: &HWND) -> f32 {
-    unsafe { GetDpiForWindow(*window) as f32 / USER_DEFAULT_SCREEN_DPI as f32 }
+pub(crate) fn get_scaling_factor(window: HWND) -> f32 {
+    unsafe { GetDpiForWindow(window) as f32 / USER_DEFAULT_SCREEN_DPI as f32 }
 }
 
 pub mod component;

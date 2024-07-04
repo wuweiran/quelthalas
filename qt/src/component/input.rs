@@ -8,6 +8,7 @@ use windows::Win32::Foundation::{
     COLORREF, FALSE, HANDLE, HGLOBAL, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, SIZE, TRUE,
     WPARAM,
 };
+use windows::Win32::Globalization::ScriptStringAnalyse;
 use windows::Win32::Globalization::{
     lstrcpynW, lstrlenW, u_memcpy, ScriptBreak, ScriptStringCPtoX, ScriptStringFree,
     ScriptStringOut, ScriptStringXtoCP, ScriptString_pSize, SCRIPT_ANALYSIS, SCRIPT_LOGATTR,
@@ -49,7 +50,6 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     VK_END, VK_HOME, VK_INSERT, VK_LEFT, VK_MENU, VK_RIGHT, VK_SHIFT,
 };
 use windows::Win32::UI::WindowsAndMessaging::*;
-use windows_sys::Win32::Globalization::ScriptStringAnalyse;
 
 use crate::theme::TypographyStyle;
 use crate::{get_scaling_factor, QT};
@@ -240,8 +240,7 @@ impl Context {
 impl QT {
     pub fn create_input(
         &self,
-        parent_window: &HWND,
-        instance: &HINSTANCE,
+        parent_window: HWND,
         x: i32,
         y: i32,
         width: i32,
@@ -272,7 +271,7 @@ impl QT {
                 input_type: *input_type,
                 placeholder,
             });
-            let window = CreateWindowExW(
+            CreateWindowExW(
                 WINDOW_EX_STYLE::default(),
                 class_name,
                 w!(""),
@@ -281,12 +280,11 @@ impl QT {
                 y,
                 (boxed.width * scaling_factor) as i32,
                 (boxed.get_field_height() * scaling_factor) as i32,
-                *parent_window,
+                parent_window,
                 None,
-                *instance,
+                HINSTANCE(GetWindowLongPtrW(parent_window, GWLP_HINSTANCE) as _),
                 Some(Box::<State>::into_raw(boxed) as _),
-            );
-            Ok(window)
+            )
         }
     }
 }
@@ -527,40 +525,38 @@ unsafe fn update_uniscribe_data(
         let old_font = SelectObject(udc, context.font);
         match context.state.input_type {
             Type::Password => {
-                let hr = ScriptStringAnalyse(
-                    udc.0,
+                ScriptStringAnalyse(
+                    udc,
                     w!("•").as_ptr() as _,
                     length as i32,
                     (1.5 * length as f32 + 16f32) as i32,
                     -1,
                     SSA_LINK | SSA_FALLBACK | SSA_GLYPHS | SSA_PASSWORD,
                     -1,
-                    null(),
-                    null(),
-                    null(),
-                    null(),
+                    None,
+                    None,
+                    None,
+                    None,
                     null(),
                     &mut context.ssa,
-                );
-                HRESULT(hr).ok()?;
+                )?;
             }
             _ => {
-                let hr = ScriptStringAnalyse(
-                    udc.0,
+                ScriptStringAnalyse(
+                    udc,
                     context.buffer.as_ptr() as _,
                     length as i32,
                     (1.5 * length as f32 + 16f32) as i32,
                     -1,
                     SSA_LINK | SSA_FALLBACK | SSA_GLYPHS,
                     -1,
-                    null(),
-                    null(),
-                    null(),
-                    null(),
+                    None,
+                    None,
+                    None,
+                    None,
                     null(),
                     &mut context.ssa,
-                );
-                HRESULT(hr).ok()?;
+                )?;
             }
         }
 
@@ -648,7 +644,7 @@ unsafe fn adjust_format_rect(window: HWND, context: &mut Context) -> Result<()> 
     context.format_rect.bottom = context.format_rect.top + context.line_height;
     let mut client_rect = RECT::default();
     GetClientRect(window, &mut client_rect)?;
-    let scaling_factor = get_scaling_factor(&window);
+    let scaling_factor = get_scaling_factor(window);
     let border_bottom_width = (2.0 * scaling_factor) as i32;
     context.format_rect.bottom = context
         .format_rect
@@ -658,7 +654,7 @@ unsafe fn adjust_format_rect(window: HWND, context: &mut Context) -> Result<()> 
 }
 
 unsafe fn set_rect_np(window: HWND, context: &mut Context) -> Result<()> {
-    let scaling_factor = get_scaling_factor(&window);
+    let scaling_factor = get_scaling_factor(window);
     GetClientRect(window, &mut context.format_rect)?;
     let corner_diameter =
         (context.state.qt.theme.tokens.border_radius_medium * scaling_factor * 2f32) as i32;
@@ -865,7 +861,7 @@ struct AnimationTimerEventHandler {
     window: HWND,
 }
 
-impl IUIAnimationTimerEventHandler_Impl for AnimationTimerEventHandler {
+impl IUIAnimationTimerEventHandler_Impl for AnimationTimerEventHandler_Impl {
     fn OnPreUpdate(&self) -> Result<()> {
         Ok(())
     }
@@ -874,7 +870,7 @@ impl IUIAnimationTimerEventHandler_Impl for AnimationTimerEventHandler {
         unsafe {
             let mut rc = RECT::default();
             GetClientRect(self.window, &mut rc)?;
-            let scaling_factor = get_scaling_factor(&self.window);
+            let scaling_factor = get_scaling_factor(self.window);
             let border_width = (1.0 * scaling_factor) as i32;
             let border_bottom_width = (2.0 * scaling_factor) as i32;
             _ = InvalidateRect(
@@ -898,7 +894,7 @@ impl IUIAnimationTimerEventHandler_Impl for AnimationTimerEventHandler {
 
 unsafe fn on_create(window: HWND, state: State) -> Result<Context> {
     let tokens = &state.qt.theme.tokens;
-    let scaling_factor = get_scaling_factor(&window);
+    let scaling_factor = get_scaling_factor(window);
     let typography_style = state.get_typography_style();
     let font = create_font_from_typography_style(typography_style, scaling_factor);
     let dc = GetDC(window);
@@ -1279,7 +1275,7 @@ unsafe fn on_left_button_down(
     set_selection(window, context, Some(start), Some(end))?;
     scroll_caret(window, context)?;
     if !context.is_focused {
-        SetFocus(window);
+        SetFocus(window)?;
     }
     Ok(())
 }
@@ -1397,7 +1393,7 @@ unsafe fn on_paint(window: HWND, context: &mut Context) -> Result<()> {
     let mut rc_rgn = RECT::default();
     GetClipBox(dc, &mut rc_rgn);
 
-    let scaling_factor = get_scaling_factor(&window);
+    let scaling_factor = get_scaling_factor(window);
     let mut rc = RECT::default();
     GetClientRect(window, &mut rc)?;
 
@@ -1594,7 +1590,7 @@ unsafe fn set_focus(window: HWND, context: &mut Context) -> Result<()> {
         context.selection_start,
         context.selection_end,
     )?;
-    let scaling_factor = get_scaling_factor(&window);
+    let scaling_factor = get_scaling_factor(window);
     CreateCaret(
         window,
         None,
@@ -1888,7 +1884,7 @@ extern "system" fn window_proc(
         WM_DPICHANGED_BEFOREPARENT => unsafe {
             let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
             let context = &mut *raw;
-            let scaling_factor = get_scaling_factor(&window);
+            let scaling_factor = get_scaling_factor(window);
             if SetWindowPos(
                 window,
                 None,

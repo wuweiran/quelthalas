@@ -68,8 +68,7 @@ pub struct Context {
 impl QT {
     pub fn create_progress_bar(
         &self,
-        parent_window: &HWND,
-        instance: &HINSTANCE,
+        parent_window: HWND,
         x: i32,
         y: i32,
         width: i32,
@@ -98,7 +97,7 @@ impl QT {
                 thickness: *thickness,
                 width: width as f32 / scaling_factor,
             });
-            let window = CreateWindowExW(
+            CreateWindowExW(
                 WINDOW_EX_STYLE::default(),
                 class_name,
                 w!(""),
@@ -107,12 +106,11 @@ impl QT {
                 y,
                 width,
                 (boxed.as_ref().get_height() * scaling_factor) as i32,
-                *parent_window,
+                parent_window,
                 None,
-                *instance,
+                HINSTANCE(GetWindowLongPtrW(parent_window, GWLP_HINSTANCE) as _),
                 Some(Box::<State>::into_raw(boxed) as _),
-            );
-            Ok(window)
+            )
         }
     }
 }
@@ -122,7 +120,7 @@ struct AnimationTimerEventHandler {
     window: HWND,
 }
 
-impl IUIAnimationTimerEventHandler_Impl for AnimationTimerEventHandler {
+impl IUIAnimationTimerEventHandler_Impl for AnimationTimerEventHandler_Impl {
     fn OnPreUpdate(&self) -> Result<()> {
         Ok(())
     }
@@ -177,7 +175,7 @@ unsafe fn on_create(window: HWND, state: State) -> Result<Context> {
         },
     )?;
 
-    let scaling_factor = get_scaling_factor(&window);
+    let scaling_factor = get_scaling_factor(window);
     let tokens = &state.qt.theme.tokens;
     let corner_diameter = match state.shape {
         Shape::Rounded => rect
@@ -252,7 +250,7 @@ unsafe fn paint(window: HWND, context: &Context) -> Result<()> {
 
     let mut rect = RECT::default();
     GetClientRect(window, &mut rect)?;
-    let scaling_factor = get_scaling_factor(&window);
+    let scaling_factor = get_scaling_factor(window);
     let width = rect.right as f32 / scaling_factor;
     let height = rect.bottom as f32 / scaling_factor;
 
@@ -323,7 +321,7 @@ unsafe fn on_paint(window: HWND, context: &Context) -> Result<()> {
 }
 
 unsafe fn on_dpi_changed(window: HWND, context: &Context) -> Result<()> {
-    let scaling_factor = get_scaling_factor(&window);
+    let scaling_factor = get_scaling_factor(window);
     let scaled_width = context.state.width * scaling_factor;
     let scaled_height = context.state.get_height() * scaling_factor;
     SetWindowPos(

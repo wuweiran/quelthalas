@@ -47,7 +47,7 @@ fn main() -> Result<()> {
             None,
             instance,
             None,
-        );
+        )?;
 
         let _ = ShowWindow(window, SW_SHOW);
 
@@ -71,13 +71,11 @@ extern "system" fn window_process(
         match message {
             WM_CREATE => {
                 let qt = QT::default();
-                let instance = HINSTANCE(GetWindowLongPtrW(window, GWLP_HINSTANCE));
                 let scaling_factor = GetDpiForWindow(window) / USER_DEFAULT_SCREEN_DPI;
                 let icon = Icon::calendar_month_regular();
 
                 _ = qt.create_button(
-                    &window,
-                    &instance,
+                    window,
                     20,
                     30,
                     w!("Rounded"),
@@ -89,8 +87,7 @@ extern "system" fn window_process(
                     MouseEvent::default(),
                 );
                 _ = qt.create_button(
-                    &window,
-                    &instance,
+                    window,
                     20 + 110 * scaling_factor as i32,
                     30,
                     w!("Circular"),
@@ -102,8 +99,7 @@ extern "system" fn window_process(
                     MouseEvent::default(),
                 );
                 _ = qt.create_button(
-                    &window,
-                    &instance,
+                    window,
                     20 + 220 * scaling_factor as i32,
                     30,
                     w!("Square"),
@@ -115,8 +111,7 @@ extern "system" fn window_process(
                     MouseEvent::default(),
                 );
                 _ = qt.create_button(
-                    &window,
-                    &instance,
+                    window,
                     20 + 330 * scaling_factor as i32,
                     30,
                     w!("Primary"),
@@ -128,8 +123,7 @@ extern "system" fn window_process(
                     MouseEvent::default(),
                 );
                 _ = qt.create_button(
-                    &window,
-                    &instance,
+                    window,
                     20,
                     30 + 50 * scaling_factor as i32,
                     w!("Small with calender icon"),
@@ -141,8 +135,7 @@ extern "system" fn window_process(
                     MouseEvent::default(),
                 );
                 _ = qt.create_button(
-                    &window,
-                    &instance,
+                    window,
                     20,
                     30 + 100 * scaling_factor as i32,
                     w!("With calendar icon after contents"),
@@ -154,8 +147,7 @@ extern "system" fn window_process(
                     MouseEvent::default(),
                 );
                 _ = qt.create_button(
-                    &window,
-                    &instance,
+                    window,
                     20,
                     30 + 150 * scaling_factor as i32,
                     w!("Large with calender icon"),
@@ -167,8 +159,7 @@ extern "system" fn window_process(
                     MouseEvent::default(),
                 );
                 _ = qt.create_input(
-                    &window,
-                    &instance,
+                    window,
                     20,
                     30 + 200 * scaling_factor as i32,
                     200 * scaling_factor as i32,
@@ -179,8 +170,7 @@ extern "system" fn window_process(
                     None,
                 );
                 _ = qt.create_input(
-                    &window,
-                    &instance,
+                    window,
                     20 + 220 * scaling_factor as i32,
                     30 + 200 * scaling_factor as i32,
                     200 * scaling_factor as i32,
@@ -191,8 +181,7 @@ extern "system" fn window_process(
                     None,
                 );
                 _ = qt.create_input(
-                    &window,
-                    &instance,
+                    window,
                     20,
                     30 + 250 * scaling_factor as i32,
                     380 * scaling_factor as i32,
@@ -203,8 +192,7 @@ extern "system" fn window_process(
                     Some(w!("Small with placeholder")),
                 );
                 _ = qt.create_progress_bar(
-                    &window,
-                    &instance,
+                    window,
                     20,
                     30 + 300 * scaling_factor as i32,
                     400 * scaling_factor as i32,
@@ -214,8 +202,7 @@ extern "system" fn window_process(
                     &progress_bar::Thickness::Medium,
                 );
                 _ = qt.create_progress_bar(
-                    &window,
-                    &instance,
+                    window,
                     20,
                     30 + 325 * scaling_factor as i32,
                     400 * scaling_factor as i32,
@@ -234,10 +221,8 @@ extern "system" fn window_process(
             WM_CLOSE => {
                 let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *const QT;
                 let qt = &*raw;
-                let instance = HINSTANCE(GetWindowLongPtrW(window, GWLP_HINSTANCE));
                 match qt.open_dialog(
-                    &window,
-                    &instance,
+                    window,
                     w!("Dialog title"),
                     w!("Lorem ipsum dolor sit amet consectetur adipisicing elit. Quisquam exercitationem cumque repellendus eaque est dolor eius expedita nulla ullam? Tenetur reprehenderit aut voluptatum impedit voluptates in natus iure cumque eaque?"),
                     &dialog::ModelType::Alert

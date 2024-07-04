@@ -51,8 +51,7 @@ struct Context {
 impl QT {
     pub fn open_dialog(
         &self,
-        parent_window: &HWND,
-        instance: &HINSTANCE,
+        parent_window: HWND,
         title: PCWSTR,
         content: PCWSTR,
         modal_type: &ModelType,
@@ -69,7 +68,7 @@ impl QT {
             };
             RegisterClassExW(&window_class);
             let scaling_factor = get_scaling_factor(parent_window);
-            _ = EnableWindow(*parent_window, FALSE);
+            _ = EnableWindow(parent_window, FALSE);
             let boxed = Box::new(State {
                 qt: self.clone(),
                 title,
@@ -88,11 +87,11 @@ impl QT {
                 CW_USEDEFAULT,
                 (600f32 * scaling_factor) as i32,
                 (400f32 * scaling_factor) as i32,
-                *parent_window,
+                parent_window,
                 None,
-                *instance,
+                HINSTANCE(GetWindowLongPtrW(parent_window, GWLP_HINSTANCE) as _),
                 Some(Box::<State>::into_raw(boxed) as _),
-            );
+            )?;
 
             _ = ShowWindow(window, SW_SHOW);
 
@@ -110,15 +109,14 @@ impl QT {
                     break;
                 }
             }
-            _ = EnableWindow(*parent_window, TRUE);
-            SetActiveWindow(*parent_window);
+            _ = EnableWindow(parent_window, TRUE);
+            _ = SetActiveWindow(parent_window);
             Ok(result)
         }
     }
 }
 
 unsafe fn on_create(window: HWND, state: State) -> Result<Context> {
-    let instance = HINSTANCE(GetWindowLongPtrW(window, GWLP_HINSTANCE));
     let qt = &state.qt;
     let direct_write_factory = DWriteCreateFactory::<IDWriteFactory>(DWRITE_FACTORY_TYPE_SHARED)?;
     let title_typo = &qt.theme.typography_styles.subtitle1;
@@ -148,8 +146,7 @@ unsafe fn on_create(window: HWND, state: State) -> Result<Context> {
     )?;
 
     let ok_button = qt.create_button(
-        &window,
-        &instance,
+        window,
         0,
         0,
         w!("OK"),
@@ -167,8 +164,7 @@ unsafe fn on_create(window: HWND, state: State) -> Result<Context> {
         },
     )?;
     let cancel_button = qt.create_button(
-        &window,
-        &instance,
+        window,
         0,
         0,
         w!("Cancel"),
@@ -197,7 +193,7 @@ unsafe fn on_create(window: HWND, state: State) -> Result<Context> {
 }
 
 unsafe fn layout(window: HWND, context: &Context) -> Result<()> {
-    let scaling_factor = get_scaling_factor(&window);
+    let scaling_factor = get_scaling_factor(window);
 
     let mut button_rect = RECT::default();
     GetClientRect(context.cancel_button, &mut button_rect)?;
@@ -302,7 +298,7 @@ unsafe fn paint(window: HWND, context: &Context) -> Result<()> {
     let tokens = &state.qt.theme.tokens;
     let mut window_rect = RECT::default();
     GetClientRect(window, &mut window_rect)?;
-    let scaling_factor = get_scaling_factor(&window);
+    let scaling_factor = get_scaling_factor(window);
     let width = (window_rect.right - window_rect.left) as f32 / scaling_factor;
     let height = (window_rect.bottom - window_rect.top) as f32 / scaling_factor;
     let text_brush = context
