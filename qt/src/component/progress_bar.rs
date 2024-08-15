@@ -310,14 +310,15 @@ unsafe fn paint(window: HWND, context: &Context) -> Result<()> {
 }
 
 unsafe fn on_paint(window: HWND, context: &Context) -> Result<()> {
-    let mut ps = PAINTSTRUCT::default();
-    BeginPaint(window, &mut ps);
     context.render_target.BeginDraw();
-    let paint_result = paint(window, context);
-
-    let result = paint_result.and(context.render_target.EndDraw(None, None));
-    let _ = EndPaint(window, &ps);
-    result
+    let result = paint(window, context);
+    match result {
+        Ok(_) => context.render_target.EndDraw(None, None),
+        Err(_) => {
+            context.render_target.EndDraw(None, None)?;
+            result
+        }
+    }
 }
 
 unsafe fn on_dpi_changed(window: HWND, context: &Context) -> Result<()> {
@@ -387,13 +388,20 @@ extern "system" fn window_proc(
             _ = Box::<Context>::from_raw(raw);
             LRESULT(0)
         },
-        WM_PRINTCLIENT | WM_PAINT => unsafe {
+        WM_PAINT => unsafe {
             let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
             let context = &*raw;
-            match on_paint(window, context) {
-                Ok(_) => LRESULT(0),
-                Err(_) => DefWindowProcW(window, message, w_param, l_param),
-            }
+            let mut ps = PAINTSTRUCT::default();
+            BeginPaint(window, &mut ps);
+            _ = on_paint(window, context);
+            _ = EndPaint(window, &ps);
+            LRESULT(0)
+        },
+        WM_PRINTCLIENT => unsafe {
+            let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
+            let context = &*raw;
+            _ = on_paint(window, context);
+            LRESULT(0)
         },
         WM_DPICHANGED_BEFOREPARENT => unsafe {
             let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;

@@ -1386,10 +1386,8 @@ unsafe fn paint_line(window: HWND, context: &mut Context, dc: HDC, rev: bool) ->
     Ok(())
 }
 
-unsafe fn on_paint(window: HWND, context: &mut Context) -> Result<()> {
+unsafe fn on_paint(window: HWND, context: &mut Context, dc: HDC, full_draw: bool) -> Result<()> {
     let rev = context.is_focused;
-    let mut ps = PAINTSTRUCT::default();
-    let dc = BeginPaint(window, &mut ps);
     let mut rc_rgn = RECT::default();
     GetClipBox(dc, &mut rc_rgn);
 
@@ -1401,7 +1399,7 @@ unsafe fn on_paint(window: HWND, context: &mut Context) -> Result<()> {
 
     let mut rc_intersect = RECT::default();
     let rc_line = get_single_line_rect(window, context, 0, None)?;
-    if IntersectRect(&mut rc_intersect, &rc_rgn, &rc_line).into() {
+    if IntersectRect(&mut rc_intersect, &rc_rgn, &rc_line).into() || full_draw {
         let old_font = SelectObject(dc, context.font);
         SetBkColor(dc, context.background_color);
         if context.get_text_length() == 0 {
@@ -1485,7 +1483,7 @@ unsafe fn on_paint(window: HWND, context: &mut Context) -> Result<()> {
             Appearance::Outline => true,
             _ => false,
         };
-    if need_draw_border {
+    if need_draw_border || full_draw {
         SelectObject(
             dc,
             if context.is_focused {
@@ -1545,6 +1543,7 @@ unsafe fn on_paint(window: HWND, context: &mut Context) -> Result<()> {
         },
     )
     .into()
+        || full_draw
     {
         SelectObject(dc, context.border_bottom_pen);
 
@@ -1578,7 +1577,6 @@ unsafe fn on_paint(window: HWND, context: &mut Context) -> Result<()> {
         }
     }
 
-    _ = EndPaint(window, &ps);
     Ok(())
 }
 
@@ -1794,13 +1792,21 @@ extern "system" fn window_proc(
             _ = on_mouse_move(window, context, mouse_x, mouse_y);
             LRESULT(0)
         },
-        WM_PRINTCLIENT | WM_PAINT => unsafe {
+        WM_PAINT => unsafe {
             let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
             let context = &mut *raw;
-            match on_paint(window, context) {
-                Ok(_) => LRESULT(0),
-                Err(_) => DefWindowProcW(window, message, w_param, l_param),
-            }
+            let mut ps = PAINTSTRUCT::default();
+            let dc = BeginPaint(window, &mut ps);
+            _ = on_paint(window, context, dc, false);
+            _ = EndPaint(window, &ps);
+            LRESULT(0)
+        },
+        WM_PRINTCLIENT => unsafe {
+            let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
+            let context = &mut *raw;
+            let dc = HDC(w_param.0 as _);
+            _ = on_paint(window, context, dc, true);
+            LRESULT(0)
         },
         WM_ERASEBKGND => LRESULT(1),
         WM_PASTE => unsafe {
