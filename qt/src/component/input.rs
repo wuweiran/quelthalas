@@ -16,15 +16,15 @@ use windows::Win32::Globalization::{
 };
 use windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F;
 use windows::Win32::Graphics::Gdi::{
-    AngleArc, BeginPaint, CreateFontW, CreatePen, CreateRoundRectRgn, CreateSolidBrush,
-    DeleteObject, EndPaint, FillRect, GetBkColor, GetBkMode, GetClipBox, GetDC, GetObjectW,
-    GetSysColor, GetTextColor, GetTextExtentPoint32W, GetTextMetricsW, InflateRect, IntersectRect,
-    InvalidateRect, MapWindowPoints, MoveToEx, PatBlt, RedrawWindow, ReleaseDC, SelectObject,
-    SetBkColor, SetBkMode, SetTextColor, SetWindowRgn, TextOutW, BACKGROUND_MODE,
-    CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, COLOR_GRAYTEXT, COLOR_HIGHLIGHT, COLOR_HIGHLIGHTTEXT,
-    DEFAULT_CHARSET, ETO_OPTIONS, FF_SWISS, HBRUSH, HDC, HFONT, HPEN, LOGFONTW, OPAQUE,
-    OUT_OUTLINE_PRECIS, PAINTSTRUCT, PATCOPY, PS_SOLID, RDW_INVALIDATE, TEXTMETRICW,
-    VARIABLE_PITCH,
+    AngleArc, BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateFontW,
+    CreatePen, CreateRoundRectRgn, CreateSolidBrush, DeleteDC, DeleteObject, EndPaint, FillRect,
+    GetBkColor, GetBkMode, GetClipBox, GetDC, GetObjectW, GetSysColor, GetTextColor,
+    GetTextExtentPoint32W, GetTextMetricsW, InflateRect, IntersectRect, InvalidateRect,
+    MapWindowPoints, MoveToEx, PatBlt, RedrawWindow, ReleaseDC, SelectObject, SetBkColor,
+    SetBkMode, SetTextColor, SetWindowRgn, TextOutW, BACKGROUND_MODE, CLEARTYPE_QUALITY,
+    CLIP_DEFAULT_PRECIS, COLOR_GRAYTEXT, COLOR_HIGHLIGHT, COLOR_HIGHLIGHTTEXT, DEFAULT_CHARSET,
+    ETO_OPTIONS, FF_SWISS, HBRUSH, HDC, HFONT, HPEN, LOGFONTW, OPAQUE, OUT_OUTLINE_PRECIS,
+    PAINTSTRUCT, PATCOPY, PS_SOLID, RDW_INVALIDATE, SRCCOPY, TEXTMETRICW, VARIABLE_PITCH,
 };
 use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
 use windows::Win32::System::DataExchange::{
@@ -1795,10 +1795,28 @@ extern "system" fn window_proc(
         WM_PAINT => unsafe {
             let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
             let context = &mut *raw;
-            let mut ps = PAINTSTRUCT::default();
-            let dc = BeginPaint(window, &mut ps);
-            _ = on_paint(window, context, dc, false);
-            _ = EndPaint(window, &ps);
+            let mut rc = RECT::default();
+            if GetClientRect(window, &mut rc).is_ok() {
+                let mut ps = PAINTSTRUCT::default();
+                let dc = BeginPaint(window, &mut ps);
+                let mem_dc = CreateCompatibleDC(dc);
+                let bit_map = CreateCompatibleBitmap(dc, rc.right, rc.bottom);
+                SelectObject(mem_dc, bit_map);
+                _ = on_paint(window, context, mem_dc, false).and(BitBlt(
+                    dc,
+                    ps.rcPaint.left,
+                    ps.rcPaint.top,
+                    ps.rcPaint.right - ps.rcPaint.left,
+                    ps.rcPaint.bottom - ps.rcPaint.top,
+                    mem_dc,
+                    ps.rcPaint.left,
+                    ps.rcPaint.top,
+                    SRCCOPY,
+                ));
+                _ = DeleteObject(bit_map);
+                _ = DeleteDC(mem_dc);
+                _ = EndPaint(window, &ps);
+            }
             LRESULT(0)
         },
         WM_PRINTCLIENT => unsafe {
