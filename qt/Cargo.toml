@@ -13,4 +13,4 @@ features = ["Win32_Foundation", "Foundation_Numerics", "Win32_UI_WindowsAndMessa
 version = "0.58.0"
 
 [dependencies.windows-version]
-version = "0.1"
+version = "0.1.1"
