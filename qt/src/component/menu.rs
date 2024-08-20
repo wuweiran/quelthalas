@@ -373,7 +373,7 @@ unsafe fn menu_button_up(
             }
         }
     }
-    return Ok(ExecutionResult::NoExecuted);
+    Ok(ExecutionResult::NoExecuted)
 }
 
 unsafe fn menu_mouse_move(
@@ -440,7 +440,6 @@ fn select_next(menu: &mut Menu) {
             if let MenuItem::MenuDivider { .. } = menu.items[item_index] {
                 continue;
             }
-            println!("select {}", item_index);
             select_item(menu, Some(item_index));
             break;
         }
@@ -654,13 +653,13 @@ unsafe fn track_menu(menu: Rc<RefCell<Menu>>, x: i32, y: i32, owning_window: HWN
                         WPARAM(MSGF_MENU as usize),
                         LPARAM(window.0 as _),
                     );
-                    MsgWaitForMultipleObjectsEx(
-                        None,
-                        0xffffffff,
-                        QS_ALLINPUT,
-                        MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX_FLAGS::default(),
-                    );
                 }
+                MsgWaitForMultipleObjectsEx(
+                    None,
+                    0xffffffff,
+                    QS_ALLINPUT,
+                    MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX_FLAGS::default(),
+                );
             }
         }
 
