@@ -470,12 +470,29 @@ fn select_last(menu: &mut Menu) {
     }
 }
 
-fn menu_key_left(mt: &mut Tracker, message: u32) {
-    // TODO
+fn menu_key_left(mt: &mut Tracker) -> Result<()> {
+    let mut tmp_menu = mt.top_menu.clone();
+    let mut prev_menu = mt.top_menu.clone();
+
+    // close topmost popup
+    while !Rc::ptr_eq(&tmp_menu, &mt.current_menu) {
+        prev_menu = tmp_menu.clone();
+        let prev_menu_borrowed = prev_menu.borrow();
+        tmp_menu = get_sub_popup(&prev_menu_borrowed).unwrap();
+    }
+
+    {
+        let mut prev_menu_borrowed = prev_menu.borrow_mut();
+        hide_sub_popups(&mut prev_menu_borrowed)?;
+    }
+    mt.current_menu = prev_menu.clone();
+
+    Ok(())
 }
 
-fn menu_key_right(mt: &mut Tracker, message: u32) {
-    // TODO
+unsafe fn menu_key_right(context: &Context, mt: &mut Tracker) -> Result<()> {
+    mt.current_menu = show_sub_popup(&context.qt, mt.owning_window, mt.current_menu.clone())?;
+    Ok(())
 }
 
 fn get_sub_popup(menu: &Menu) -> Option<Rc<RefCell<Menu>>> {
@@ -487,7 +504,7 @@ fn get_sub_popup(menu: &Menu) -> Option<Rc<RefCell<Menu>>> {
             }
         }
     }
-    return None;
+    None
 }
 
 fn menu_key_escape(mt: &mut Tracker) -> Result<bool> {
@@ -566,7 +583,7 @@ unsafe fn show_sub_popup(
             }
         }
     }
-    return Ok(menu);
+    Ok(menu)
 }
 
 fn hide_sub_popups(menu: &mut Menu) -> Result<()> {
@@ -738,8 +755,12 @@ unsafe fn track_menu(menu: Rc<RefCell<Menu>>, x: i32, y: i32, owning_window: HWN
                         let mut menu = mt.current_menu.borrow_mut();
                         select_next(&mut menu)
                     }
-                    VK_LEFT => menu_key_left(&mut mt, msg.message),
-                    VK_RIGHT => menu_key_right(&mut mt, msg.message),
+                    VK_LEFT => menu_key_left(&mut mt)?,
+                    VK_RIGHT => {
+                        let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
+                        let context = &*raw;
+                        menu_key_right(context, &mut mt)?
+                    }
                     VK_ESCAPE => exit_menu = menu_key_escape(&mut mt)?,
                     _ => {
                         let _ = TranslateMessage(&mut msg);
