@@ -293,12 +293,12 @@ fn find_item_by_coordinates(menu: &Menu, point: &mut POINT) -> HitTest {
                 }
 
                 // On a scroll arrow. Update point so that it points to the item just outside menu_list_rect
-                if point.y < menu.menu_list_rect.top {
+                return if point.y < menu.menu_list_rect.top {
                     point.y = menu.menu_list_rect.top - 1;
-                    return HitTest::ScrollUp;
+                    HitTest::ScrollUp
                 } else {
                     point.y = menu.menu_list_rect.bottom;
-                    return HitTest::ScrollDown;
+                    HitTest::ScrollDown
                 }
             }
 
@@ -322,7 +322,7 @@ fn find_item_by_coordinates(menu: &Menu, point: &mut POINT) -> HitTest {
             }
         }
     }
-    return HitTest::Nowhere;
+    HitTest::Nowhere
 }
 
 fn switch_tracking(menu: &mut Menu, new_index: usize) -> Result<()> {
@@ -528,7 +528,7 @@ fn menu_key_escape(mt: &mut Tracker) -> Result<bool> {
         mt.current_menu = prev_menu.clone();
         return Ok(false);
     }
-    return Ok(true);
+    Ok(true)
 }
 
 const MENU_MARGIN: i32 = 4;
@@ -780,7 +780,7 @@ unsafe fn track_menu(menu: Rc<RefCell<Menu>>, x: i32, y: i32, owning_window: HWN
         }
 
         if remove_message {
-            PeekMessageW(&mut msg, None, msg.message, msg.message, PM_REMOVE);
+            _ = PeekMessageW(&mut msg, None, msg.message, msg.message, PM_REMOVE);
         }
     }
 
