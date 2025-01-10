@@ -68,7 +68,7 @@ impl QT {
             };
             RegisterClassExW(&window_class);
             let scaling_factor = get_scaling_factor(parent_window);
-            _ = EnableWindow(parent_window, FALSE);
+            _ = EnableWindow(parent_window, false);
             let boxed = Box::new(State {
                 qt: self.clone(),
                 title,
@@ -87,9 +87,11 @@ impl QT {
                 CW_USEDEFAULT,
                 (600f32 * scaling_factor) as i32,
                 (400f32 * scaling_factor) as i32,
-                parent_window,
+                Some(parent_window),
                 None,
-                HINSTANCE(GetWindowLongPtrW(parent_window, GWLP_HINSTANCE) as _),
+                Some(HINSTANCE(
+                    GetWindowLongPtrW(parent_window, GWLP_HINSTANCE) as _
+                )),
                 Some(Box::<State>::into_raw(boxed) as _),
             )?;
 
@@ -105,11 +107,11 @@ impl QT {
                 }
                 _ = TranslateMessage(&message);
                 DispatchMessageW(&message);
-                if !IsWindow(window).as_bool() {
+                if !IsWindow(Some(window)).as_bool() {
                     break;
                 }
             }
-            _ = EnableWindow(parent_window, TRUE);
+            _ = EnableWindow(parent_window, true);
             _ = SetActiveWindow(parent_window);
             Ok(result)
         }
@@ -159,7 +161,7 @@ unsafe fn on_create(window: HWND, state: State) -> Result<Context> {
             on_click: Box::new(move |_| {
                 let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
                 (*raw).result = DialogResult::OK;
-                _ = PostMessageW(window, WM_USER, WPARAM(0), LPARAM(0));
+                _ = PostMessageW(Some(window), WM_USER, WPARAM(0), LPARAM(0));
             }),
         },
     )?;
@@ -177,7 +179,7 @@ unsafe fn on_create(window: HWND, state: State) -> Result<Context> {
             on_click: Box::new(move |_| {
                 let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
                 (*raw).result = DialogResult::Cancel;
-                _ = PostMessageW(window, WM_USER, WPARAM(0), LPARAM(0));
+                _ = PostMessageW(Some(window), WM_USER, WPARAM(0), LPARAM(0));
             }),
         },
     )?;
@@ -244,7 +246,7 @@ unsafe fn layout(window: HWND, context: &Context) -> Result<()> {
         AdjustWindowRectExForDpi(
             &mut rect,
             WINDOW_STYLE(GetWindowLongPtrW(window, GWL_STYLE) as u32),
-            FALSE,
+            false,
             WINDOW_EX_STYLE(GetWindowLongPtrW(window, GWL_EXSTYLE) as u32),
             GetDpiForWindow(window),
         )?;
@@ -252,7 +254,7 @@ unsafe fn layout(window: HWND, context: &Context) -> Result<()> {
         AdjustWindowRectEx(
             &mut rect,
             WINDOW_STYLE(GetWindowLongPtrW(window, GWL_STYLE) as u32),
-            FALSE,
+            false,
             WINDOW_EX_STYLE(GetWindowLongPtrW(window, GWL_EXSTYLE) as u32),
         )?;
     }
@@ -279,7 +281,7 @@ unsafe fn layout(window: HWND, context: &Context) -> Result<()> {
         (buttons_top * scaling_factor) as i32,
         cancel_button_width,
         cancel_button_height,
-        FALSE,
+        false,
     )?;
     MoveWindow(
         context.ok_button,
@@ -287,7 +289,7 @@ unsafe fn layout(window: HWND, context: &Context) -> Result<()> {
         (buttons_top * scaling_factor) as i32,
         ok_button_width,
         ok_button_height,
-        FALSE,
+        false,
     )?;
 
     Ok(())
@@ -391,7 +393,7 @@ extern "system" fn window_proc(
             let new_dpi_y = (w_param.0 >> 16) as i16 as f32;
             context.render_target.SetDpi(new_dpi_x, new_dpi_y);
             _ = layout(window, &context);
-            _ = InvalidateRect(window, None, false);
+            _ = InvalidateRect(Some(window), None, false);
             LRESULT(TRUE.0 as isize)
         },
         WM_DESTROY => unsafe {

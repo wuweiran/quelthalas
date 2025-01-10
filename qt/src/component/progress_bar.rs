@@ -106,9 +106,11 @@ impl QT {
                 y,
                 width,
                 (boxed.as_ref().get_height() * scaling_factor) as i32,
-                parent_window,
+                Some(parent_window),
                 None,
-                HINSTANCE(GetWindowLongPtrW(parent_window, GWLP_HINSTANCE) as _),
+                Some(HINSTANCE(
+                    GetWindowLongPtrW(parent_window, GWLP_HINSTANCE) as _
+                )),
                 Some(Box::<State>::into_raw(boxed) as _),
             )
         }
@@ -127,7 +129,7 @@ impl IUIAnimationTimerEventHandler_Impl for AnimationTimerEventHandler_Impl {
 
     fn OnPostUpdate(&self) -> Result<()> {
         unsafe {
-            let _ = InvalidateRect(self.window, None, false);
+            let _ = InvalidateRect(Some(self.window), None, false);
 
             let raw = GetWindowLongPtrW(self.window, GWLP_USERDATA) as *mut Context;
             let context = &mut *raw;
@@ -193,7 +195,7 @@ unsafe fn on_create(window: HWND, state: State) -> Result<Context> {
         corner_diameter,
         corner_diameter,
     );
-    SetWindowRgn(window, region, TRUE);
+    SetWindowRgn(window, Some(region), true);
     let animation_timer: IUIAnimationTimer =
         CoCreateInstance(&UIAnimationTimer, None, CLSCTX_INPROC_SERVER)?;
     let transition_library: IUIAnimationTransitionLibrary2 =
@@ -340,7 +342,7 @@ unsafe fn on_dpi_changed(window: HWND, context: &Context) -> Result<()> {
     })?;
     let new_dpi = GetDpiForWindow(window);
     context.render_target.SetDpi(new_dpi as f32, new_dpi as f32);
-    let _ = InvalidateRect(window, None, false);
+    let _ = InvalidateRect(Some(window), None, false);
 
     let tokens = &context.state.qt.theme.tokens;
     let corner_diameter = match context.state.shape {
@@ -359,7 +361,7 @@ unsafe fn on_dpi_changed(window: HWND, context: &Context) -> Result<()> {
         corner_diameter,
         corner_diameter,
     );
-    SetWindowRgn(window, region, TRUE);
+    SetWindowRgn(window, Some(region), true);
     Ok(())
 }
 

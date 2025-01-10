@@ -201,9 +201,11 @@ impl QT {
                 y,
                 (boxed.as_ref().get_min_width() * scaling_factor) as i32,
                 (boxed.as_ref().get_min_height() * scaling_factor) as i32,
-                parent_window,
+                Some(parent_window),
                 None,
-                HINSTANCE(GetWindowLongPtrW(parent_window, GWLP_HINSTANCE) as _),
+                Some(HINSTANCE(
+                    GetWindowLongPtrW(parent_window, GWLP_HINSTANCE) as _
+                )),
                 Some(Box::<State>::into_raw(boxed) as _),
             )
         }
@@ -405,7 +407,7 @@ unsafe fn layout(window: HWND, context: &Context) -> Result<()> {
         corner_diameter,
         corner_diameter,
     );
-    SetWindowRgn(window, region, TRUE);
+    SetWindowRgn(window, Some(region), true);
     Ok(())
 }
 
@@ -421,7 +423,7 @@ impl IUIAnimationTimerEventHandler_Impl for AnimationTimerEventHandler_Impl {
 
     fn OnPostUpdate(&self) -> Result<()> {
         unsafe {
-            _ = InvalidateRect(self.window, None, false);
+            _ = InvalidateRect(Some(self.window), None, false);
         }
         Ok(())
     }
@@ -759,7 +761,7 @@ extern "system" fn window_proc(
             _ = layout(window, &context);
             let new_dpi = GetDpiForWindow(window);
             context.render_target.SetDpi(new_dpi as f32, new_dpi as f32);
-            _ = InvalidateRect(window, None, false);
+            _ = InvalidateRect(Some(window), None, false);
             LRESULT(0)
         },
         WM_MOUSEMOVE => unsafe {
@@ -789,7 +791,7 @@ extern "system" fn window_proc(
                             let _ = on_mouse_leave(context);
                         }
                     }
-                    _ = DeleteObject(region);
+                    _ = DeleteObject(region.into());
                 }
             }
             LRESULT(0)

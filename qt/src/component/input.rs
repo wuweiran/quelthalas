@@ -280,9 +280,11 @@ impl QT {
                 y,
                 (boxed.width * scaling_factor) as i32,
                 (boxed.get_field_height() * scaling_factor) as i32,
-                parent_window,
+                Some(parent_window),
                 None,
-                HINSTANCE(GetWindowLongPtrW(parent_window, GWLP_HINSTANCE) as _),
+                Some(HINSTANCE(
+                    GetWindowLongPtrW(parent_window, GWLP_HINSTANCE) as _
+                )),
                 Some(Box::<State>::into_raw(boxed) as _),
             )
         }
@@ -305,7 +307,7 @@ unsafe fn get_single_line_rect(
         Some(col) => position_from_char(window, context, col)?.x,
     };
     let pt3 = if !context.ssa.is_null() && start_col < context.get_text_length() {
-        ScriptStringCPtoX(context.ssa, start_col as i32, FALSE)? + context.format_rect.left
+        ScriptStringCPtoX(context.ssa, start_col as i32, false)? + context.format_rect.left
     } else {
         pt1
     };
@@ -333,7 +335,7 @@ unsafe fn invalidate_text(
     let line_rect = get_single_line_rect(window, context, actual_start, Some(actual_end))?;
     let mut rc = RECT::default();
     if IntersectRect(&mut rc, &line_rect, &context.format_rect).into() {
-        _ = InvalidateRect(window, Some(&rc), true);
+        _ = InvalidateRect(Some(window), Some(&rc), true);
     }
     Ok(())
 }
@@ -501,7 +503,7 @@ unsafe fn replace_selection(
 
     start = start + replace.len();
     set_selection(window, context, Some(start), Some(start))?;
-    _ = InvalidateRect(window, Some(&context.format_rect), false);
+    _ = InvalidateRect(Some(window), Some(&context.format_rect), false);
 
     scroll_caret(window, context)?;
     update_scroll_info(window, context);
@@ -521,8 +523,8 @@ unsafe fn update_uniscribe_data(
         if length == 0 {
             return Ok(null_mut());
         }
-        let udc = dc.unwrap_or(GetDC(window));
-        let old_font = SelectObject(udc, context.font);
+        let udc = dc.unwrap_or(GetDC(Some(window)));
+        let old_font = SelectObject(udc, context.font.into());
         match context.state.input_type {
             Type::Password => {
                 ScriptStringAnalyse(
@@ -562,7 +564,7 @@ unsafe fn update_uniscribe_data(
 
         SelectObject(udc, old_font);
         if dc.map(|x| x == udc).unwrap_or(false) {
-            ReleaseDC(window, udc);
+            ReleaseDC(Some(window), udc);
         }
     }
     Ok(context.ssa)
@@ -589,7 +591,7 @@ unsafe fn scroll_caret(window: HWND, context: &mut Context) -> Result<()> {
                 break;
             }
         }
-        _ = InvalidateRect(window, Some(&context.format_rect), true);
+        _ = InvalidateRect(Some(window), Some(&context.format_rect), true);
     } else if x > context.format_rect.right {
         let len = context.get_text_length();
         let goal = context.format_rect.right - format_width / 3;
@@ -601,7 +603,7 @@ unsafe fn scroll_caret(window: HWND, context: &mut Context) -> Result<()> {
                 break;
             }
         }
-        _ = InvalidateRect(window, Some(&context.format_rect), true);
+        _ = InvalidateRect(Some(window), Some(&context.format_rect), true);
     }
 
     set_caret_position(window, context, context.selection_end)?;
@@ -666,7 +668,7 @@ unsafe fn set_rect_np(window: HWND, context: &mut Context) -> Result<()> {
         corner_diameter,
         corner_diameter,
     );
-    SetWindowRgn(window, region, TRUE);
+    SetWindowRgn(window, Some(region), true);
     let border_width = (1.0 * scaling_factor) as i32;
     _ = InflateRect(&mut context.format_rect, -border_width, 0);
     if context.format_rect.bottom - context.format_rect.top > context.line_height + 2 * border_width
@@ -702,7 +704,7 @@ unsafe fn position_from_char(window: HWND, context: &mut Context, index: usize) 
                 x_off = (*size).cx as usize;
                 x_off += context.char_width as usize * leftover;
             } else {
-                x_off = ScriptStringCPtoX(context.ssa, context.x_offset as i32, FALSE)? as usize;
+                x_off = ScriptStringCPtoX(context.ssa, context.x_offset as i32, false)? as usize;
             }
         } else {
             x_off = 0;
@@ -718,7 +720,7 @@ unsafe fn position_from_char(window: HWND, context: &mut Context, index: usize) 
                 0
             }
         } else if !context.ssa.is_null() {
-            ScriptStringCPtoX(context.ssa, index as i32, FALSE)? as usize
+            ScriptStringCPtoX(context.ssa, index as i32, false)? as usize
         } else {
             0
         }
@@ -745,7 +747,7 @@ unsafe fn char_from_position(window: HWND, context: &mut Context, point: POINT) 
                 let size = ScriptString_pSize(context.ssa);
                 (*size).cx
             } else {
-                ScriptStringCPtoX(context.ssa, context.x_offset as i32, FALSE)?
+                ScriptStringCPtoX(context.ssa, context.x_offset as i32, false)?
             }
         } else {
             0
@@ -847,10 +849,10 @@ unsafe fn create_font_from_typography_style(
         0,                                      // Italic (not italic)
         0,                                      // Underline (not underlined)
         0,                                      // Strikeout (not struck out)
-        DEFAULT_CHARSET.0 as u32,               // Character set (default)
-        OUT_OUTLINE_PRECIS.0 as u32,            // Output precision (outline)
-        CLIP_DEFAULT_PRECIS.0 as u32,           // Clipping precision (default)
-        CLEARTYPE_QUALITY.0 as u32,             // Font quality (ClearType)
+        DEFAULT_CHARSET,                        // Character set (default)
+        OUT_OUTLINE_PRECIS,                     // Output precision (outline)
+        CLIP_DEFAULT_PRECIS,                    // Clipping precision (default)
+        CLEARTYPE_QUALITY,                      // Font quality (ClearType)
         (FF_SWISS.0 | VARIABLE_PITCH.0) as u32, // Pitch and family (variable pitch)
         typography_style.font_family,
     )
@@ -874,7 +876,7 @@ impl IUIAnimationTimerEventHandler_Impl for AnimationTimerEventHandler_Impl {
             let border_width = (1.0 * scaling_factor) as i32;
             let border_bottom_width = (2.0 * scaling_factor) as i32;
             _ = InvalidateRect(
-                self.window,
+                Some(self.window),
                 Some(&RECT {
                     left: rc.left,
                     top: (rc.bottom - border_bottom_width).max(rc.top + border_width),
@@ -897,14 +899,14 @@ unsafe fn on_create(window: HWND, state: State) -> Result<Context> {
     let scaling_factor = get_scaling_factor(window);
     let typography_style = state.get_typography_style();
     let font = create_font_from_typography_style(typography_style, scaling_factor);
-    let dc = GetDC(window);
-    let old_font = SelectObject(dc, font);
+    let dc = GetDC(Some(window));
+    let old_font = SelectObject(dc, font.into());
     let mut tm = TEXTMETRICW::default();
     if !GetTextMetricsW(dc, &mut tm).as_bool() {
         return Err(Error::empty());
     }
     SelectObject(dc, old_font);
-    ReleaseDC(window, dc);
+    ReleaseDC(Some(window), dc);
     let animation_timer: IUIAnimationTimer =
         CoCreateInstance(&UIAnimationTimer, None, CLSCTX_INPROC_SERVER)?;
     let transition_library: IUIAnimationTransitionLibrary2 =
@@ -992,23 +994,23 @@ unsafe fn on_char(window: HWND, context: &mut Context, char: u16) -> Result<()> 
             // ^C
             if let Type::Password = context.state.input_type {
             } else {
-                SendMessageW(window, WM_COPY, WPARAM(0), LPARAM(0));
+                SendMessageW(window, WM_COPY, None, None);
             }
         }
         0x16 => {
             // ^V
-            SendMessageW(window, WM_PASTE, WPARAM(0), LPARAM(0));
+            SendMessageW(window, WM_PASTE, None, None);
         }
         0x18 => {
             // ^X
             if let Type::Password = context.state.input_type {
             } else {
-                SendMessageW(window, WM_CUT, WPARAM(0), LPARAM(0));
+                SendMessageW(window, WM_CUT, None, None);
             }
         }
         0x1A => {
             // ^Z
-            SendMessageW(window, WM_UNDO, WPARAM(0), LPARAM(0));
+            SendMessageW(window, WM_UNDO, None, None);
         }
         _ => {
             if let Type::Number = context.state.input_type {
@@ -1038,9 +1040,9 @@ unsafe fn on_copy(window: HWND, context: &mut Context) -> Result<()> {
     );
     *(dst as *mut u16).offset(length as isize) = 0;
     GlobalUnlock(hdst).or_else(|error| error.code().ok())?;
-    OpenClipboard(window)?;
+    OpenClipboard(Some(window))?;
     EmptyClipboard()?;
-    SetClipboardData(CF_UNICODETEXT.0 as u32, HANDLE(hdst.0 as _))?;
+    SetClipboardData(CF_UNICODETEXT.0 as u32, Some(HANDLE(hdst.0 as _)))?;
     CloseClipboard()?;
     Ok(())
 }
@@ -1052,7 +1054,7 @@ unsafe fn on_cut(window: HWND, context: &mut Context) -> Result<()> {
 }
 
 unsafe fn on_paste(window: HWND, context: &mut Context) -> Result<()> {
-    OpenClipboard(window)?;
+    OpenClipboard(Some(window))?;
     let hsrc = GetClipboardData(CF_UNICODETEXT.0 as u32)?;
     if !hsrc.is_invalid() {
         let src = GlobalLock(HGLOBAL(hsrc.0 as _));
@@ -1167,7 +1169,7 @@ unsafe fn on_kill_focus(window: HWND, context: &mut Context) -> Result<()> {
         context.selection_start,
         context.selection_end,
     )?;
-    _ = RedrawWindow(window, None, None, RDW_INVALIDATE);
+    _ = RedrawWindow(Some(window), None, None, RDW_INVALIDATE);
     Ok(())
 }
 
@@ -1275,7 +1277,7 @@ unsafe fn on_left_button_down(
     set_selection(window, context, Some(start), Some(end))?;
     scroll_caret(window, context)?;
     if !context.is_focused {
-        SetFocus(window)?;
+        SetFocus(Some(window))?;
     }
     Ok(())
 }
@@ -1374,7 +1376,7 @@ unsafe fn paint_line(window: HWND, context: &mut Context, dc: HDC, rev: bool) ->
             Some(&context.format_rect),
             start as i32,
             end as i32,
-            FALSE,
+            false,
         )?;
     } else if rev && start == end && context.is_focused {
         x = x + paint_text(context, dc, x, y, 0, start, false)?;
@@ -1400,7 +1402,7 @@ unsafe fn on_paint(window: HWND, context: &mut Context, dc: HDC, full_draw: bool
     let mut rc_intersect = RECT::default();
     let rc_line = get_single_line_rect(window, context, 0, None)?;
     if IntersectRect(&mut rc_intersect, &rc_rgn, &rc_line).into() || full_draw {
-        let old_font = SelectObject(dc, context.font);
+        let old_font = SelectObject(dc, context.font.into());
         SetBkColor(dc, context.background_color);
         if context.get_text_length() == 0 {
             if let Some(placeholder) = context.state.placeholder {
@@ -1490,7 +1492,8 @@ unsafe fn on_paint(window: HWND, context: &mut Context, dc: HDC, full_draw: bool
                 context.border_pen_focused
             } else {
                 context.border_pen
-            },
+            }
+            .into(),
         );
         let radius = (tokens.border_radius_medium * scaling_factor) as i32;
         _ = MoveToEx(dc, rc.right - radius, rc.top, None).as_bool()
@@ -1545,7 +1548,7 @@ unsafe fn on_paint(window: HWND, context: &mut Context, dc: HDC, full_draw: bool
     .into()
         || full_draw
     {
-        SelectObject(dc, context.border_bottom_pen);
+        SelectObject(dc, context.border_bottom_pen.into());
 
         let radius = (tokens.border_radius_medium * scaling_factor) as i32;
 
@@ -1563,7 +1566,7 @@ unsafe fn on_paint(window: HWND, context: &mut Context, dc: HDC, full_draw: bool
             .as_bool();
 
         if context.is_focused {
-            SelectObject(dc, context.border_bottom_color_focused_brush);
+            SelectObject(dc, context.border_bottom_color_focused_brush.into());
             let percentage = context.bottom_focus_border.GetValue()?;
             _ = PatBlt(
                 dc,
@@ -1596,8 +1599,8 @@ unsafe fn set_focus(window: HWND, context: &mut Context) -> Result<()> {
         context.line_height,
     )?;
     set_caret_position(window, context, context.selection_end)?;
-    ShowCaret(window)?;
-    _ = RedrawWindow(window, None, None, RDW_INVALIDATE);
+    ShowCaret(Some(window))?;
+    _ = RedrawWindow(Some(window), None, None, RDW_INVALIDATE);
     let tokens = &context.state.qt.theme.tokens;
     let transition = context
         .transition_library
@@ -1634,7 +1637,7 @@ unsafe fn update_imm_composition_font(window: HWND, context: &Context) {
     let himc = ImmGetContext(window);
     let mut composition_font = LOGFONTW::default();
     GetObjectW(
-        context.font,
+        context.font.into(),
         size_of::<LOGFONTW>() as i32,
         Some(&mut composition_font as *mut LOGFONTW as _),
     );
@@ -1673,12 +1676,12 @@ extern "system" fn window_proc(
             let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
             let mut context = Box::<Context>::from_raw(raw);
             _ = context.invalidate_uniscribe_data();
-            _ = DeleteObject(context.font);
-            _ = DeleteObject(context.background_color_brush);
-            _ = DeleteObject(context.border_pen);
-            _ = DeleteObject(context.border_pen_focused);
-            _ = DeleteObject(context.border_bottom_pen);
-            _ = DeleteObject(context.border_bottom_color_focused_brush);
+            _ = DeleteObject(context.font.into());
+            _ = DeleteObject(context.background_color_brush.into());
+            _ = DeleteObject(context.border_pen.into());
+            _ = DeleteObject(context.border_pen_focused.into());
+            _ = DeleteObject(context.border_bottom_pen.into());
+            _ = DeleteObject(context.border_bottom_color_focused_brush.into());
             LRESULT(0)
         },
         WM_CHAR => unsafe {
@@ -1799,21 +1802,21 @@ extern "system" fn window_proc(
             if GetClientRect(window, &mut rc).is_ok() {
                 let mut ps = PAINTSTRUCT::default();
                 let dc = BeginPaint(window, &mut ps);
-                let mem_dc = CreateCompatibleDC(dc);
+                let mem_dc = CreateCompatibleDC(Some(dc));
                 let bit_map = CreateCompatibleBitmap(dc, rc.right, rc.bottom);
-                SelectObject(mem_dc, bit_map);
+                SelectObject(mem_dc, bit_map.into());
                 _ = on_paint(window, context, mem_dc, false).and(BitBlt(
                     dc,
                     ps.rcPaint.left,
                     ps.rcPaint.top,
                     ps.rcPaint.right - ps.rcPaint.left,
                     ps.rcPaint.bottom - ps.rcPaint.top,
-                    mem_dc,
+                    Some(mem_dc),
                     ps.rcPaint.left,
                     ps.rcPaint.top,
                     SRCCOPY,
                 ));
-                _ = DeleteObject(bit_map);
+                _ = DeleteObject(bit_map.into());
                 _ = DeleteDC(mem_dc);
                 _ = EndPaint(window, &ps);
             }
@@ -1878,7 +1881,7 @@ extern "system" fn window_proc(
                         Ok(point) => {
                             char_pos.pt.x = point.x;
                             char_pos.pt.y = point.y;
-                            MapWindowPoints(window, HWND_DESKTOP, &mut [char_pos.pt]);
+                            MapWindowPoints(Some(window), Some(HWND_DESKTOP), &mut [char_pos.pt]);
                             char_pos.cLineHeight = context.line_height as u32;
                             let mut doc_points = [
                                 POINT {
@@ -1890,7 +1893,7 @@ extern "system" fn window_proc(
                                     y: context.format_rect.bottom,
                                 },
                             ];
-                            MapWindowPoints(window, HWND_DESKTOP, &mut doc_points);
+                            MapWindowPoints(Some(window), Some(HWND_DESKTOP), &mut doc_points);
                             char_pos.rcDocument = RECT {
                                 left: doc_points[0].x,
                                 top: doc_points[0].y,
@@ -1923,15 +1926,15 @@ extern "system" fn window_proc(
                 let tokens = &context.state.qt.theme.tokens;
                 let typography_style = context.state.get_typography_style();
                 let font = create_font_from_typography_style(typography_style, scaling_factor);
-                let dc = GetDC(window);
-                let old_font = SelectObject(dc, font);
+                let dc = GetDC(Some(window));
+                let old_font = SelectObject(dc, font.into());
                 let mut tm = TEXTMETRICW::default();
                 if GetTextMetricsW(dc, &mut tm).into() {
                     context.line_height = tm.tmHeight;
                     context.char_width = tm.tmAveCharWidth;
                 }
                 SelectObject(dc, old_font);
-                ReleaseDC(window, dc);
+                ReleaseDC(Some(window), dc);
                 context.font = font;
                 context.border_pen = CreatePen(
                     PS_SOLID,
@@ -1949,7 +1952,7 @@ extern "system" fn window_proc(
                     convert_to_color_ref(&tokens.color_neutral_stroke_accessible),
                 );
                 if set_rect_np(window, context).is_ok() {
-                    _ = InvalidateRect(window, None, true);
+                    _ = InvalidateRect(Some(window), None, true);
                 }
             }
             LRESULT(0)

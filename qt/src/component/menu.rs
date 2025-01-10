@@ -145,7 +145,7 @@ impl QT {
             ..Default::default()
         };
         RegisterClassExW(&window_class);
-        if !IsWindow(parent_window).as_bool() {
+        if !IsWindow(Some(parent_window)).as_bool() {
             return Err(Error::from(ERROR_INVALID_WINDOW_HANDLE));
         }
         let menu = Rc::new(RefCell::new(convert_menu_info_list_to_menu(menu_list)));
@@ -189,9 +189,11 @@ unsafe fn init_popup(
         y,
         0,
         0,
-        owning_window,
+        Some(owning_window),
         None,
-        HINSTANCE(GetWindowLongPtrW(owning_window, GWLP_HINSTANCE) as _),
+        Some(HINSTANCE(
+            GetWindowLongPtrW(owning_window, GWLP_HINSTANCE) as _
+        )),
         Some(Box::<CreateParams>::into_raw(boxed) as _),
     )?;
     menu.borrow_mut().window = Some(window);
@@ -203,14 +205,14 @@ unsafe fn init_tracking(owning_window: HWND) -> Result<()> {
     SendMessageW(
         owning_window,
         WM_ENTERMENULOOP,
-        WPARAM(TRUE.0 as usize),
-        LPARAM(0),
+        Some(WPARAM(TRUE.0 as usize)),
+        None,
     );
     SendMessageW(
         owning_window,
         WM_SETCURSOR,
-        WPARAM(owning_window.0 as usize),
-        LPARAM(HTCAPTION as isize),
+        Some(WPARAM(owning_window.0 as usize)),
+        Some(LPARAM(HTCAPTION as isize)),
     );
     Ok(())
 }
@@ -299,7 +301,7 @@ fn find_item_by_coordinates(menu: &Menu, point: &mut POINT) -> HitTest {
                 } else {
                     point.y = menu.menu_list_rect.bottom;
                     HitTest::ScrollDown
-                }
+                };
             }
 
             for (index, item) in menu.items.iter().enumerate() {
@@ -414,8 +416,8 @@ fn select_item(menu: &mut Menu, index: Option<usize>) {
     }
     menu.focused_item_index = index;
     unsafe {
-        if let Some(window) = menu.window {
-            _ = RedrawWindow(window, None, None, RDW_INVALIDATE | RDW_NOCHILDREN);
+        if menu.window.is_some() {
+            _ = RedrawWindow(menu.window, None, None, RDW_INVALIDATE | RDW_NOCHILDREN);
         }
     }
 }
@@ -614,7 +616,7 @@ unsafe fn execute_focused_item(
                     Ok(ExecutionResult::NoExecuted)
                 } else {
                     PostMessageW(
-                        mt.owning_window,
+                        Some(mt.owning_window),
                         WM_COMMAND,
                         WPARAM(*id as usize),
                         LPARAM(0),
@@ -667,8 +669,8 @@ unsafe fn track_menu(menu: Rc<RefCell<Menu>>, x: i32, y: i32, owning_window: HWN
                     SendMessageW(
                         owning_window,
                         WM_ENTERIDLE,
-                        WPARAM(MSGF_MENU as usize),
-                        LPARAM(window.0 as _),
+                        Some(WPARAM(MSGF_MENU as usize)),
+                        Some(LPARAM(window.0 as _)),
                     );
                 }
                 MsgWaitForMultipleObjectsEx(
@@ -785,7 +787,7 @@ unsafe fn track_menu(menu: Rc<RefCell<Menu>>, x: i32, y: i32, owning_window: HWN
     }
 
     ReleaseCapture()?;
-    if IsWindow(mt.owning_window).into() {
+    if IsWindow(Some(mt.owning_window)).as_bool() {
         {
             let mut top_menu = mt.top_menu.borrow_mut();
             hide_sub_popups(&mut top_menu)?;
@@ -807,8 +809,8 @@ unsafe fn exit_tracking(owning_window: HWND) -> Result<()> {
     SendMessageW(
         owning_window,
         WM_EXITMENULOOP,
-        WPARAM(TRUE.0 as usize),
-        LPARAM(0),
+        Some(WPARAM(TRUE.0 as usize)),
+        None,
     );
     _ = ShowCaret(None);
     Ok(())
@@ -971,7 +973,7 @@ unsafe fn show_popup(
     let scaled_height = (height as f32 * scaling_factor) as i32;
     SetWindowPos(
         window,
-        HWND_TOPMOST,
+        Some(HWND_TOPMOST),
         x,
         y,
         scaled_width,
@@ -987,7 +989,7 @@ unsafe fn show_popup(
         corner_diameter,
         corner_diameter,
     );
-    SetWindowRgn(window, region, FALSE);
+    SetWindowRgn(window, Some(region), false);
     Ok(())
 }
 

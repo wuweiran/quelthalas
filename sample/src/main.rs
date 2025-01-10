@@ -45,7 +45,7 @@ fn main() -> Result<()> {
             CW_USEDEFAULT,
             None,
             None,
-            instance,
+            Some(instance),
             None,
         )?;
 
