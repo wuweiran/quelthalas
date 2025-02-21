@@ -1,25 +1,25 @@
 use std::mem::size_of;
 
-use windows::core::*;
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Direct2D::Common::{D2D_RECT_F, D2D_SIZE_U};
 use windows::Win32::Graphics::Direct2D::{
-    D2D1CreateFactory, ID2D1Factory1, ID2D1HwndRenderTarget, D2D1_DRAW_TEXT_OPTIONS_NONE,
-    D2D1_FACTORY_OPTIONS, D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_HWND_RENDER_TARGET_PROPERTIES,
-    D2D1_RENDER_TARGET_PROPERTIES,
+    D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_FACTORY_OPTIONS, D2D1_FACTORY_TYPE_SINGLE_THREADED,
+    D2D1_HWND_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_PROPERTIES, D2D1CreateFactory,
+    ID2D1Factory1, ID2D1HwndRenderTarget,
 };
 use windows::Win32::Graphics::DirectWrite::{
-    DWriteCreateFactory, IDWriteFactory, IDWriteTextFormat, DWRITE_FACTORY_TYPE_SHARED,
-    DWRITE_MEASURING_MODE_NATURAL, DWRITE_TEXT_METRICS,
+    DWRITE_FACTORY_TYPE_SHARED, DWRITE_MEASURING_MODE_NATURAL, DWRITE_TEXT_METRICS,
+    DWriteCreateFactory, IDWriteFactory, IDWriteTextFormat,
 };
 use windows::Win32::Graphics::Gdi::{BeginPaint, EndPaint, InvalidateRect, PAINTSTRUCT};
 use windows::Win32::UI::HiDpi::{AdjustWindowRectExForDpi, GetDpiForWindow};
 use windows::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, SetActiveWindow};
 use windows::Win32::UI::WindowsAndMessaging::*;
+use windows::core::*;
 use windows_version::OsVersion;
 
 use crate::component::button;
-use crate::{get_scaling_factor, MouseEvent, QT};
+use crate::{MouseEvent, QT, get_scaling_factor};
 
 #[derive(Copy, Clone)]
 pub enum DialogResult {
@@ -118,244 +118,257 @@ impl QT {
     }
 }
 
-unsafe fn on_create(window: HWND, state: State) -> Result<Context> {
+fn on_create(window: HWND, state: State) -> Result<Context> {
     let qt = &state.qt;
-    let direct_write_factory = DWriteCreateFactory::<IDWriteFactory>(DWRITE_FACTORY_TYPE_SHARED)?;
-    let title_typo = &qt.theme.typography_styles.subtitle1;
-    let title_text_format = title_typo.create_text_format(&direct_write_factory)?;
-    let content_typo = &qt.theme.typography_styles.body1;
-    let content_text_format = content_typo.create_text_format(&direct_write_factory)?;
+    unsafe {
+        let direct_write_factory =
+            DWriteCreateFactory::<IDWriteFactory>(DWRITE_FACTORY_TYPE_SHARED)?;
+        let title_typo = &qt.theme.typography_styles.subtitle1;
+        let title_text_format = title_typo.create_text_format(&direct_write_factory)?;
+        let content_typo = &qt.theme.typography_styles.body1;
+        let content_text_format = content_typo.create_text_format(&direct_write_factory)?;
 
-    let factory = D2D1CreateFactory::<ID2D1Factory1>(
-        D2D1_FACTORY_TYPE_SINGLE_THREADED,
-        Some(&D2D1_FACTORY_OPTIONS::default()),
-    )?;
-    let dpi = GetDpiForWindow(window);
-    let render_target = factory.CreateHwndRenderTarget(
-        &D2D1_RENDER_TARGET_PROPERTIES {
-            dpiX: dpi as f32,
-            dpiY: dpi as f32,
-            ..Default::default()
-        },
-        &D2D1_HWND_RENDER_TARGET_PROPERTIES {
-            hwnd: window,
-            pixelSize: D2D_SIZE_U {
-                width: 600u32,
-                height: 400u32,
+        let factory = D2D1CreateFactory::<ID2D1Factory1>(
+            D2D1_FACTORY_TYPE_SINGLE_THREADED,
+            Some(&D2D1_FACTORY_OPTIONS::default()),
+        )?;
+        let dpi = GetDpiForWindow(window);
+        let render_target = factory.CreateHwndRenderTarget(
+            &D2D1_RENDER_TARGET_PROPERTIES {
+                dpiX: dpi as f32,
+                dpiY: dpi as f32,
+                ..Default::default()
             },
-            presentOptions: Default::default(),
-        },
-    )?;
+            &D2D1_HWND_RENDER_TARGET_PROPERTIES {
+                hwnd: window,
+                pixelSize: D2D_SIZE_U {
+                    width: 600u32,
+                    height: 400u32,
+                },
+                presentOptions: Default::default(),
+            },
+        )?;
 
-    let ok_button = qt.create_button(
-        window,
-        0,
-        0,
-        w!("OK"),
-        &button::Appearance::Primary,
-        None,
-        None,
-        &button::Shape::Rounded,
-        &button::Size::Medium,
-        MouseEvent {
-            on_click: Box::new(move |_| {
-                let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
-                (*raw).result = DialogResult::OK;
-                _ = PostMessageW(Some(window), WM_USER, WPARAM(0), LPARAM(0));
-            }),
-        },
-    )?;
-    let cancel_button = qt.create_button(
-        window,
-        0,
-        0,
-        w!("Cancel"),
-        &button::Appearance::Secondary,
-        None,
-        None,
-        &button::Shape::Rounded,
-        &button::Size::Medium,
-        MouseEvent {
-            on_click: Box::new(move |_| {
-                let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
-                (*raw).result = DialogResult::Cancel;
-                _ = PostMessageW(Some(window), WM_USER, WPARAM(0), LPARAM(0));
-            }),
-        },
-    )?;
-    Ok(Context {
-        state,
-        title_text_format,
-        content_text_format,
-        render_target,
-        result: DialogResult::Close,
-        ok_button,
-        cancel_button,
-    })
+        let ok_button = qt.create_button(
+            window,
+            0,
+            0,
+            w!("OK"),
+            &button::Appearance::Primary,
+            None,
+            None,
+            &button::Shape::Rounded,
+            &button::Size::Medium,
+            MouseEvent {
+                on_click: Box::new(move |_| {
+                    let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
+                    (*raw).result = DialogResult::OK;
+                    _ = PostMessageW(Some(window), WM_USER, WPARAM(0), LPARAM(0));
+                }),
+            },
+        )?;
+        let cancel_button = qt.create_button(
+            window,
+            0,
+            0,
+            w!("Cancel"),
+            &button::Appearance::Secondary,
+            None,
+            None,
+            &button::Shape::Rounded,
+            &button::Size::Medium,
+            MouseEvent {
+                on_click: Box::new(move |_| {
+                    let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
+                    (*raw).result = DialogResult::Cancel;
+                    _ = PostMessageW(Some(window), WM_USER, WPARAM(0), LPARAM(0));
+                }),
+            },
+        )?;
+        Ok(Context {
+            state,
+            title_text_format,
+            content_text_format,
+            render_target,
+            result: DialogResult::Close,
+            ok_button,
+            cancel_button,
+        })
+    }
 }
 
-unsafe fn layout(window: HWND, context: &Context) -> Result<()> {
+fn layout(window: HWND, context: &Context) -> Result<()> {
     let scaling_factor = get_scaling_factor(window);
 
-    let mut button_rect = RECT::default();
-    GetClientRect(context.cancel_button, &mut button_rect)?;
-    let cancel_button_width = button_rect.right - button_rect.left;
-    let cancel_button_height = button_rect.bottom - button_rect.top;
-    GetClientRect(context.ok_button, &mut button_rect)?;
-    let ok_button_width = button_rect.right - button_rect.left;
-    let ok_button_height = button_rect.bottom - button_rect.top;
+    unsafe {
+        let mut button_rect = RECT::default();
+        GetClientRect(context.cancel_button, &mut button_rect)?;
+        let cancel_button_width = button_rect.right - button_rect.left;
+        let cancel_button_height = button_rect.bottom - button_rect.top;
+        GetClientRect(context.ok_button, &mut button_rect)?;
+        let ok_button_width = button_rect.right - button_rect.left;
+        let ok_button_height = button_rect.bottom - button_rect.top;
 
-    let surface_padding = 24f32;
-    let gap = 8f32;
+        let surface_padding = 24f32;
+        let gap = 8f32;
 
-    let state = &context.state;
-    let direct_write_factory = DWriteCreateFactory::<IDWriteFactory>(DWRITE_FACTORY_TYPE_SHARED)?;
-    let title_text_layout = direct_write_factory.CreateTextLayout(
-        state.title.as_wide(),
-        &context.title_text_format,
-        600f32 - 24f32 - 24f32,
-        1000f32,
-    )?;
-    let mut title_metrics = DWRITE_TEXT_METRICS::default();
-    title_text_layout.GetMetrics(&mut title_metrics)?;
-    let content_text_layout = direct_write_factory.CreateTextLayout(
-        state.content.as_wide(),
-        &context.content_text_format,
-        600f32 - 24f32 - 24f32,
-        1000f32,
-    )?;
-    let mut content_metrics = DWRITE_TEXT_METRICS::default();
-    content_text_layout.GetMetrics(&mut content_metrics)?;
-
-    let scaled_width = (((surface_padding * 2f32 + title_metrics.width)
-        .max(surface_padding * 2f32 + content_metrics.width)
-        .min(600f32))
-        * scaling_factor)
-        .ceil() as i32;
-    let buttons_top = surface_padding + title_metrics.height + gap + content_metrics.height + gap;
-    let scaled_height = ((buttons_top + surface_padding) * scaling_factor).ceil() as i32
-        + ok_button_height.max(cancel_button_height);
-
-    let mut rect = RECT {
-        left: 0,
-        top: 0,
-        right: scaled_width,
-        bottom: scaled_height,
-    };
-    if OsVersion::current() >= OsVersion::new(10, 0, 0, 14393) {
-        AdjustWindowRectExForDpi(
-            &mut rect,
-            WINDOW_STYLE(GetWindowLongPtrW(window, GWL_STYLE) as u32),
-            false,
-            WINDOW_EX_STYLE(GetWindowLongPtrW(window, GWL_EXSTYLE) as u32),
-            GetDpiForWindow(window),
+        let state = &context.state;
+        let direct_write_factory =
+            DWriteCreateFactory::<IDWriteFactory>(DWRITE_FACTORY_TYPE_SHARED)?;
+        let title_text_layout = direct_write_factory.CreateTextLayout(
+            state.title.as_wide(),
+            &context.title_text_format,
+            600f32 - 24f32 - 24f32,
+            1000f32,
         )?;
-    } else {
-        AdjustWindowRectEx(
-            &mut rect,
-            WINDOW_STYLE(GetWindowLongPtrW(window, GWL_STYLE) as u32),
+        let mut title_metrics = DWRITE_TEXT_METRICS::default();
+        title_text_layout.GetMetrics(&mut title_metrics)?;
+        let content_text_layout = direct_write_factory.CreateTextLayout(
+            state.content.as_wide(),
+            &context.content_text_format,
+            600f32 - 24f32 - 24f32,
+            1000f32,
+        )?;
+        let mut content_metrics = DWRITE_TEXT_METRICS::default();
+        content_text_layout.GetMetrics(&mut content_metrics)?;
+
+        let scaled_width = (((surface_padding * 2f32 + title_metrics.width)
+            .max(surface_padding * 2f32 + content_metrics.width)
+            .min(600f32))
+            * scaling_factor)
+            .ceil() as i32;
+        let buttons_top =
+            surface_padding + title_metrics.height + gap + content_metrics.height + gap;
+        let scaled_height = ((buttons_top + surface_padding) * scaling_factor).ceil() as i32
+            + ok_button_height.max(cancel_button_height);
+
+        let mut rect = RECT {
+            left: 0,
+            top: 0,
+            right: scaled_width,
+            bottom: scaled_height,
+        };
+        if OsVersion::current() >= OsVersion::new(10, 0, 0, 14393) {
+            AdjustWindowRectExForDpi(
+                &mut rect,
+                WINDOW_STYLE(GetWindowLongPtrW(window, GWL_STYLE) as u32),
+                false,
+                WINDOW_EX_STYLE(GetWindowLongPtrW(window, GWL_EXSTYLE) as u32),
+                GetDpiForWindow(window),
+            )?;
+        } else {
+            AdjustWindowRectEx(
+                &mut rect,
+                WINDOW_STYLE(GetWindowLongPtrW(window, GWL_STYLE) as u32),
+                false,
+                WINDOW_EX_STYLE(GetWindowLongPtrW(window, GWL_EXSTYLE) as u32),
+            )?;
+        }
+        let window_width = rect.right - rect.left;
+        let window_height = rect.bottom - rect.top;
+        let parent_window = GetAncestor(window, GA_PARENT);
+        GetWindowRect(parent_window, &mut rect)?;
+        SetWindowPos(
+            window,
+            None,
+            rect.left / 2 + rect.right / 2 - window_width / 2,
+            rect.top / 2 + rect.bottom / 2 - window_height / 2,
+            window_width,
+            window_height,
+            SWP_NOZORDER | SWP_NOMOVE,
+        )?;
+        context.render_target.Resize(&D2D_SIZE_U {
+            width: scaled_width as u32,
+            height: scaled_height as u32,
+        })?;
+        MoveWindow(
+            context.cancel_button,
+            scaled_width - (cancel_button_width + (24f32 * scaling_factor) as i32),
+            (buttons_top * scaling_factor) as i32,
+            cancel_button_width,
+            cancel_button_height,
             false,
-            WINDOW_EX_STYLE(GetWindowLongPtrW(window, GWL_EXSTYLE) as u32),
+        )?;
+        MoveWindow(
+            context.ok_button,
+            scaled_width
+                - (cancel_button_width + ok_button_width + (32f32 * scaling_factor) as i32),
+            (buttons_top * scaling_factor) as i32,
+            ok_button_width,
+            ok_button_height,
+            false,
         )?;
     }
-    let window_width = rect.right - rect.left;
-    let window_height = rect.bottom - rect.top;
-    let parent_window = GetAncestor(window, GA_PARENT);
-    GetWindowRect(parent_window, &mut rect)?;
-    SetWindowPos(
-        window,
-        None,
-        rect.left / 2 + rect.right / 2 - window_width / 2,
-        rect.top / 2 + rect.bottom / 2 - window_height / 2,
-        window_width,
-        window_height,
-        SWP_NOZORDER | SWP_NOMOVE,
-    )?;
-    context.render_target.Resize(&D2D_SIZE_U {
-        width: scaled_width as u32,
-        height: scaled_height as u32,
-    })?;
-    MoveWindow(
-        context.cancel_button,
-        scaled_width - (cancel_button_width + (24f32 * scaling_factor) as i32),
-        (buttons_top * scaling_factor) as i32,
-        cancel_button_width,
-        cancel_button_height,
-        false,
-    )?;
-    MoveWindow(
-        context.ok_button,
-        scaled_width - (cancel_button_width + ok_button_width + (32f32 * scaling_factor) as i32),
-        (buttons_top * scaling_factor) as i32,
-        ok_button_width,
-        ok_button_height,
-        false,
-    )?;
 
     Ok(())
 }
 
-unsafe fn paint(window: HWND, context: &Context) -> Result<()> {
+fn paint(window: HWND, context: &Context) -> Result<()> {
     let state = &context.state;
     let tokens = &state.qt.theme.tokens;
-    let mut window_rect = RECT::default();
-    GetClientRect(window, &mut window_rect)?;
-    let scaling_factor = get_scaling_factor(window);
-    let width = (window_rect.right - window_rect.left) as f32 / scaling_factor;
-    let height = (window_rect.bottom - window_rect.top) as f32 / scaling_factor;
-    let text_brush = context
-        .render_target
-        .CreateSolidColorBrush(&tokens.color_neutral_foreground1, None)?;
-    context.render_target.DrawText(
-        state.title.as_wide(),
-        &context.title_text_format,
-        &D2D_RECT_F {
-            left: 24f32,
-            top: 24f32,
-            right: width - 24f32,
-            bottom: height - 24f32,
-        },
-        &text_brush,
-        D2D1_DRAW_TEXT_OPTIONS_NONE,
-        DWRITE_MEASURING_MODE_NATURAL,
-    );
+    unsafe {
+        let mut window_rect = RECT::default();
+        GetClientRect(window, &mut window_rect)?;
+        let scaling_factor = get_scaling_factor(window);
+        let width = (window_rect.right - window_rect.left) as f32 / scaling_factor;
+        let height = (window_rect.bottom - window_rect.top) as f32 / scaling_factor;
+        let text_brush = context
+            .render_target
+            .CreateSolidColorBrush(&tokens.color_neutral_foreground1, None)?;
+        context.render_target.DrawText(
+            state.title.as_wide(),
+            &context.title_text_format,
+            &D2D_RECT_F {
+                left: 24f32,
+                top: 24f32,
+                right: width - 24f32,
+                bottom: height - 24f32,
+            },
+            &text_brush,
+            D2D1_DRAW_TEXT_OPTIONS_NONE,
+            DWRITE_MEASURING_MODE_NATURAL,
+        );
 
-    let direct_write_factory = DWriteCreateFactory::<IDWriteFactory>(DWRITE_FACTORY_TYPE_SHARED)?;
-    let title_text_layout = direct_write_factory.CreateTextLayout(
-        state.title.as_wide(),
-        &context.title_text_format,
-        width - 24f32 - 24f32,
-        height - 24f32 - 24f32,
-    )?;
-    let mut title_metrics = DWRITE_TEXT_METRICS::default();
-    title_text_layout.GetMetrics(&mut title_metrics)?;
-    context.render_target.DrawText(
-        state.content.as_wide(),
-        &context.content_text_format,
-        &D2D_RECT_F {
-            left: 24f32,
-            top: 24f32 + title_metrics.height + 8f32,
-            right: width - 24f32,
-            bottom: height - 24f32,
-        },
-        &text_brush,
-        D2D1_DRAW_TEXT_OPTIONS_NONE,
-        DWRITE_MEASURING_MODE_NATURAL,
-    );
+        let direct_write_factory =
+            DWriteCreateFactory::<IDWriteFactory>(DWRITE_FACTORY_TYPE_SHARED)?;
+        let title_text_layout = direct_write_factory.CreateTextLayout(
+            state.title.as_wide(),
+            &context.title_text_format,
+            width - 24f32 - 24f32,
+            height - 24f32 - 24f32,
+        )?;
+        let mut title_metrics = DWRITE_TEXT_METRICS::default();
+        title_text_layout.GetMetrics(&mut title_metrics)?;
+        context.render_target.DrawText(
+            state.content.as_wide(),
+            &context.content_text_format,
+            &D2D_RECT_F {
+                left: 24f32,
+                top: 24f32 + title_metrics.height + 8f32,
+                right: width - 24f32,
+                bottom: height - 24f32,
+            },
+            &text_brush,
+            D2D1_DRAW_TEXT_OPTIONS_NONE,
+            DWRITE_MEASURING_MODE_NATURAL,
+        );
+    }
     Ok(())
 }
 
-unsafe fn on_paint(window: HWND, context: &Context) -> Result<()> {
-    let mut ps = PAINTSTRUCT::default();
-    BeginPaint(window, &mut ps);
-    context.render_target.BeginDraw();
-    context.render_target.Clear(Some(
-        &context.state.qt.theme.tokens.color_neutral_background1,
-    ));
+fn on_paint(window: HWND, context: &Context) -> Result<()> {
+    unsafe {
+        let mut ps = PAINTSTRUCT::default();
+        BeginPaint(window, &mut ps);
+        context.render_target.BeginDraw();
+        context.render_target.Clear(Some(
+            &context.state.qt.theme.tokens.color_neutral_background1,
+        ));
 
-    let result = paint(window, context).and(context.render_target.EndDraw(None, None));
-    _ = EndPaint(window, &ps);
-    result
+        let result = paint(window, context).and(context.render_target.EndDraw(None, None));
+        _ = EndPaint(window, &ps);
+        result
+    }
 }
 
 extern "system" fn window_proc(

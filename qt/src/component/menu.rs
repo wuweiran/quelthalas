@@ -2,7 +2,6 @@ use std::cell::RefCell;
 use std::mem::size_of;
 use std::rc::Rc;
 
-use windows::core::*;
 use windows::Foundation::Numerics::Matrix3x2;
 use windows::Win32::Foundation::{
     ERROR_INVALID_WINDOW_HANDLE, FALSE, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, TRUE, WPARAM,
@@ -11,20 +10,20 @@ use windows::Win32::Graphics::Direct2D::Common::{
     D2D_POINT_2F, D2D_RECT_F, D2D_SIZE_F, D2D_SIZE_U,
 };
 use windows::Win32::Graphics::Direct2D::{
+    D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_FACTORY_OPTIONS, D2D1_FACTORY_TYPE_SINGLE_THREADED,
+    D2D1_HWND_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_PROPERTIES, D2D1_ROUNDED_RECT,
     D2D1CreateFactory, ID2D1DeviceContext5, ID2D1Factory1, ID2D1HwndRenderTarget,
-    ID2D1SolidColorBrush, ID2D1SvgDocument, D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_FACTORY_OPTIONS,
-    D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_HWND_RENDER_TARGET_PROPERTIES,
-    D2D1_RENDER_TARGET_PROPERTIES, D2D1_ROUNDED_RECT,
+    ID2D1SolidColorBrush, ID2D1SvgDocument,
 };
 use windows::Win32::Graphics::DirectWrite::{
-    DWriteCreateFactory, IDWriteFactory, IDWriteTextFormat, DWRITE_FACTORY_TYPE_SHARED,
-    DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_MEASURING_MODE_NATURAL,
-    DWRITE_TEXT_METRICS,
+    DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL,
+    DWRITE_MEASURING_MODE_NATURAL, DWRITE_TEXT_METRICS, DWriteCreateFactory, IDWriteFactory,
+    IDWriteTextFormat,
 };
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, ClientToScreen, CreateRoundRectRgn, EndPaint, GetMonitorInfoW, MonitorFromPoint,
-    OffsetRect, PtInRect, RedrawWindow, SetRect, SetRectEmpty, SetWindowRgn, MONITORINFO,
-    MONITOR_DEFAULTTONEAREST, PAINTSTRUCT, RDW_INVALIDATE, RDW_NOCHILDREN,
+    BeginPaint, ClientToScreen, CreateRoundRectRgn, EndPaint, GetMonitorInfoW,
+    MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromPoint, OffsetRect, PAINTSTRUCT, PtInRect,
+    RDW_INVALIDATE, RDW_NOCHILDREN, RedrawWindow, SetRect, SetRectEmpty, SetWindowRgn,
 };
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
@@ -33,9 +32,10 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::Shell::SHCreateMemStream;
 use windows::Win32::UI::WindowsAndMessaging::*;
+use windows::core::*;
 
 use crate::icon::Icon;
-use crate::{get_scaling_factor, QT};
+use crate::{QT, get_scaling_factor};
 
 pub enum MenuInfo {
     MenuItem {
@@ -129,29 +129,31 @@ fn convert_menu_info_list_to_menu(menu_info_list: Vec<MenuInfo>) -> Menu {
 const CLASS_NAME: PCWSTR = w!("QT_MENU");
 
 impl QT {
-    pub unsafe fn open_menu(
+    pub fn open_menu(
         &self,
         parent_window: HWND,
         menu_list: Vec<MenuInfo>,
         x: i32,
         y: i32,
     ) -> Result<()> {
-        let window_class = WNDCLASSEXW {
-            cbSize: size_of::<WNDCLASSEXW>() as u32,
-            lpszClassName: CLASS_NAME,
-            style: CS_DROPSHADOW | CS_SAVEBITS | CS_DBLCLKS,
-            lpfnWndProc: Some(window_proc),
-            hCursor: LoadCursorW(None, IDC_ARROW)?,
-            ..Default::default()
-        };
-        RegisterClassExW(&window_class);
-        if !IsWindow(Some(parent_window)).as_bool() {
-            return Err(Error::from(ERROR_INVALID_WINDOW_HANDLE));
+        unsafe {
+            let window_class = WNDCLASSEXW {
+                cbSize: size_of::<WNDCLASSEXW>() as u32,
+                lpszClassName: CLASS_NAME,
+                style: CS_DROPSHADOW | CS_SAVEBITS | CS_DBLCLKS,
+                lpfnWndProc: Some(window_proc),
+                hCursor: LoadCursorW(None, IDC_ARROW)?,
+                ..Default::default()
+            };
+            RegisterClassExW(&window_class);
+            if !IsWindow(Some(parent_window)).as_bool() {
+                return Err(Error::from(ERROR_INVALID_WINDOW_HANDLE));
+            }
+            let menu = Rc::new(RefCell::new(convert_menu_info_list_to_menu(menu_list)));
+            init_popup(self.clone(), parent_window, menu.clone(), x, y, 0, 0)?;
+            init_tracking(parent_window)?;
+            track_menu(menu.clone(), 0, 0, parent_window).and(exit_tracking(parent_window))?;
         }
-        let menu = Rc::new(RefCell::new(convert_menu_info_list_to_menu(menu_list)));
-        init_popup(self.clone(), parent_window, menu.clone(), x, y, 0, 0)?;
-        init_tracking(parent_window)?;
-        track_menu(menu.clone(), 0, 0, parent_window).and(exit_tracking(parent_window))?;
         Ok(())
     }
 }
@@ -164,7 +166,7 @@ pub struct CreateParams {
     y_anchor: i32,
 }
 
-unsafe fn init_popup(
+fn init_popup(
     qt: QT,
     owning_window: HWND,
     menu: Rc<RefCell<Menu>>,
@@ -180,40 +182,44 @@ unsafe fn init_popup(
         x_anchor,
         y_anchor,
     });
-    let window = CreateWindowExW(
-        WINDOW_EX_STYLE::default(),
-        CLASS_NAME,
-        w!(""),
-        WS_POPUP,
-        x,
-        y,
-        0,
-        0,
-        Some(owning_window),
-        None,
-        Some(HINSTANCE(
-            GetWindowLongPtrW(owning_window, GWLP_HINSTANCE) as _
-        )),
-        Some(Box::<CreateParams>::into_raw(boxed) as _),
-    )?;
+    let window = unsafe {
+        CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            CLASS_NAME,
+            w!(""),
+            WS_POPUP,
+            x,
+            y,
+            0,
+            0,
+            Some(owning_window),
+            None,
+            Some(HINSTANCE(
+                GetWindowLongPtrW(owning_window, GWLP_HINSTANCE) as _
+            )),
+            Some(Box::<CreateParams>::into_raw(boxed) as _),
+        )
+    }?;
     menu.borrow_mut().window = Some(window);
     Ok(())
 }
 
-unsafe fn init_tracking(owning_window: HWND) -> Result<()> {
-    _ = HideCaret(None);
-    SendMessageW(
-        owning_window,
-        WM_ENTERMENULOOP,
-        Some(WPARAM(TRUE.0 as usize)),
-        None,
-    );
-    SendMessageW(
-        owning_window,
-        WM_SETCURSOR,
-        Some(WPARAM(owning_window.0 as usize)),
-        Some(LPARAM(HTCAPTION as isize)),
-    );
+fn init_tracking(owning_window: HWND) -> Result<()> {
+    unsafe {
+        _ = HideCaret(None);
+        SendMessageW(
+            owning_window,
+            WM_ENTERMENULOOP,
+            Some(WPARAM(TRUE.0 as usize)),
+            None,
+        );
+        SendMessageW(
+            owning_window,
+            WM_SETCURSOR,
+            Some(WPARAM(owning_window.0 as usize)),
+            Some(LPARAM(HTCAPTION as isize)),
+        );
+    }
     Ok(())
 }
 
@@ -333,7 +339,7 @@ fn switch_tracking(menu: &mut Menu, new_index: usize) -> Result<()> {
     Ok(())
 }
 
-unsafe fn menu_button_down(context: &Context, mt: &mut Tracker, menu: &mut Menu) -> Result<bool> {
+fn menu_button_down(context: &Context, mt: &mut Tracker, menu: &mut Menu) -> Result<bool> {
     let ht = find_item_by_coordinates(menu, &mut mt.point);
     if let HitTest::Item(item_index) = ht {
         if menu.focused_item_index != Some(item_index) {
@@ -355,11 +361,7 @@ unsafe fn menu_button_down(context: &Context, mt: &mut Tracker, menu: &mut Menu)
     }
 }
 
-unsafe fn menu_button_up(
-    context: &Context,
-    mt: &mut Tracker,
-    menu: &mut Menu,
-) -> Result<ExecutionResult> {
+fn menu_button_up(context: &Context, mt: &mut Tracker, menu: &mut Menu) -> Result<ExecutionResult> {
     if let HitTest::Item(item_index) = find_item_by_coordinates(menu, &mut mt.point) {
         if menu.focused_item_index == Some(item_index) {
             if let MenuItem::SubMenu { .. } = menu.items[item_index] {
@@ -378,11 +380,7 @@ unsafe fn menu_button_up(
     Ok(ExecutionResult::NoExecuted)
 }
 
-unsafe fn menu_mouse_move(
-    context: &Context,
-    mt: &mut Tracker,
-    menu: Rc<RefCell<Menu>>,
-) -> Result<bool> {
+fn menu_mouse_move(context: &Context, mt: &mut Tracker, menu: Rc<RefCell<Menu>>) -> Result<bool> {
     let item_index_option = {
         let menu_borrow = menu.borrow_mut();
         find_item_by_coordinates(&menu_borrow, &mut mt.point)
@@ -492,7 +490,7 @@ fn menu_key_left(mt: &mut Tracker) -> Result<()> {
     Ok(())
 }
 
-unsafe fn menu_key_right(context: &Context, mt: &mut Tracker) -> Result<()> {
+fn menu_key_right(context: &Context, mt: &mut Tracker) -> Result<()> {
     mt.current_menu = show_sub_popup(&context.qt, mt.owning_window, mt.current_menu.clone())?;
     Ok(())
 }
@@ -544,7 +542,7 @@ enum ExecutionResult {
     ShownPopup = -2,
 }
 
-unsafe fn show_sub_popup(
+fn show_sub_popup(
     qt: &QT,
     owning_window: HWND,
     menu: Rc<RefCell<Menu>>,
@@ -562,7 +560,9 @@ unsafe fn show_sub_popup(
                 if let Some(window) = menu.window {
                     let item_rect = adjust_menu_item_rect(&menu, &item_rect);
                     let mut rect = RECT::default();
-                    GetWindowRect(window, &mut rect)?;
+                    unsafe {
+                        GetWindowRect(window, &mut rect)?;
+                    }
                     let scaling_factor = get_scaling_factor(window);
                     rect.left +=
                         ((item_rect.right - MENU_BORDER_WIDTH) as f32 * scaling_factor) as i32;
@@ -603,7 +603,7 @@ fn hide_sub_popups(menu: &mut Menu) -> Result<()> {
     }
     Ok(())
 }
-unsafe fn execute_focused_item(
+fn execute_focused_item(
     context: &Context,
     mt: &mut Tracker,
     menu: &Menu,
@@ -636,7 +636,7 @@ unsafe fn execute_focused_item(
     }
 }
 
-unsafe fn track_menu(menu: Rc<RefCell<Menu>>, x: i32, y: i32, owning_window: HWND) -> Result<bool> {
+fn track_menu(menu: Rc<RefCell<Menu>>, x: i32, y: i32, owning_window: HWND) -> Result<bool> {
     let window = {
         let menu = menu.borrow();
         if menu.window.is_none() {
@@ -645,178 +645,183 @@ unsafe fn track_menu(menu: Rc<RefCell<Menu>>, x: i32, y: i32, owning_window: HWN
         menu.window.unwrap()
     };
 
-    SetCapture(window);
-    let mut mt = Tracker {
-        current_menu: menu.clone(),
-        top_menu: menu.clone(),
-        owning_window,
-        point: POINT { x, y },
-    };
-    let mut exit_menu = false;
-    let mut enter_idle_sent = false;
-    let mut execution_result = ExecutionResult::NoExecuted;
-    while !exit_menu {
-        let mut msg = MSG::default();
-        loop {
-            if PeekMessageW(&mut msg, None, 0, 0, PM_NOREMOVE).into() {
-                if !CallMsgFilterW(&msg, MSGF_MENU as i32).as_bool() {
-                    break;
-                }
-                _ = PeekMessageW(&mut msg, None, msg.message, msg.message, PM_REMOVE);
-            } else {
-                if !enter_idle_sent {
-                    enter_idle_sent = true;
-                    SendMessageW(
-                        owning_window,
-                        WM_ENTERIDLE,
-                        Some(WPARAM(MSGF_MENU as usize)),
-                        Some(LPARAM(window.0 as _)),
+    unsafe {
+        SetCapture(window);
+        let mut mt = Tracker {
+            current_menu: menu.clone(),
+            top_menu: menu.clone(),
+            owning_window,
+            point: POINT { x, y },
+        };
+        let mut exit_menu = false;
+        let mut enter_idle_sent = false;
+        let mut execution_result = ExecutionResult::NoExecuted;
+        while !exit_menu {
+            let mut msg = MSG::default();
+            loop {
+                if PeekMessageW(&mut msg, None, 0, 0, PM_NOREMOVE).into() {
+                    if !CallMsgFilterW(&msg, MSGF_MENU as i32).as_bool() {
+                        break;
+                    }
+                    _ = PeekMessageW(&mut msg, None, msg.message, msg.message, PM_REMOVE);
+                } else {
+                    if !enter_idle_sent {
+                        enter_idle_sent = true;
+                        SendMessageW(
+                            owning_window,
+                            WM_ENTERIDLE,
+                            Some(WPARAM(MSGF_MENU as usize)),
+                            Some(LPARAM(window.0 as _)),
+                        );
+                    }
+                    MsgWaitForMultipleObjectsEx(
+                        None,
+                        0xffffffff,
+                        QS_ALLINPUT,
+                        MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX_FLAGS::default(),
                     );
                 }
-                MsgWaitForMultipleObjectsEx(
-                    None,
-                    0xffffffff,
-                    QS_ALLINPUT,
-                    MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX_FLAGS::default(),
-                );
             }
-        }
 
-        if msg.message == WM_CANCELMODE {
-            _ = PeekMessageW(&mut msg, None, msg.message, msg.message, PM_REMOVE);
-            break;
-        }
+            if msg.message == WM_CANCELMODE {
+                _ = PeekMessageW(&mut msg, None, msg.message, msg.message, PM_REMOVE);
+                break;
+            }
 
-        mt.point = msg.pt;
-        if msg.hwnd == window || msg.message != WM_TIMER {
-            enter_idle_sent = false;
-        }
+            mt.point = msg.pt;
+            if msg.hwnd == window || msg.message != WM_TIMER {
+                enter_idle_sent = false;
+            }
 
-        let mut remove_message = false;
-        if msg.message >= WM_MOUSEFIRST && msg.message <= WM_MOUSELAST {
-            mt.point.x = msg.lParam.0 as i16 as i32;
-            mt.point.y = (msg.lParam.0 >> 16) as i16 as i32;
-            _ = ClientToScreen(window, &mut mt.point);
+            let mut remove_message = false;
+            if msg.message >= WM_MOUSEFIRST && msg.message <= WM_MOUSELAST {
+                mt.point.x = msg.lParam.0 as i16 as i32;
+                mt.point.y = (msg.lParam.0 >> 16) as i16 as i32;
+                _ = ClientToScreen(window, &mut mt.point);
 
-            let menu_from_point_result = menu_from_point(menu.clone(), &mt.point);
+                let menu_from_point_result = menu_from_point(menu.clone(), &mt.point);
 
-            match msg.message {
-                WM_RBUTTONDBLCLK | WM_RBUTTONDOWN | WM_LBUTTONDBLCLK | WM_LBUTTONDOWN => {
-                    remove_message = match menu_from_point_result {
-                        None => false,
+                match msg.message {
+                    WM_RBUTTONDBLCLK | WM_RBUTTONDOWN | WM_LBUTTONDBLCLK | WM_LBUTTONDOWN => {
+                        remove_message = match menu_from_point_result {
+                            None => false,
+                            Some(menu_from_point) => {
+                                let mut menu_from_point_borrowed = menu_from_point.borrow_mut();
+                                let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
+                                let context = &*raw;
+                                menu_button_down(context, &mut mt, &mut menu_from_point_borrowed)?
+                            }
+                        };
+                        exit_menu = !remove_message;
+                    }
+                    WM_RBUTTONUP | WM_LBUTTONUP => match menu_from_point_result {
                         Some(menu_from_point) => {
                             let mut menu_from_point_borrowed = menu_from_point.borrow_mut();
                             let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
                             let context = &*raw;
-                            menu_button_down(context, &mut mt, &mut menu_from_point_borrowed)?
+                            execution_result =
+                                menu_button_up(context, &mut mt, &mut menu_from_point_borrowed)?;
+                            remove_message = execution_result != ExecutionResult::NoExecuted;
+                            exit_menu = remove_message;
                         }
-                    };
-                    exit_menu = !remove_message;
+                        None => exit_menu = false,
+                    },
+                    WM_MOUSEMOVE => {
+                        if let Some(menu_from_point) = menu_from_point_result {
+                            let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
+                            let context = &*raw;
+                            exit_menu =
+                                exit_menu | !menu_mouse_move(context, &mut mt, menu_from_point)?
+                        }
+                    }
+                    _ => {}
                 }
-                WM_RBUTTONUP | WM_LBUTTONUP => match menu_from_point_result {
-                    Some(menu_from_point) => {
-                        let mut menu_from_point_borrowed = menu_from_point.borrow_mut();
-                        let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
-                        let context = &*raw;
-                        execution_result =
-                            menu_button_up(context, &mut mt, &mut menu_from_point_borrowed)?;
-                        remove_message = execution_result != ExecutionResult::NoExecuted;
-                        exit_menu = remove_message;
-                    }
-                    None => exit_menu = false,
-                },
-                WM_MOUSEMOVE => {
-                    if let Some(menu_from_point) = menu_from_point_result {
-                        let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
-                        let context = &*raw;
-                        exit_menu = exit_menu | !menu_mouse_move(context, &mut mt, menu_from_point)?
-                    }
+            } else if msg.message >= WM_KEYFIRST && msg.message <= WM_KEYLAST {
+                remove_message = true;
+                match msg.message {
+                    WM_KEYDOWN | WM_SYSKEYDOWN => match VIRTUAL_KEY(msg.wParam.0 as u16) {
+                        VK_MENU | VK_F10 => {
+                            exit_menu = true;
+                        }
+                        VK_HOME => {
+                            let mut menu = mt.current_menu.borrow_mut();
+                            select_first(&mut menu)
+                        }
+                        VK_END => {
+                            let mut menu = mt.current_menu.borrow_mut();
+                            select_last(&mut menu)
+                        }
+                        VK_UP => {
+                            let mut menu = mt.current_menu.borrow_mut();
+                            select_previous(&mut menu)
+                        }
+                        VK_DOWN => {
+                            let mut menu = mt.current_menu.borrow_mut();
+                            select_next(&mut menu)
+                        }
+                        VK_LEFT => menu_key_left(&mut mt)?,
+                        VK_RIGHT => {
+                            let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
+                            let context = &*raw;
+                            menu_key_right(context, &mut mt)?
+                        }
+                        VK_ESCAPE => exit_menu = menu_key_escape(&mut mt)?,
+                        _ => {
+                            let _ = TranslateMessage(&mut msg);
+                        }
+                    },
+                    _ => {}
                 }
-                _ => {}
+            } else {
+                if PeekMessageW(&mut msg, None, msg.message, msg.message, PM_REMOVE).as_bool() {
+                    DispatchMessageW(&msg);
+                }
+                continue;
             }
-        } else if msg.message >= WM_KEYFIRST && msg.message <= WM_KEYLAST {
-            remove_message = true;
-            match msg.message {
-                WM_KEYDOWN | WM_SYSKEYDOWN => match VIRTUAL_KEY(msg.wParam.0 as u16) {
-                    VK_MENU | VK_F10 => {
-                        exit_menu = true;
-                    }
-                    VK_HOME => {
-                        let mut menu = mt.current_menu.borrow_mut();
-                        select_first(&mut menu)
-                    }
-                    VK_END => {
-                        let mut menu = mt.current_menu.borrow_mut();
-                        select_last(&mut menu)
-                    }
-                    VK_UP => {
-                        let mut menu = mt.current_menu.borrow_mut();
-                        select_previous(&mut menu)
-                    }
-                    VK_DOWN => {
-                        let mut menu = mt.current_menu.borrow_mut();
-                        select_next(&mut menu)
-                    }
-                    VK_LEFT => menu_key_left(&mut mt)?,
-                    VK_RIGHT => {
-                        let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
-                        let context = &*raw;
-                        menu_key_right(context, &mut mt)?
-                    }
-                    VK_ESCAPE => exit_menu = menu_key_escape(&mut mt)?,
-                    _ => {
-                        let _ = TranslateMessage(&mut msg);
-                    }
-                },
-                _ => {}
+
+            if !exit_menu {
+                remove_message = true;
             }
-        } else {
-            if PeekMessageW(&mut msg, None, msg.message, msg.message, PM_REMOVE).as_bool() {
-                DispatchMessageW(&msg);
+
+            if remove_message {
+                _ = PeekMessageW(&mut msg, None, msg.message, msg.message, PM_REMOVE);
             }
-            continue;
         }
 
-        if !exit_menu {
-            remove_message = true;
+        ReleaseCapture()?;
+        if IsWindow(Some(mt.owning_window)).as_bool() {
+            {
+                let mut top_menu = mt.top_menu.borrow_mut();
+                hide_sub_popups(&mut top_menu)?;
+            }
+            {
+                DestroyWindow(window)?;
+                let mut menu_mut = menu.borrow_mut();
+                menu_mut.window = None;
+            }
+            {
+                let mut top_menu = mt.top_menu.borrow_mut();
+                select_item(&mut top_menu, None);
+            }
         }
-
-        if remove_message {
-            _ = PeekMessageW(&mut msg, None, msg.message, msg.message, PM_REMOVE);
-        }
+        Ok(execution_result != ExecutionResult::ShownPopup)
     }
-
-    ReleaseCapture()?;
-    if IsWindow(Some(mt.owning_window)).as_bool() {
-        {
-            let mut top_menu = mt.top_menu.borrow_mut();
-            hide_sub_popups(&mut top_menu)?;
-        }
-        {
-            DestroyWindow(window)?;
-            let mut menu_mut = menu.borrow_mut();
-            menu_mut.window = None;
-        }
-        {
-            let mut top_menu = mt.top_menu.borrow_mut();
-            select_item(&mut top_menu, None);
-        }
-    }
-    Ok(execution_result != ExecutionResult::ShownPopup)
 }
 
-unsafe fn exit_tracking(owning_window: HWND) -> Result<()> {
-    SendMessageW(
-        owning_window,
-        WM_EXITMENULOOP,
-        Some(WPARAM(TRUE.0 as usize)),
-        None,
-    );
-    _ = ShowCaret(None);
+fn exit_tracking(owning_window: HWND) -> Result<()> {
+    unsafe {
+        SendMessageW(
+            owning_window,
+            WM_EXITMENULOOP,
+            Some(WPARAM(TRUE.0 as usize)),
+            None,
+        );
+        _ = ShowCaret(None);
+    }
     Ok(())
 }
 
-unsafe fn calc_menu_item_size(
+fn calc_menu_item_size(
     qt: &QT,
     menu_item: &mut MenuItem,
     org_x: i32,
@@ -824,26 +829,30 @@ unsafe fn calc_menu_item_size(
     text_format: &IDWriteTextFormat,
 ) -> Result<()> {
     let tokens = &qt.theme.tokens;
-    match menu_item {
-        MenuItem::MenuItem { rect, text, .. } | MenuItem::SubMenu { rect, text, .. } => {
-            SetRect(rect, org_x, org_y, org_x, org_y);
-            let direct_write_factory =
-                DWriteCreateFactory::<IDWriteFactory>(DWRITE_FACTORY_TYPE_SHARED)?;
-            let text_layout = direct_write_factory.CreateTextLayout(
-                text.as_wide(),
-                text_format,
-                290f32,
-                500f32,
-            )?;
-            let mut metrics = DWRITE_TEXT_METRICS::default();
-            text_layout.GetMetrics(&mut metrics)?;
-            rect.right += metrics.width.ceil() as i32 + 2 * tokens.spacing_vertical_s_nudge as i32;
-            rect.bottom +=
-                (metrics.height.ceil() as i32 + 2 * tokens.spacing_vertical_s_nudge as i32).max(32);
-        }
-        MenuItem::MenuDivider { rect } => {
-            SetRect(rect, org_x, org_y, org_x, org_y);
-            rect.bottom += 4 + tokens.stroke_width_thin as i32;
+    unsafe {
+        match menu_item {
+            MenuItem::MenuItem { rect, text, .. } | MenuItem::SubMenu { rect, text, .. } => {
+                SetRect(rect, org_x, org_y, org_x, org_y);
+                let direct_write_factory =
+                    DWriteCreateFactory::<IDWriteFactory>(DWRITE_FACTORY_TYPE_SHARED)?;
+                let text_layout = direct_write_factory.CreateTextLayout(
+                    text.as_wide(),
+                    text_format,
+                    290f32,
+                    500f32,
+                )?;
+                let mut metrics = DWRITE_TEXT_METRICS::default();
+                text_layout.GetMetrics(&mut metrics)?;
+                rect.right +=
+                    metrics.width.ceil() as i32 + 2 * tokens.spacing_vertical_s_nudge as i32;
+                rect.bottom += (metrics.height.ceil() as i32
+                    + 2 * tokens.spacing_vertical_s_nudge as i32)
+                    .max(32);
+            }
+            MenuItem::MenuDivider { rect } => {
+                SetRect(rect, org_x, org_y, org_x, org_y);
+                rect.bottom += 4 + tokens.stroke_width_thin as i32;
+            }
         }
     }
     if let MenuItem::SubMenu { rect, .. } = menu_item {
@@ -852,22 +861,27 @@ unsafe fn calc_menu_item_size(
     Ok(())
 }
 
-unsafe fn get_text_format(qt: &QT) -> Result<IDWriteTextFormat> {
-    let direct_write_factory = DWriteCreateFactory::<IDWriteFactory>(DWRITE_FACTORY_TYPE_SHARED)?;
-    let tokens = &qt.theme.tokens;
-    direct_write_factory.CreateTextFormat(
-        tokens.font_family_base,
-        None,
-        tokens.font_weight_regular,
-        DWRITE_FONT_STYLE_NORMAL,
-        DWRITE_FONT_STRETCH_NORMAL,
-        tokens.font_size_base300,
-        w!(""),
-    )
+fn get_text_format(qt: &QT) -> Result<IDWriteTextFormat> {
+    unsafe {
+        let direct_write_factory =
+            DWriteCreateFactory::<IDWriteFactory>(DWRITE_FACTORY_TYPE_SHARED)?;
+        let tokens = &qt.theme.tokens;
+        direct_write_factory.CreateTextFormat(
+            tokens.font_family_base,
+            None,
+            tokens.font_weight_regular,
+            DWRITE_FONT_STYLE_NORMAL,
+            DWRITE_FONT_STRETCH_NORMAL,
+            tokens.font_size_base300,
+            w!(""),
+        )
+    }
 }
 
-unsafe fn calc_popup_menu_size(qt: &QT, menu: &mut Menu, max_height: i32) -> Result<(i32, i32)> {
-    SetRectEmpty(&mut menu.menu_list_rect);
+fn calc_popup_menu_size(qt: &QT, menu: &mut Menu, max_height: i32) -> Result<(i32, i32)> {
+    unsafe {
+        SetRectEmpty(&mut menu.menu_list_rect);
+    }
     let mut start = 0;
     let text_format = get_text_format(qt)?;
     while start < menu.items.len() {
@@ -908,11 +922,13 @@ unsafe fn calc_popup_menu_size(qt: &QT, menu: &mut Menu, max_height: i32) -> Res
         menu.menu_list_rect.bottom = menu.menu_list_rect.bottom.max(org_y);
     }
 
-    OffsetRect(
-        &mut menu.menu_list_rect,
-        MENU_BORDER_WIDTH + MENU_MARGIN,
-        MENU_BORDER_WIDTH + MENU_MARGIN,
-    );
+    unsafe {
+        OffsetRect(
+            &mut menu.menu_list_rect,
+            MENU_BORDER_WIDTH + MENU_MARGIN,
+            MENU_BORDER_WIDTH + MENU_MARGIN,
+        );
+    }
     let mut height = menu.menu_list_rect.bottom + MENU_BORDER_WIDTH + MENU_MARGIN;
     let width = menu.menu_list_rect.right + MENU_BORDER_WIDTH + MENU_MARGIN;
     if height >= max_height {
@@ -925,7 +941,7 @@ unsafe fn calc_popup_menu_size(qt: &QT, menu: &mut Menu, max_height: i32) -> Res
     Ok((width, height))
 }
 
-unsafe fn show_popup(
+fn show_popup(
     qt: &QT,
     window: HWND,
     menu: &mut Menu,
@@ -936,12 +952,14 @@ unsafe fn show_popup(
 ) -> Result<()> {
     menu.focused_item_index = None;
     let pt = POINT { x, y };
-    let monitor = MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST);
+    let monitor = unsafe { MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST) };
     let mut info = MONITORINFO {
         cbSize: size_of::<MONITORINFO>() as u32,
         ..Default::default()
     };
-    GetMonitorInfoW(monitor, &mut info);
+    unsafe {
+        GetMonitorInfoW(monitor, &mut info);
+    }
     let max_height = info.rcWork.bottom - info.rcWork.top;
     let (width, height) = calc_popup_menu_size(qt, menu, max_height)?;
     let mut x = x;
@@ -971,29 +989,31 @@ unsafe fn show_popup(
     let scaling_factor = get_scaling_factor(window);
     let scaled_width = (width as f32 * scaling_factor) as i32;
     let scaled_height = (height as f32 * scaling_factor) as i32;
-    SetWindowPos(
-        window,
-        Some(HWND_TOPMOST),
-        x,
-        y,
-        scaled_width,
-        scaled_height,
-        SWP_SHOWWINDOW | SWP_NOACTIVATE,
-    )?;
     let corner_diameter = (qt.theme.tokens.border_radius_medium * 2f32 * scaling_factor) as i32;
-    let region = CreateRoundRectRgn(
-        0,
-        0,
-        scaled_width + 1,
-        scaled_height + 1,
-        corner_diameter,
-        corner_diameter,
-    );
-    SetWindowRgn(window, Some(region), false);
+    unsafe {
+        SetWindowPos(
+            window,
+            Some(HWND_TOPMOST),
+            x,
+            y,
+            scaled_width,
+            scaled_height,
+            SWP_SHOWWINDOW | SWP_NOACTIVATE,
+        )?;
+        let region = CreateRoundRectRgn(
+            0,
+            0,
+            scaled_width + 1,
+            scaled_height + 1,
+            corner_diameter,
+            corner_diameter,
+        );
+        SetWindowRgn(window, Some(region), false);
+    }
     Ok(())
 }
 
-unsafe fn draw_menu_item(
+fn draw_menu_item(
     menu: &Menu,
     menu_item: &MenuItem,
     context: &Context,
@@ -1015,112 +1035,118 @@ unsafe fn draw_menu_item(
             MenuItem::SubMenu { .. } => true,
             MenuItem::MenuDivider { .. } => false,
         };
-        if show_focused {
-            let focused_brush = context
-                .render_target
-                .CreateSolidColorBrush(&tokens.color_neutral_background1_hover, None)?;
-            let rounded_rect = D2D1_ROUNDED_RECT {
-                rect: D2D_RECT_F {
-                    left: rect.left as f32,
-                    top: rect.top as f32,
-                    right: rect.right as f32,
-                    bottom: rect.bottom as f32,
-                },
-                radiusX: tokens.border_radius_medium,
-                radiusY: tokens.border_radius_medium,
-            };
-            context
-                .render_target
-                .FillRoundedRectangle(&rounded_rect, &focused_brush);
+        unsafe {
+            if show_focused {
+                let focused_brush = context
+                    .render_target
+                    .CreateSolidColorBrush(&tokens.color_neutral_background1_hover, None)?;
+                let rounded_rect = D2D1_ROUNDED_RECT {
+                    rect: D2D_RECT_F {
+                        left: rect.left as f32,
+                        top: rect.top as f32,
+                        right: rect.right as f32,
+                        bottom: rect.bottom as f32,
+                    },
+                    radiusX: tokens.border_radius_medium,
+                    radiusY: tokens.border_radius_medium,
+                };
+                context
+                    .render_target
+                    .FillRoundedRectangle(&rounded_rect, &focused_brush);
+            }
         }
     }
-    match menu_item {
-        MenuItem::MenuItem { text, disabled, .. } => {
-            let text_rect = D2D_RECT_F {
-                left: rect.left as f32 + tokens.spacing_vertical_s_nudge,
-                top: rect.top as f32 + tokens.spacing_vertical_s_nudge,
-                right: rect.right as f32 - tokens.spacing_vertical_s_nudge,
-                bottom: rect.bottom as f32 - tokens.spacing_vertical_s_nudge,
-            };
-            let text_brush = if *disabled {
-                &context.text_disabled_brush
-            } else if focused {
-                &context.text_focused_brush
-            } else {
-                &context.text_brush
-            };
-            context.render_target.DrawText(
-                text.as_wide(),
-                &context.text_format,
-                &text_rect,
-                text_brush,
-                D2D1_DRAW_TEXT_OPTIONS_NONE,
-                DWRITE_MEASURING_MODE_NATURAL,
-            );
-        }
-        MenuItem::SubMenu { text, .. } => {
-            let text_rect = D2D_RECT_F {
-                left: rect.left as f32 + tokens.spacing_vertical_s_nudge,
-                top: rect.top as f32 + tokens.spacing_vertical_s_nudge,
-                right: (rect.right - 4 - 20) as f32 - tokens.spacing_vertical_s_nudge,
-                bottom: rect.bottom as f32 - tokens.spacing_vertical_s_nudge,
-            };
-            context.render_target.DrawText(
-                text.as_wide(),
-                &context.text_format,
-                &text_rect,
-                &context.text_brush,
-                D2D1_DRAW_TEXT_OPTIONS_NONE,
-                DWRITE_MEASURING_MODE_NATURAL,
-            );
-            let device_context5 = context.render_target.cast::<ID2D1DeviceContext5>()?;
-            device_context5.SetTransform(&Matrix3x2::translation(
-                rect.right as f32 - tokens.spacing_vertical_s_nudge - 4f32 - 20f32,
-                rect.top as f32 + tokens.spacing_vertical_s_nudge,
-            ));
-            let svg = if focused {
-                &context.sub_menu_indicator_focused_svg
-            } else {
-                &context.sub_menu_indicator_svg
-            };
-            device_context5.DrawSvgDocument(svg);
-            device_context5.SetTransform(&Matrix3x2::identity());
-        }
-        MenuItem::MenuDivider { .. } => {
-            let start = D2D_POINT_2F {
-                x: (rect.left - MENU_MARGIN) as f32,
-                y: rect.top as f32 + 2.0,
-            };
-            let end = D2D_POINT_2F {
-                x: (rect.right + MENU_MARGIN) as f32,
-                y: rect.top as f32 + 2.0,
-            };
-            let divider_brush = context
-                .render_target
-                .CreateSolidColorBrush(&tokens.color_neutral_stroke2, None)?;
-            context.render_target.DrawLine(
-                start,
-                end,
-                &divider_brush,
-                tokens.stroke_width_thin,
-                None,
-            );
+    unsafe {
+        match menu_item {
+            MenuItem::MenuItem { text, disabled, .. } => {
+                let text_rect = D2D_RECT_F {
+                    left: rect.left as f32 + tokens.spacing_vertical_s_nudge,
+                    top: rect.top as f32 + tokens.spacing_vertical_s_nudge,
+                    right: rect.right as f32 - tokens.spacing_vertical_s_nudge,
+                    bottom: rect.bottom as f32 - tokens.spacing_vertical_s_nudge,
+                };
+                let text_brush = if *disabled {
+                    &context.text_disabled_brush
+                } else if focused {
+                    &context.text_focused_brush
+                } else {
+                    &context.text_brush
+                };
+                context.render_target.DrawText(
+                    text.as_wide(),
+                    &context.text_format,
+                    &text_rect,
+                    text_brush,
+                    D2D1_DRAW_TEXT_OPTIONS_NONE,
+                    DWRITE_MEASURING_MODE_NATURAL,
+                );
+            }
+            MenuItem::SubMenu { text, .. } => {
+                let text_rect = D2D_RECT_F {
+                    left: rect.left as f32 + tokens.spacing_vertical_s_nudge,
+                    top: rect.top as f32 + tokens.spacing_vertical_s_nudge,
+                    right: (rect.right - 4 - 20) as f32 - tokens.spacing_vertical_s_nudge,
+                    bottom: rect.bottom as f32 - tokens.spacing_vertical_s_nudge,
+                };
+                context.render_target.DrawText(
+                    text.as_wide(),
+                    &context.text_format,
+                    &text_rect,
+                    &context.text_brush,
+                    D2D1_DRAW_TEXT_OPTIONS_NONE,
+                    DWRITE_MEASURING_MODE_NATURAL,
+                );
+                let device_context5 = context.render_target.cast::<ID2D1DeviceContext5>()?;
+                device_context5.SetTransform(&Matrix3x2::translation(
+                    rect.right as f32 - tokens.spacing_vertical_s_nudge - 4f32 - 20f32,
+                    rect.top as f32 + tokens.spacing_vertical_s_nudge,
+                ));
+                let svg = if focused {
+                    &context.sub_menu_indicator_focused_svg
+                } else {
+                    &context.sub_menu_indicator_svg
+                };
+                device_context5.DrawSvgDocument(svg);
+                device_context5.SetTransform(&Matrix3x2::identity());
+            }
+            MenuItem::MenuDivider { .. } => {
+                let start = D2D_POINT_2F {
+                    x: (rect.left - MENU_MARGIN) as f32,
+                    y: rect.top as f32 + 2.0,
+                };
+                let end = D2D_POINT_2F {
+                    x: (rect.right + MENU_MARGIN) as f32,
+                    y: rect.top as f32 + 2.0,
+                };
+                let divider_brush = context
+                    .render_target
+                    .CreateSolidColorBrush(&tokens.color_neutral_stroke2, None)?;
+                context.render_target.DrawLine(
+                    start,
+                    end,
+                    &divider_brush,
+                    tokens.stroke_width_thin,
+                    None,
+                );
+            }
         }
     }
     Ok(())
 }
 
-unsafe fn draw_scroll_arrows(window: HWND, context: &Context) -> Result<()> {
+fn draw_scroll_arrows(window: HWND, context: &Context) -> Result<()> {
     // TODO
     Ok(())
 }
 
-unsafe fn draw_popup_menu(window: HWND, context: &Context) -> Result<()> {
+fn draw_popup_menu(window: HWND, context: &Context) -> Result<()> {
     let tokens = &context.qt.theme.tokens;
-    context.render_target.BeginDraw();
-    context
-        .render_target
-        .Clear(Some(&tokens.color_neutral_background1));
+    unsafe {
+        context.render_target.BeginDraw();
+        context
+            .render_target
+            .Clear(Some(&tokens.color_neutral_background1));
+    }
     let menu = context.menu.borrow();
     for (index, item) in menu.items.iter().enumerate() {
         draw_menu_item(&menu, item, context, Some(index) == menu.focused_item_index)?;
@@ -1128,11 +1154,13 @@ unsafe fn draw_popup_menu(window: HWND, context: &Context) -> Result<()> {
     if menu.is_scrolling {
         draw_scroll_arrows(window, context)?;
     }
-    context.render_target.EndDraw(None, None)?;
+    unsafe {
+        context.render_target.EndDraw(None, None)?;
+    }
     Ok(())
 }
 
-unsafe fn on_create(window: HWND, params: CreateParams, x: i32, y: i32) -> Result<Context> {
+fn on_create(window: HWND, params: CreateParams, x: i32, y: i32) -> Result<Context> {
     {
         let mut menu = params.menu.borrow_mut();
         show_popup(
@@ -1146,85 +1174,87 @@ unsafe fn on_create(window: HWND, params: CreateParams, x: i32, y: i32) -> Resul
         )?;
     }
 
-    let mut client_rect = RECT::default();
-    GetClientRect(window, &mut client_rect)?;
-    let dpi = GetDpiForWindow(window);
-    let factory = D2D1CreateFactory::<ID2D1Factory1>(
-        D2D1_FACTORY_TYPE_SINGLE_THREADED,
-        Some(&D2D1_FACTORY_OPTIONS::default()),
-    )?;
-    let render_target = factory.CreateHwndRenderTarget(
-        &D2D1_RENDER_TARGET_PROPERTIES {
-            dpiX: dpi as f32,
-            dpiY: dpi as f32,
-            ..Default::default()
-        },
-        &D2D1_HWND_RENDER_TARGET_PROPERTIES {
-            hwnd: window,
-            pixelSize: D2D_SIZE_U {
-                width: (client_rect.right - client_rect.left) as u32,
-                height: (client_rect.bottom - client_rect.top) as u32,
+    unsafe {
+        let mut client_rect = RECT::default();
+        GetClientRect(window, &mut client_rect)?;
+        let dpi = GetDpiForWindow(window);
+        let factory = D2D1CreateFactory::<ID2D1Factory1>(
+            D2D1_FACTORY_TYPE_SINGLE_THREADED,
+            Some(&D2D1_FACTORY_OPTIONS::default()),
+        )?;
+        let render_target = factory.CreateHwndRenderTarget(
+            &D2D1_RENDER_TARGET_PROPERTIES {
+                dpiX: dpi as f32,
+                dpiY: dpi as f32,
+                ..Default::default()
             },
-            presentOptions: Default::default(),
-        },
-    )?;
-    let text_format = get_text_format(&params.qt)?;
-    let tokens = &params.qt.theme.tokens;
-    let text_brush =
-        render_target.CreateSolidColorBrush(&tokens.color_neutral_foreground2, None)?;
-    let text_focused_brush =
-        render_target.CreateSolidColorBrush(&tokens.color_neutral_foreground1_hover, None)?;
-    let text_disabled_brush =
-        render_target.CreateSolidColorBrush(&tokens.color_neutral_foreground_disabled, None)?;
-    let device_context5 = render_target.cast::<ID2D1DeviceContext5>()?;
-    let sub_menu_indicator_icon = Icon::chevron_right_regular();
-    let sub_menu_indicator_svg =
-        match SHCreateMemStream(Some(sub_menu_indicator_icon.svg.as_bytes())) {
-            None => device_context5.CreateSvgDocument(
-                None,
-                D2D_SIZE_F {
-                    width: sub_menu_indicator_icon.size as f32,
-                    height: sub_menu_indicator_icon.size as f32,
+            &D2D1_HWND_RENDER_TARGET_PROPERTIES {
+                hwnd: window,
+                pixelSize: D2D_SIZE_U {
+                    width: (client_rect.right - client_rect.left) as u32,
+                    height: (client_rect.bottom - client_rect.top) as u32,
                 },
-            )?,
-            Some(svg_stream) => device_context5.CreateSvgDocument(
-                &svg_stream,
-                D2D_SIZE_F {
-                    width: sub_menu_indicator_icon.size as f32,
-                    height: sub_menu_indicator_icon.size as f32,
-                },
-            )?,
-        };
-    let sub_menu_indicator_focused_icon = Icon::chevron_right_filled();
-    let sub_menu_indicator_focused_svg =
-        match SHCreateMemStream(Some(sub_menu_indicator_focused_icon.svg.as_bytes())) {
-            None => device_context5.CreateSvgDocument(
-                None,
-                D2D_SIZE_F {
-                    width: sub_menu_indicator_focused_icon.size as f32,
-                    height: sub_menu_indicator_focused_icon.size as f32,
-                },
-            )?,
-            Some(svg_stream) => device_context5.CreateSvgDocument(
-                &svg_stream,
-                D2D_SIZE_F {
-                    width: sub_menu_indicator_focused_icon.size as f32,
-                    height: sub_menu_indicator_focused_icon.size as f32,
-                },
-            )?,
-        };
-    Ok(Context {
-        qt: params.qt,
-        menu: params.menu,
-        owning_window: params.owning_window,
-        render_target,
-        text_format,
-        text_brush,
-        text_focused_brush,
-        text_disabled_brush,
-        sub_menu_indicator_svg,
-        sub_menu_indicator_focused_svg,
-    })
+                presentOptions: Default::default(),
+            },
+        )?;
+        let text_format = get_text_format(&params.qt)?;
+        let tokens = &params.qt.theme.tokens;
+        let text_brush =
+            render_target.CreateSolidColorBrush(&tokens.color_neutral_foreground2, None)?;
+        let text_focused_brush =
+            render_target.CreateSolidColorBrush(&tokens.color_neutral_foreground1_hover, None)?;
+        let text_disabled_brush =
+            render_target.CreateSolidColorBrush(&tokens.color_neutral_foreground_disabled, None)?;
+        let device_context5 = render_target.cast::<ID2D1DeviceContext5>()?;
+        let sub_menu_indicator_icon = Icon::chevron_right_regular();
+        let sub_menu_indicator_svg =
+            match SHCreateMemStream(Some(sub_menu_indicator_icon.svg.as_bytes())) {
+                None => device_context5.CreateSvgDocument(
+                    None,
+                    D2D_SIZE_F {
+                        width: sub_menu_indicator_icon.size as f32,
+                        height: sub_menu_indicator_icon.size as f32,
+                    },
+                )?,
+                Some(svg_stream) => device_context5.CreateSvgDocument(
+                    &svg_stream,
+                    D2D_SIZE_F {
+                        width: sub_menu_indicator_icon.size as f32,
+                        height: sub_menu_indicator_icon.size as f32,
+                    },
+                )?,
+            };
+        let sub_menu_indicator_focused_icon = Icon::chevron_right_filled();
+        let sub_menu_indicator_focused_svg =
+            match SHCreateMemStream(Some(sub_menu_indicator_focused_icon.svg.as_bytes())) {
+                None => device_context5.CreateSvgDocument(
+                    None,
+                    D2D_SIZE_F {
+                        width: sub_menu_indicator_focused_icon.size as f32,
+                        height: sub_menu_indicator_focused_icon.size as f32,
+                    },
+                )?,
+                Some(svg_stream) => device_context5.CreateSvgDocument(
+                    &svg_stream,
+                    D2D_SIZE_F {
+                        width: sub_menu_indicator_focused_icon.size as f32,
+                        height: sub_menu_indicator_focused_icon.size as f32,
+                    },
+                )?,
+            };
+        Ok(Context {
+            qt: params.qt,
+            menu: params.menu,
+            owning_window: params.owning_window,
+            render_target,
+            text_format,
+            text_brush,
+            text_focused_brush,
+            text_disabled_brush,
+            sub_menu_indicator_svg,
+            sub_menu_indicator_focused_svg,
+        })
+    }
 }
 
 extern "system" fn window_proc(

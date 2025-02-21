@@ -1,12 +1,12 @@
-use windows::core::w;
-use windows::core::Result;
-use windows::core::PCWSTR;
 use windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F;
 use windows::Win32::Graphics::DirectWrite::{
-    IDWriteFactory, IDWriteTextFormat, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL,
-    DWRITE_FONT_WEIGHT, DWRITE_FONT_WEIGHT_REGULAR, DWRITE_FONT_WEIGHT_SEMI_BOLD,
-    DWRITE_LINE_SPACING_METHOD_DEFAULT,
+    DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT,
+    DWRITE_FONT_WEIGHT_REGULAR, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_LINE_SPACING_METHOD_DEFAULT,
+    IDWriteFactory, IDWriteTextFormat,
 };
+use windows::core::PCWSTR;
+use windows::core::Result;
+use windows::core::w;
 pub(crate) struct Tokens {
     pub color_neutral_background1: D2D1_COLOR_F,
     pub color_neutral_background1_hover: D2D1_COLOR_F,
@@ -134,25 +134,24 @@ pub(crate) struct TypographyStyle {
 }
 
 impl TypographyStyle {
-    pub(crate) unsafe fn create_text_format(
-        &self,
-        factory: &IDWriteFactory,
-    ) -> Result<IDWriteTextFormat> {
-        let title_text_format = factory.CreateTextFormat(
-            self.font_family,
-            None,
-            self.font_weight,
-            DWRITE_FONT_STYLE_NORMAL,
-            DWRITE_FONT_STRETCH_NORMAL,
-            self.font_size,
-            w!(""),
-        )?;
-        title_text_format.SetLineSpacing(
-            DWRITE_LINE_SPACING_METHOD_DEFAULT,
-            self.line_height - self.font_size,
-            self.font_size,
-        )?;
-        Ok(title_text_format)
+    pub(crate) fn create_text_format(&self, factory: &IDWriteFactory) -> Result<IDWriteTextFormat> {
+        unsafe {
+            let title_text_format = factory.CreateTextFormat(
+                self.font_family,
+                None,
+                self.font_weight,
+                DWRITE_FONT_STYLE_NORMAL,
+                DWRITE_FONT_STRETCH_NORMAL,
+                self.font_size,
+                w!(""),
+            )?;
+            title_text_format.SetLineSpacing(
+                DWRITE_LINE_SPACING_METHOD_DEFAULT,
+                self.line_height - self.font_size,
+                self.font_size,
+            )?;
+            Ok(title_text_format)
+        }
     }
 }
 

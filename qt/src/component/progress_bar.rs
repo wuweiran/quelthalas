@@ -1,30 +1,31 @@
 use std::mem::size_of;
 
-use windows::core::*;
 use windows::Win32::Foundation::{FALSE, HINSTANCE, HWND, LPARAM, LRESULT, RECT, TRUE, WPARAM};
 use windows::Win32::Graphics::Direct2D::Common::{
-    D2D1_GRADIENT_STOP, D2D_POINT_2F, D2D_RECT_F, D2D_SIZE_U,
+    D2D_POINT_2F, D2D_RECT_F, D2D_SIZE_U, D2D1_GRADIENT_STOP,
 };
 use windows::Win32::Graphics::Direct2D::{
-    D2D1CreateFactory, ID2D1Factory1, ID2D1GradientStopCollection, ID2D1HwndRenderTarget,
     D2D1_EXTEND_MODE_WRAP, D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_GAMMA_2_2,
     D2D1_HWND_RENDER_TARGET_PROPERTIES, D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES,
-    D2D1_RENDER_TARGET_PROPERTIES, D2D1_ROUNDED_RECT,
+    D2D1_RENDER_TARGET_PROPERTIES, D2D1_ROUNDED_RECT, D2D1CreateFactory, ID2D1Factory1,
+    ID2D1GradientStopCollection, ID2D1HwndRenderTarget,
 };
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, CreateRoundRectRgn, EndPaint, InvalidateRect, SetWindowRgn, PAINTSTRUCT,
+    BeginPaint, CreateRoundRectRgn, EndPaint, InvalidateRect, PAINTSTRUCT, SetWindowRgn,
 };
-use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
+use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
 use windows::Win32::UI::Animation::{
     IUIAnimationManager2, IUIAnimationTimer, IUIAnimationTimerEventHandler,
     IUIAnimationTimerEventHandler_Impl, IUIAnimationTimerUpdateHandler,
-    IUIAnimationTransitionLibrary2, IUIAnimationVariable2, UIAnimationManager2, UIAnimationTimer,
-    UIAnimationTransitionLibrary2, UI_ANIMATION_IDLE_BEHAVIOR_DISABLE, UI_ANIMATION_MANAGER_IDLE,
+    IUIAnimationTransitionLibrary2, IUIAnimationVariable2, UI_ANIMATION_IDLE_BEHAVIOR_DISABLE,
+    UI_ANIMATION_MANAGER_IDLE, UIAnimationManager2, UIAnimationTimer,
+    UIAnimationTransitionLibrary2,
 };
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::WindowsAndMessaging::*;
+use windows::core::*;
 
-use crate::{get_scaling_factor, QT};
+use crate::{QT, get_scaling_factor};
 
 #[derive(Copy, Clone)]
 pub enum Shape {
@@ -156,212 +157,222 @@ impl IUIAnimationTimerEventHandler_Impl for AnimationTimerEventHandler_Impl {
     }
 }
 
-unsafe fn on_create(window: HWND, state: State) -> Result<Context> {
-    let factory = D2D1CreateFactory::<ID2D1Factory1>(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)?;
-    let mut rect = RECT::default();
-    GetClientRect(window, &mut rect)?;
-    let dpi = GetDpiForWindow(window);
-    let render_target = factory.CreateHwndRenderTarget(
-        &D2D1_RENDER_TARGET_PROPERTIES {
-            dpiX: dpi as f32,
-            dpiY: dpi as f32,
-            ..Default::default()
-        },
-        &D2D1_HWND_RENDER_TARGET_PROPERTIES {
-            hwnd: window,
-            pixelSize: D2D_SIZE_U {
-                width: rect.right as u32,
-                height: rect.bottom as u32,
+fn on_create(window: HWND, state: State) -> Result<Context> {
+    unsafe {
+        let factory = D2D1CreateFactory::<ID2D1Factory1>(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)?;
+        let mut rect = RECT::default();
+        GetClientRect(window, &mut rect)?;
+        let dpi = GetDpiForWindow(window);
+        let render_target = factory.CreateHwndRenderTarget(
+            &D2D1_RENDER_TARGET_PROPERTIES {
+                dpiX: dpi as f32,
+                dpiY: dpi as f32,
+                ..Default::default()
             },
-            presentOptions: Default::default(),
-        },
-    )?;
+            &D2D1_HWND_RENDER_TARGET_PROPERTIES {
+                hwnd: window,
+                pixelSize: D2D_SIZE_U {
+                    width: rect.right as u32,
+                    height: rect.bottom as u32,
+                },
+                presentOptions: Default::default(),
+            },
+        )?;
 
-    let scaling_factor = get_scaling_factor(window);
-    let tokens = &state.qt.theme.tokens;
-    let corner_diameter = match state.shape {
-        Shape::Rounded => rect
-            .bottom
-            .min((tokens.border_radius_medium * 2f32 * scaling_factor) as i32),
-        Shape::Square => rect
-            .bottom
-            .min((tokens.border_radius_none * 2f32 * scaling_factor) as i32),
-    };
-    let region = CreateRoundRectRgn(
-        0,
-        0,
-        rect.right + 1,
-        rect.bottom + 1,
-        corner_diameter,
-        corner_diameter,
-    );
-    SetWindowRgn(window, Some(region), true);
-    let animation_timer: IUIAnimationTimer =
-        CoCreateInstance(&UIAnimationTimer, None, CLSCTX_INPROC_SERVER)?;
-    let transition_library: IUIAnimationTransitionLibrary2 =
-        CoCreateInstance(&UIAnimationTransitionLibrary2, None, CLSCTX_INPROC_SERVER)?;
-    let animation_manager: IUIAnimationManager2 =
-        CoCreateInstance(&UIAnimationManager2, None, CLSCTX_INPROC_SERVER)?;
-    let timer_update_handler = animation_manager.cast::<IUIAnimationTimerUpdateHandler>()?;
-    animation_timer
-        .SetTimerUpdateHandler(&timer_update_handler, UI_ANIMATION_IDLE_BEHAVIOR_DISABLE)?;
-    let timer_event_handler: IUIAnimationTimerEventHandler =
-        AnimationTimerEventHandler { window }.into();
-    animation_timer.SetTimerEventHandler(&timer_event_handler)?;
-    let indeterminate_stop_collection = render_target.CreateGradientStopCollection(
-        &[
-            D2D1_GRADIENT_STOP {
-                position: 0.0,
-                color: tokens.color_neutral_background6,
-            },
-            D2D1_GRADIENT_STOP {
-                position: 0.5,
-                color: tokens.color_compound_brand_background,
-            },
-            D2D1_GRADIENT_STOP {
-                position: 1.0,
-                color: tokens.color_neutral_background6,
-            },
-        ],
-        D2D1_GAMMA_2_2,
-        D2D1_EXTEND_MODE_WRAP,
-    )?;
-    let indeterminate_left = animation_manager.CreateAnimationVariable(-0.33)?;
-    if let None = state.value {
-        let transition = transition_library.CreateLinearTransition(3.0, 1.0)?;
-        let seconds_now = animation_timer.GetTime()?;
-        animation_manager.ScheduleTransition(&indeterminate_left, &transition, seconds_now)?;
-    };
-    Ok(Context {
-        state,
-        render_target,
-        animation_manager,
-        animation_timer,
-        transition_library,
-        indeterminate_stop_collection,
-        indeterminate_left,
-    })
+        let scaling_factor = get_scaling_factor(window);
+        let tokens = &state.qt.theme.tokens;
+        let corner_diameter = match state.shape {
+            Shape::Rounded => rect
+                .bottom
+                .min((tokens.border_radius_medium * 2f32 * scaling_factor) as i32),
+            Shape::Square => rect
+                .bottom
+                .min((tokens.border_radius_none * 2f32 * scaling_factor) as i32),
+        };
+        let region = CreateRoundRectRgn(
+            0,
+            0,
+            rect.right + 1,
+            rect.bottom + 1,
+            corner_diameter,
+            corner_diameter,
+        );
+        SetWindowRgn(window, Some(region), true);
+        let animation_timer: IUIAnimationTimer =
+            CoCreateInstance(&UIAnimationTimer, None, CLSCTX_INPROC_SERVER)?;
+        let transition_library: IUIAnimationTransitionLibrary2 =
+            CoCreateInstance(&UIAnimationTransitionLibrary2, None, CLSCTX_INPROC_SERVER)?;
+        let animation_manager: IUIAnimationManager2 =
+            CoCreateInstance(&UIAnimationManager2, None, CLSCTX_INPROC_SERVER)?;
+        let timer_update_handler = animation_manager.cast::<IUIAnimationTimerUpdateHandler>()?;
+        animation_timer
+            .SetTimerUpdateHandler(&timer_update_handler, UI_ANIMATION_IDLE_BEHAVIOR_DISABLE)?;
+        let timer_event_handler: IUIAnimationTimerEventHandler =
+            AnimationTimerEventHandler { window }.into();
+        animation_timer.SetTimerEventHandler(&timer_event_handler)?;
+        let indeterminate_stop_collection = render_target.CreateGradientStopCollection(
+            &[
+                D2D1_GRADIENT_STOP {
+                    position: 0.0,
+                    color: tokens.color_neutral_background6,
+                },
+                D2D1_GRADIENT_STOP {
+                    position: 0.5,
+                    color: tokens.color_compound_brand_background,
+                },
+                D2D1_GRADIENT_STOP {
+                    position: 1.0,
+                    color: tokens.color_neutral_background6,
+                },
+            ],
+            D2D1_GAMMA_2_2,
+            D2D1_EXTEND_MODE_WRAP,
+        )?;
+        let indeterminate_left = animation_manager.CreateAnimationVariable(-0.33)?;
+        if let None = state.value {
+            let transition = transition_library.CreateLinearTransition(3.0, 1.0)?;
+            let seconds_now = animation_timer.GetTime()?;
+            animation_manager.ScheduleTransition(&indeterminate_left, &transition, seconds_now)?;
+        };
+        Ok(Context {
+            state,
+            render_target,
+            animation_manager,
+            animation_timer,
+            transition_library,
+            indeterminate_stop_collection,
+            indeterminate_left,
+        })
+    }
 }
 
-unsafe fn paint(window: HWND, context: &Context) -> Result<()> {
+fn paint(window: HWND, context: &Context) -> Result<()> {
     let state = &context.state;
     let tokens = &state.qt.theme.tokens;
-    context
-        .render_target
-        .Clear(Some(&tokens.color_neutral_background6));
+    unsafe {
+        context
+            .render_target
+            .Clear(Some(&tokens.color_neutral_background6));
+    }
 
     let mut rect = RECT::default();
-    GetClientRect(window, &mut rect)?;
-    let scaling_factor = get_scaling_factor(window);
-    let width = rect.right as f32 / scaling_factor;
-    let height = rect.bottom as f32 / scaling_factor;
+    unsafe {
+        GetClientRect(window, &mut rect)?;
+        let scaling_factor = get_scaling_factor(window);
+        let width = rect.right as f32 / scaling_factor;
+        let height = rect.bottom as f32 / scaling_factor;
 
-    match state.value {
-        Some(value) => {
-            let bar_width = value.min(state.max) / state.max * width;
-            let corner_radius = match state.shape {
-                Shape::Rounded => (height / 2f32).min(tokens.border_radius_medium),
-                Shape::Square => tokens.border_radius_none,
-            };
-            let bar_rect = D2D1_ROUNDED_RECT {
-                rect: D2D_RECT_F {
-                    left: 0f32,
+        match state.value {
+            Some(value) => {
+                let bar_width = value.min(state.max) / state.max * width;
+                let corner_radius = match state.shape {
+                    Shape::Rounded => (height / 2f32).min(tokens.border_radius_medium),
+                    Shape::Square => tokens.border_radius_none,
+                };
+                let bar_rect = D2D1_ROUNDED_RECT {
+                    rect: D2D_RECT_F {
+                        left: 0f32,
+                        top: 0f32,
+                        right: bar_width,
+                        bottom: height,
+                    },
+                    radiusX: corner_radius,
+                    radiusY: corner_radius,
+                };
+                let bar_brush = context
+                    .render_target
+                    .CreateSolidColorBrush(&tokens.color_compound_brand_background, None)?;
+                context
+                    .render_target
+                    .FillRoundedRectangle(&bar_rect, &bar_brush);
+            }
+            None => {
+                let left = context.indeterminate_left.GetValue()?;
+                let brush = context.render_target.CreateLinearGradientBrush(
+                    &D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES {
+                        startPoint: D2D_POINT_2F {
+                            x: left as f32 * width,
+                            y: 0.0,
+                        },
+                        endPoint: D2D_POINT_2F {
+                            x: width * 0.33 + left as f32 * width,
+                            y: 0.0,
+                        },
+                    },
+                    None,
+                    &context.indeterminate_stop_collection,
+                )?;
+                let indeterminate_rect = D2D_RECT_F {
+                    left: left as f32 * width,
                     top: 0f32,
-                    right: bar_width,
+                    right: width * 0.33 + left as f32 * width,
                     bottom: height,
-                },
-                radiusX: corner_radius,
-                radiusY: corner_radius,
-            };
-            let bar_brush = context
-                .render_target
-                .CreateSolidColorBrush(&tokens.color_compound_brand_background, None)?;
-            context
-                .render_target
-                .FillRoundedRectangle(&bar_rect, &bar_brush);
-        }
-        None => {
-            let left = context.indeterminate_left.GetValue()?;
-            let brush = context.render_target.CreateLinearGradientBrush(
-                &D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES {
-                    startPoint: D2D_POINT_2F {
-                        x: left as f32 * width,
-                        y: 0.0,
-                    },
-                    endPoint: D2D_POINT_2F {
-                        x: width * 0.33 + left as f32 * width,
-                        y: 0.0,
-                    },
-                },
-                None,
-                &context.indeterminate_stop_collection,
-            )?;
-            let indeterminate_rect = D2D_RECT_F {
-                left: left as f32 * width,
-                top: 0f32,
-                right: width * 0.33 + left as f32 * width,
-                bottom: height,
-            };
-            context
-                .render_target
-                .FillRectangle(&indeterminate_rect, &brush);
+                };
+                context
+                    .render_target
+                    .FillRectangle(&indeterminate_rect, &brush);
+            }
         }
     }
 
     Ok(())
 }
 
-unsafe fn on_paint(window: HWND, context: &Context) -> Result<()> {
-    context.render_target.BeginDraw();
-    let result = paint(window, context);
-    match result {
-        Ok(_) => context.render_target.EndDraw(None, None),
-        Err(_) => {
-            context.render_target.EndDraw(None, None)?;
-            result
+fn on_paint(window: HWND, context: &Context) -> Result<()> {
+    unsafe {
+        context.render_target.BeginDraw();
+        let result = paint(window, context);
+        match result {
+            Ok(_) => context.render_target.EndDraw(None, None),
+            Err(_) => {
+                context.render_target.EndDraw(None, None)?;
+                result
+            }
         }
     }
 }
 
-unsafe fn on_dpi_changed(window: HWND, context: &Context) -> Result<()> {
+fn on_dpi_changed(window: HWND, context: &Context) -> Result<()> {
     let scaling_factor = get_scaling_factor(window);
     let scaled_width = context.state.width * scaling_factor;
     let scaled_height = context.state.get_height() * scaling_factor;
-    SetWindowPos(
-        window,
-        None,
-        0,
-        0,
-        scaled_width as i32,
-        scaled_height as i32,
-        SWP_NOMOVE | SWP_NOZORDER,
-    )?;
-    context.render_target.Resize(&D2D_SIZE_U {
-        width: scaled_width as u32,
-        height: scaled_height as u32,
-    })?;
-    let new_dpi = GetDpiForWindow(window);
-    context.render_target.SetDpi(new_dpi as f32, new_dpi as f32);
-    let _ = InvalidateRect(Some(window), None, false);
+    unsafe {
+        SetWindowPos(
+            window,
+            None,
+            0,
+            0,
+            scaled_width as i32,
+            scaled_height as i32,
+            SWP_NOMOVE | SWP_NOZORDER,
+        )?;
+        context.render_target.Resize(&D2D_SIZE_U {
+            width: scaled_width as u32,
+            height: scaled_height as u32,
+        })?;
+        let new_dpi = GetDpiForWindow(window);
+        context.render_target.SetDpi(new_dpi as f32, new_dpi as f32);
+        let _ = InvalidateRect(Some(window), None, false);
 
-    let tokens = &context.state.qt.theme.tokens;
-    let corner_diameter = match context.state.shape {
-        Shape::Rounded => {
-            scaled_height.min(tokens.border_radius_medium * 2f32 * scaling_factor) as i32
-        }
-        Shape::Square => {
-            scaled_height.min(tokens.border_radius_none * 2f32 * scaling_factor) as i32
-        }
-    };
-    let region = CreateRoundRectRgn(
-        0,
-        0,
-        scaled_width as i32 + 1,
-        scaled_height as i32 + 1,
-        corner_diameter,
-        corner_diameter,
-    );
-    SetWindowRgn(window, Some(region), true);
+        let tokens = &context.state.qt.theme.tokens;
+        let corner_diameter = match context.state.shape {
+            Shape::Rounded => {
+                scaled_height.min(tokens.border_radius_medium * 2f32 * scaling_factor) as i32
+            }
+            Shape::Square => {
+                scaled_height.min(tokens.border_radius_none * 2f32 * scaling_factor) as i32
+            }
+        };
+        let region = CreateRoundRectRgn(
+            0,
+            0,
+            scaled_width as i32 + 1,
+            scaled_height as i32 + 1,
+            corner_diameter,
+            corner_diameter,
+        );
+        SetWindowRgn(window, Some(region), true);
+    }
     Ok(())
 }
 

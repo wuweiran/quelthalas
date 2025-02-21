@@ -1,15 +1,15 @@
 //#![windows_subsystem = "windows"]
 use std::mem::size_of;
 
-use windows::core::*;
 use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, CreateSolidBrush, EndPaint, FillRect, PAINTSTRUCT,
 };
-use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
+use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::WindowsAndMessaging::*;
+use windows::core::*;
 
 use quelthalas::component::button::IconPosition;
 use quelthalas::component::dialog::DialogResult;
