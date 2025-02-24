@@ -1,6 +1,8 @@
 use std::mem::size_of;
 
-use windows::Foundation::Numerics::Matrix3x2;
+use crate::QT;
+use crate::icon::Icon;
+use crate::{MouseEvent, get_scaling_factor};
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Direct2D::Common::{
     D2D_RECT_F, D2D_SIZE_F, D2D_SIZE_U, D2D1_COLOR_F,
@@ -37,10 +39,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{TME_LEAVE, TRACKMOUSEEVENT, Tr
 use windows::Win32::UI::Shell::SHCreateMemStream;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::*;
-
-use crate::QT;
-use crate::icon::Icon;
-use crate::{MouseEvent, get_scaling_factor};
+use windows_numerics::Matrix3x2;
 
 #[derive(Copy, Clone)]
 pub enum Appearance {

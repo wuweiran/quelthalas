@@ -2,7 +2,8 @@ use std::cell::RefCell;
 use std::mem::size_of;
 use std::rc::Rc;
 
-use windows::Foundation::Numerics::Matrix3x2;
+use crate::icon::Icon;
+use crate::{QT, get_scaling_factor};
 use windows::Win32::Foundation::{
     ERROR_INVALID_WINDOW_HANDLE, FALSE, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, TRUE, WPARAM,
 };
@@ -33,9 +34,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::Shell::SHCreateMemStream;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::*;
-
-use crate::icon::Icon;
-use crate::{QT, get_scaling_factor};
+use windows_numerics::Matrix3x2;
 
 pub enum MenuInfo {
     MenuItem {
