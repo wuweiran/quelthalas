@@ -571,18 +571,25 @@ fn paint(window: HWND, context: &Context) -> Result<()> {
                 let device_context5 = context.render_target.cast::<ID2D1DeviceContext5>()?;
                 let viewport_size = svg.GetViewportSize();
                 let desired_size = state.get_desired_icon_size();
-                match state.icon_position.unwrap_or(IconPosition::Before) {
-                    IconPosition::Before => {
-                        device_context5.SetTransform(&Matrix3x2::translation(
-                            left + desired_size / 2f32 - viewport_size.width / 2f32,
-                            top / 2f32 + bottom / 2f32 - viewport_size.height / 2f32,
-                        ));
-                    }
-                    IconPosition::After => device_context5.SetTransform(&Matrix3x2::translation(
-                        right - desired_size / 2f32 - viewport_size.width / 2f32,
-                        top / 2f32 + bottom / 2f32 - viewport_size.height / 2f32,
-                    )),
-                }
+                let transform = match state.icon_position.unwrap_or(IconPosition::Before) {
+                    IconPosition::Before => Matrix3x2 {
+                        M11: desired_size / viewport_size.width,
+                        M12: 0.0,
+                        M21: 0.0,
+                        M22: desired_size / viewport_size.height,
+                        M31: left,
+                        M32: top / 2f32 + bottom / 2f32 - desired_size / 2f32,
+                    },
+                    IconPosition::After => Matrix3x2 {
+                        M11: desired_size / viewport_size.width,
+                        M12: 0.0,
+                        M21: 0.0,
+                        M22: desired_size / viewport_size.height,
+                        M31: right - desired_size,
+                        M32: top / 2f32 + bottom / 2f32 - desired_size / 2f32,
+                    },
+                };
+                device_context5.SetTransform(&transform);
                 device_context5.DrawSvgDocument(svg);
                 device_context5.SetTransform(&Matrix3x2::identity());
             }
