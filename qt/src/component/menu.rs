@@ -7,9 +7,7 @@ use crate::{QT, get_scaling_factor};
 use windows::Win32::Foundation::{
     ERROR_INVALID_WINDOW_HANDLE, FALSE, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, TRUE, WPARAM,
 };
-use windows::Win32::Graphics::Direct2D::Common::{
-    D2D_POINT_2F, D2D_RECT_F, D2D_SIZE_F, D2D_SIZE_U,
-};
+use windows::Win32::Graphics::Direct2D::Common::{D2D_RECT_F, D2D_SIZE_F, D2D_SIZE_U};
 use windows::Win32::Graphics::Direct2D::{
     D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_FACTORY_OPTIONS, D2D1_FACTORY_TYPE_SINGLE_THREADED,
     D2D1_HWND_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_PROPERTIES, D2D1_ROUNDED_RECT,
@@ -34,7 +32,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::Shell::SHCreateMemStream;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::*;
-use windows_numerics::Matrix3x2;
+use windows_numerics::{Matrix3x2, Vector2};
 
 pub enum MenuInfo {
     MenuItem {
@@ -1109,13 +1107,13 @@ fn draw_menu_item(
                 device_context5.SetTransform(&Matrix3x2::identity());
             }
             MenuItem::MenuDivider { .. } => {
-                let start = D2D_POINT_2F {
-                    x: (rect.left - MENU_MARGIN) as f32,
-                    y: rect.top as f32 + 2.0,
+                let start = Vector2 {
+                    X: (rect.left - MENU_MARGIN) as f32,
+                    Y: rect.top as f32 + 2.0,
                 };
-                let end = D2D_POINT_2F {
-                    x: (rect.right + MENU_MARGIN) as f32,
-                    y: rect.top as f32 + 2.0,
+                let end = Vector2 {
+                    X: (rect.right + MENU_MARGIN) as f32,
+                    Y: rect.top as f32 + 2.0,
                 };
                 let divider_brush = context
                     .render_target

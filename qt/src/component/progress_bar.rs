@@ -1,9 +1,8 @@
 use std::mem::size_of;
 
+use crate::{QT, get_scaling_factor};
 use windows::Win32::Foundation::{FALSE, HINSTANCE, HWND, LPARAM, LRESULT, RECT, TRUE, WPARAM};
-use windows::Win32::Graphics::Direct2D::Common::{
-    D2D_POINT_2F, D2D_RECT_F, D2D_SIZE_U, D2D1_GRADIENT_STOP,
-};
+use windows::Win32::Graphics::Direct2D::Common::{D2D_RECT_F, D2D_SIZE_U, D2D1_GRADIENT_STOP};
 use windows::Win32::Graphics::Direct2D::{
     D2D1_EXTEND_MODE_WRAP, D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_GAMMA_2_2,
     D2D1_HWND_RENDER_TARGET_PROPERTIES, D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES,
@@ -24,8 +23,7 @@ use windows::Win32::UI::Animation::{
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::*;
-
-use crate::{QT, get_scaling_factor};
+use windows_numerics::Vector2;
 
 #[derive(Copy, Clone)]
 pub enum Shape {
@@ -290,13 +288,13 @@ fn paint(window: HWND, context: &Context) -> Result<()> {
                 let left = context.indeterminate_left.GetValue()?;
                 let brush = context.render_target.CreateLinearGradientBrush(
                     &D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES {
-                        startPoint: D2D_POINT_2F {
-                            x: left as f32 * width,
-                            y: 0.0,
+                        startPoint: Vector2 {
+                            X: left as f32 * width,
+                            Y: 0.0,
                         },
-                        endPoint: D2D_POINT_2F {
-                            x: width * 0.33 + left as f32 * width,
-                            y: 0.0,
+                        endPoint: Vector2 {
+                            X: width * 0.33 + left as f32 * width,
+                            Y: 0.0,
                         },
                     },
                     None,
