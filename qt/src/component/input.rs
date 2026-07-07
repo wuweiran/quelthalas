@@ -1394,7 +1394,7 @@ fn paint_text(
             &context.buffer.as_wcs().as_wide()[col..col + count],
         );
         let mut size = SIZE::default();
-        if GetTextExtentPoint32W(
+        if !GetTextExtentPoint32W(
             dc,
             &context.buffer.as_wcs().as_wide()[col..col + count],
             &mut size,
