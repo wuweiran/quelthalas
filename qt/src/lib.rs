@@ -4,7 +4,8 @@ use std::rc::Rc;
 
 use windows::Win32::Foundation::HWND;
 use windows::Win32::Graphics::Direct2D::{
-    D2D1CreateFactory, D2D1_FACTORY_OPTIONS, D2D1_FACTORY_TYPE_SINGLE_THREADED, ID2D1Factory1,
+    D2D1CreateFactory, D2D1_FACTORY_OPTIONS, D2D1_FACTORY_TYPE_SINGLE_THREADED,
+    D2D1_STROKE_STYLE_PROPERTIES1, ID2D1Factory1, ID2D1StrokeStyle,
 };
 use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FACTORY_TYPE_SHARED, DWriteCreateFactory, IDWriteFactory,
@@ -13,7 +14,7 @@ use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
 use windows::Win32::UI::Animation::{IUIAnimationTransitionLibrary2, UIAnimationTransitionLibrary2};
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::WindowsAndMessaging::USER_DEFAULT_SCREEN_DPI;
-use windows::core::Result;
+use windows::core::{Interface, Result};
 
 use crate::theme::Theme;
 
@@ -35,6 +36,7 @@ pub struct QT {
     pub(crate) d2d_factory: ID2D1Factory1,
     pub(crate) dwrite_factory: IDWriteFactory,
     pub(crate) transition_library: IUIAnimationTransitionLibrary2,
+    pub(crate) stroke_style: ID2D1StrokeStyle,
 }
 
 impl QT {
@@ -50,11 +52,17 @@ impl QT {
         let transition_library = unsafe {
             CoCreateInstance(&UIAnimationTransitionLibrary2, None, CLSCTX_INPROC_SERVER)?
         };
+        let stroke_style = unsafe {
+            d2d_factory
+                .CreateStrokeStyle(&D2D1_STROKE_STYLE_PROPERTIES1::default(), None)?
+                .cast::<ID2D1StrokeStyle>()?
+        };
         Ok(QT {
             theme: Rc::new(Theme::web_light()),
             d2d_factory,
             dwrite_factory,
             transition_library,
+            stroke_style,
         })
     }
 }

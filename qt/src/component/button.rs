@@ -9,9 +9,8 @@ use windows::Win32::Graphics::Direct2D::Common::{
 };
 use windows::Win32::Graphics::Direct2D::{
     D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_HWND_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_PROPERTIES,
-    D2D1_ROUNDED_RECT, D2D1_STROKE_STYLE_PROPERTIES1, D2D1_SVG_PAINT_TYPE_COLOR,
-    ID2D1DeviceContext5, ID2D1HwndRenderTarget, ID2D1StrokeStyle, ID2D1SvgAttribute,
-    ID2D1SvgDocument,
+    D2D1_ROUNDED_RECT, D2D1_SVG_PAINT_TYPE_COLOR, ID2D1DeviceContext5, ID2D1HwndRenderTarget,
+    ID2D1StrokeStyle, ID2D1SvgAttribute, ID2D1SvgDocument,
 };
 use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_MEASURING_MODE_NATURAL,
@@ -263,9 +262,7 @@ fn on_create(window: HWND, state: State) -> Result<Context> {
                 presentOptions: Default::default(),
             },
         )?;
-        let stroke_style = factory
-            .CreateStrokeStyle(&D2D1_STROKE_STYLE_PROPERTIES1::default(), None)?
-            .cast::<ID2D1StrokeStyle>()?;
+        let stroke_style = state.qt.stroke_style.clone();
         let svg_document = match state.icon {
             None => None,
             Some(icon) => match SHCreateMemStream(Some(icon.svg.as_bytes())) {
