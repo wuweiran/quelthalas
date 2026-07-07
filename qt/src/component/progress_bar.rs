@@ -4,9 +4,8 @@ use crate::{QT, get_scaling_factor};
 use windows::Win32::Foundation::{FALSE, HINSTANCE, HWND, LPARAM, LRESULT, RECT, TRUE, WPARAM};
 use windows::Win32::Graphics::Direct2D::Common::{D2D_RECT_F, D2D_SIZE_U, D2D1_GRADIENT_STOP};
 use windows::Win32::Graphics::Direct2D::{
-    D2D1_EXTEND_MODE_WRAP, D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_GAMMA_2_2,
-    D2D1_HWND_RENDER_TARGET_PROPERTIES, D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES,
-    D2D1_RENDER_TARGET_PROPERTIES, D2D1_ROUNDED_RECT, D2D1CreateFactory, ID2D1Factory1,
+    D2D1_EXTEND_MODE_WRAP, D2D1_GAMMA_2_2, D2D1_HWND_RENDER_TARGET_PROPERTIES,
+    D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES, D2D1_RENDER_TARGET_PROPERTIES, D2D1_ROUNDED_RECT,
     ID2D1GradientStopCollection, ID2D1HwndRenderTarget,
 };
 use windows::Win32::Graphics::Gdi::{
@@ -18,7 +17,6 @@ use windows::Win32::UI::Animation::{
     IUIAnimationTimerEventHandler_Impl, IUIAnimationTimerUpdateHandler,
     IUIAnimationTransitionLibrary2, IUIAnimationVariable2, UI_ANIMATION_IDLE_BEHAVIOR_DISABLE,
     UI_ANIMATION_MANAGER_IDLE, UIAnimationManager2, UIAnimationTimer,
-    UIAnimationTransitionLibrary2,
 };
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::WindowsAndMessaging::*;
@@ -157,7 +155,7 @@ impl IUIAnimationTimerEventHandler_Impl for AnimationTimerEventHandler_Impl {
 
 fn on_create(window: HWND, state: State) -> Result<Context> {
     unsafe {
-        let factory = D2D1CreateFactory::<ID2D1Factory1>(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)?;
+        let factory = &state.qt.d2d_factory;
         let mut rect = RECT::default();
         GetClientRect(window, &mut rect)?;
         let dpi = GetDpiForWindow(window);
@@ -198,8 +196,7 @@ fn on_create(window: HWND, state: State) -> Result<Context> {
         SetWindowRgn(window, Some(region), true);
         let animation_timer: IUIAnimationTimer =
             CoCreateInstance(&UIAnimationTimer, None, CLSCTX_INPROC_SERVER)?;
-        let transition_library: IUIAnimationTransitionLibrary2 =
-            CoCreateInstance(&UIAnimationTransitionLibrary2, None, CLSCTX_INPROC_SERVER)?;
+        let transition_library = state.qt.transition_library.clone();
         let animation_manager: IUIAnimationManager2 =
             CoCreateInstance(&UIAnimationManager2, None, CLSCTX_INPROC_SERVER)?;
         let timer_update_handler = animation_manager.cast::<IUIAnimationTimerUpdateHandler>()?;

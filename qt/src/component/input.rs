@@ -36,7 +36,7 @@ use windows::Win32::UI::Animation::{
     IUIAnimationManager2, IUIAnimationTimer, IUIAnimationTimerEventHandler,
     IUIAnimationTimerEventHandler_Impl, IUIAnimationTimerUpdateHandler,
     IUIAnimationTransitionLibrary2, IUIAnimationVariable2, UI_ANIMATION_IDLE_BEHAVIOR_DISABLE,
-    UIAnimationManager2, UIAnimationTimer, UIAnimationTransitionLibrary2,
+    UIAnimationManager2, UIAnimationTimer,
 };
 use windows::Win32::UI::Controls::{SetScrollInfo, WORD_BREAK_ACTION};
 use windows::Win32::UI::Controls::{WB_ISDELIMITER, WB_LEFT, WB_RIGHT};
@@ -943,8 +943,7 @@ fn on_create(window: HWND, state: State) -> Result<Context> {
         ReleaseDC(Some(window), dc);
         let animation_timer: IUIAnimationTimer =
             CoCreateInstance(&UIAnimationTimer, None, CLSCTX_INPROC_SERVER)?;
-        let transition_library: IUIAnimationTransitionLibrary2 =
-            CoCreateInstance(&UIAnimationTransitionLibrary2, None, CLSCTX_INPROC_SERVER)?;
+        let transition_library = state.qt.transition_library.clone();
         let animation_manager: IUIAnimationManager2 =
             CoCreateInstance(&UIAnimationManager2, None, CLSCTX_INPROC_SERVER)?;
         let timer_update_handler = animation_manager.cast::<IUIAnimationTimerUpdateHandler>()?;

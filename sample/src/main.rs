@@ -70,7 +70,9 @@ extern "system" fn window_process(
     unsafe {
         match message {
             WM_CREATE => {
-                let qt = QT::default();
+                let Ok(qt) = QT::new() else {
+                    return LRESULT(-1);
+                };
                 let scaling_factor = GetDpiForWindow(window) / USER_DEFAULT_SCREEN_DPI;
                 let icon = Icon::calendar_month_regular();
 

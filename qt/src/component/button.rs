@@ -8,16 +8,15 @@ use windows::Win32::Graphics::Direct2D::Common::{
     D2D_RECT_F, D2D_SIZE_F, D2D_SIZE_U, D2D1_COLOR_F,
 };
 use windows::Win32::Graphics::Direct2D::{
-    D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_FACTORY_OPTIONS, D2D1_FACTORY_TYPE_SINGLE_THREADED,
-    D2D1_HWND_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_PROPERTIES, D2D1_ROUNDED_RECT,
-    D2D1_STROKE_STYLE_PROPERTIES1, D2D1_SVG_PAINT_TYPE_COLOR, D2D1CreateFactory,
-    ID2D1DeviceContext5, ID2D1Factory1, ID2D1HwndRenderTarget, ID2D1StrokeStyle, ID2D1SvgAttribute,
+    D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_HWND_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_PROPERTIES,
+    D2D1_ROUNDED_RECT, D2D1_STROKE_STYLE_PROPERTIES1, D2D1_SVG_PAINT_TYPE_COLOR,
+    ID2D1DeviceContext5, ID2D1HwndRenderTarget, ID2D1StrokeStyle, ID2D1SvgAttribute,
     ID2D1SvgDocument,
 };
 use windows::Win32::Graphics::DirectWrite::{
-    DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL,
-    DWRITE_MEASURING_MODE_NATURAL, DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_CENTER,
-    DWRITE_TEXT_METRICS, DWriteCreateFactory, IDWriteFactory, IDWriteTextFormat,
+    DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_MEASURING_MODE_NATURAL,
+    DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_TEXT_METRICS,
+    IDWriteTextFormat,
 };
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, CreateRectRgn, CreateRoundRectRgn, DeleteObject, EndPaint, GetWindowRgn,
@@ -27,7 +26,6 @@ use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
 use windows::Win32::UI::Animation::{
     IUIAnimationManager2, IUIAnimationTimer, IUIAnimationTimerEventHandler_Impl,
     IUIAnimationTransitionLibrary2, IUIAnimationVariable2, UIAnimationTimer,
-    UIAnimationTransitionLibrary2,
 };
 use windows::Win32::UI::Animation::{
     IUIAnimationTimerEventHandler, IUIAnimationTimerUpdateHandler,
@@ -225,8 +223,7 @@ fn on_create(window: HWND, state: State) -> Result<Context> {
     let tokens = &state.qt.theme.tokens;
 
     unsafe {
-        let direct_write_factory =
-            DWriteCreateFactory::<IDWriteFactory>(DWRITE_FACTORY_TYPE_SHARED)?;
+        let direct_write_factory = &state.qt.dwrite_factory;
         let font_size = match state.size {
             Size::Small => tokens.font_size_base200,
             Size::Medium => tokens.font_size_base300,
@@ -249,10 +246,7 @@ fn on_create(window: HWND, state: State) -> Result<Context> {
         text_format.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER)?;
         text_format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
 
-        let factory = D2D1CreateFactory::<ID2D1Factory1>(
-            D2D1_FACTORY_TYPE_SINGLE_THREADED,
-            Some(&D2D1_FACTORY_OPTIONS::default()),
-        )?;
+        let factory = &state.qt.d2d_factory;
         let dpi = GetDpiForWindow(window);
         let render_target = factory.CreateHwndRenderTarget(
             &D2D1_RENDER_TARGET_PROPERTIES {
@@ -297,8 +291,7 @@ fn on_create(window: HWND, state: State) -> Result<Context> {
 
         let animation_timer: IUIAnimationTimer =
             CoCreateInstance(&UIAnimationTimer, None, CLSCTX_INPROC_SERVER)?;
-        let transition_library: IUIAnimationTransitionLibrary2 =
-            CoCreateInstance(&UIAnimationTransitionLibrary2, None, CLSCTX_INPROC_SERVER)?;
+        let transition_library = state.qt.transition_library.clone();
         let animation_manager: IUIAnimationManager2 =
             CoCreateInstance(&UIAnimationManager2, None, CLSCTX_INPROC_SERVER)?;
         let timer_update_handler = animation_manager.cast::<IUIAnimationTimerUpdateHandler>()?;
@@ -355,8 +348,7 @@ fn layout(window: HWND, context: &Context) -> Result<()> {
     let tokens = &context.state.qt.theme.tokens;
 
     unsafe {
-        let direct_write_factory =
-            DWriteCreateFactory::<IDWriteFactory>(DWRITE_FACTORY_TYPE_SHARED)?;
+        let direct_write_factory = &state.qt.dwrite_factory;
         let text_layout = direct_write_factory.CreateTextLayout(
             state.text.as_wide(),
             &context.text_format,

@@ -9,15 +9,13 @@ use windows::Win32::Foundation::{
 };
 use windows::Win32::Graphics::Direct2D::Common::{D2D_RECT_F, D2D_SIZE_F, D2D_SIZE_U};
 use windows::Win32::Graphics::Direct2D::{
-    D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_FACTORY_OPTIONS, D2D1_FACTORY_TYPE_SINGLE_THREADED,
-    D2D1_HWND_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_PROPERTIES, D2D1_ROUNDED_RECT,
-    D2D1CreateFactory, ID2D1DeviceContext5, ID2D1Factory1, ID2D1HwndRenderTarget,
-    ID2D1SolidColorBrush, ID2D1SvgDocument,
+    D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_HWND_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_PROPERTIES,
+    D2D1_ROUNDED_RECT, ID2D1DeviceContext5, ID2D1HwndRenderTarget, ID2D1SolidColorBrush,
+    ID2D1SvgDocument,
 };
 use windows::Win32::Graphics::DirectWrite::{
-    DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL,
-    DWRITE_MEASURING_MODE_NATURAL, DWRITE_TEXT_METRICS, DWriteCreateFactory, IDWriteFactory,
-    IDWriteTextFormat,
+    DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_MEASURING_MODE_NATURAL,
+    DWRITE_TEXT_METRICS, IDWriteTextFormat,
 };
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, ClientToScreen, CreateRoundRectRgn, EndPaint, GetMonitorInfoW,
@@ -830,8 +828,7 @@ fn calc_menu_item_size(
         match menu_item {
             MenuItem::MenuItem { rect, text, .. } | MenuItem::SubMenu { rect, text, .. } => {
                 SetRect(rect, org_x, org_y, org_x, org_y);
-                let direct_write_factory =
-                    DWriteCreateFactory::<IDWriteFactory>(DWRITE_FACTORY_TYPE_SHARED)?;
+                let direct_write_factory = &qt.dwrite_factory;
                 let text_layout = direct_write_factory.CreateTextLayout(
                     text.as_wide(),
                     text_format,
@@ -860,8 +857,7 @@ fn calc_menu_item_size(
 
 fn get_text_format(qt: &QT) -> Result<IDWriteTextFormat> {
     unsafe {
-        let direct_write_factory =
-            DWriteCreateFactory::<IDWriteFactory>(DWRITE_FACTORY_TYPE_SHARED)?;
+        let direct_write_factory = &qt.dwrite_factory;
         let tokens = &qt.theme.tokens;
         direct_write_factory.CreateTextFormat(
             tokens.font_family_base,
@@ -1175,10 +1171,7 @@ fn on_create(window: HWND, params: CreateParams, x: i32, y: i32) -> Result<Conte
         let mut client_rect = RECT::default();
         GetClientRect(window, &mut client_rect)?;
         let dpi = GetDpiForWindow(window);
-        let factory = D2D1CreateFactory::<ID2D1Factory1>(
-            D2D1_FACTORY_TYPE_SINGLE_THREADED,
-            Some(&D2D1_FACTORY_OPTIONS::default()),
-        )?;
+        let factory = &params.qt.d2d_factory;
         let render_target = factory.CreateHwndRenderTarget(
             &D2D1_RENDER_TARGET_PROPERTIES {
                 dpiX: dpi as f32,

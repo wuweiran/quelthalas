@@ -3,13 +3,11 @@ use std::mem::size_of;
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Direct2D::Common::{D2D_RECT_F, D2D_SIZE_U};
 use windows::Win32::Graphics::Direct2D::{
-    D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_FACTORY_OPTIONS, D2D1_FACTORY_TYPE_SINGLE_THREADED,
-    D2D1_HWND_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_PROPERTIES, D2D1CreateFactory,
-    ID2D1Factory1, ID2D1HwndRenderTarget,
+    D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_HWND_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_PROPERTIES,
+    ID2D1HwndRenderTarget,
 };
 use windows::Win32::Graphics::DirectWrite::{
-    DWRITE_FACTORY_TYPE_SHARED, DWRITE_MEASURING_MODE_NATURAL, DWRITE_TEXT_METRICS,
-    DWriteCreateFactory, IDWriteFactory, IDWriteTextFormat,
+    DWRITE_MEASURING_MODE_NATURAL, DWRITE_TEXT_METRICS, IDWriteTextFormat,
 };
 use windows::Win32::Graphics::Gdi::{BeginPaint, EndPaint, InvalidateRect, PAINTSTRUCT};
 use windows::Win32::UI::HiDpi::{AdjustWindowRectExForDpi, GetDpiForWindow};
@@ -121,17 +119,13 @@ impl QT {
 fn on_create(window: HWND, state: State) -> Result<Context> {
     let qt = &state.qt;
     unsafe {
-        let direct_write_factory =
-            DWriteCreateFactory::<IDWriteFactory>(DWRITE_FACTORY_TYPE_SHARED)?;
+        let direct_write_factory = &qt.dwrite_factory;
         let title_typo = &qt.theme.typography_styles.subtitle1;
         let title_text_format = title_typo.create_text_format(&direct_write_factory)?;
         let content_typo = &qt.theme.typography_styles.body1;
         let content_text_format = content_typo.create_text_format(&direct_write_factory)?;
 
-        let factory = D2D1CreateFactory::<ID2D1Factory1>(
-            D2D1_FACTORY_TYPE_SINGLE_THREADED,
-            Some(&D2D1_FACTORY_OPTIONS::default()),
-        )?;
+        let factory = &qt.d2d_factory;
         let dpi = GetDpiForWindow(window);
         let render_target = factory.CreateHwndRenderTarget(
             &D2D1_RENDER_TARGET_PROPERTIES {
@@ -213,8 +207,7 @@ fn layout(window: HWND, context: &Context) -> Result<()> {
         let gap = 8f32;
 
         let state = &context.state;
-        let direct_write_factory =
-            DWriteCreateFactory::<IDWriteFactory>(DWRITE_FACTORY_TYPE_SHARED)?;
+        let direct_write_factory = &state.qt.dwrite_factory;
         let title_text_layout = direct_write_factory.CreateTextLayout(
             state.title.as_wide(),
             &context.title_text_format,
@@ -329,8 +322,7 @@ fn paint(window: HWND, context: &Context) -> Result<()> {
             DWRITE_MEASURING_MODE_NATURAL,
         );
 
-        let direct_write_factory =
-            DWriteCreateFactory::<IDWriteFactory>(DWRITE_FACTORY_TYPE_SHARED)?;
+        let direct_write_factory = &state.qt.dwrite_factory;
         let title_text_layout = direct_write_factory.CreateTextLayout(
             state.title.as_wide(),
             &context.title_text_format,
