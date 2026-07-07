@@ -14,9 +14,9 @@ use windows::core::*;
 use quelthalas::component::button::IconPosition;
 use quelthalas::component::dialog::DialogResult;
 use quelthalas::component::menu::MenuInfo;
-use quelthalas::component::{button, dialog, input, progress_bar};
+use quelthalas::component::{button, dialog, input, menu, progress_bar};
 use quelthalas::icon::Icon;
-use quelthalas::{MouseEvent, QT};
+use quelthalas::QT;
 
 fn main() -> Result<()> {
     unsafe {
@@ -80,138 +80,127 @@ extern "system" fn window_process(
                     window,
                     20,
                     30,
-                    w!("Rounded"),
-                    &button::Appearance::Secondary,
-                    None,
-                    None,
-                    &button::Shape::Rounded,
-                    &button::Size::Medium,
-                    MouseEvent::default(),
+                    button::Props {
+                        text: w!("Rounded"),
+                        ..Default::default()
+                    },
                 );
                 _ = qt.create_button(
                     window,
                     20 + 110 * scaling_factor as i32,
                     30,
-                    w!("Circular"),
-                    &button::Appearance::Secondary,
-                    None,
-                    None,
-                    &button::Shape::Circular,
-                    &button::Size::Medium,
-                    MouseEvent::default(),
+                    button::Props {
+                        text: w!("Circular"),
+                        shape: button::Shape::Circular,
+                        ..Default::default()
+                    },
                 );
                 _ = qt.create_button(
                     window,
                     20 + 220 * scaling_factor as i32,
                     30,
-                    w!("Square"),
-                    &button::Appearance::Secondary,
-                    None,
-                    None,
-                    &button::Shape::Square,
-                    &button::Size::Medium,
-                    MouseEvent::default(),
+                    button::Props {
+                        text: w!("Square"),
+                        shape: button::Shape::Square,
+                        ..Default::default()
+                    },
                 );
                 _ = qt.create_button(
                     window,
                     20 + 330 * scaling_factor as i32,
                     30,
-                    w!("Primary"),
-                    &button::Appearance::Primary,
-                    Some(&icon),
-                    None,
-                    &button::Shape::Rounded,
-                    &button::Size::Medium,
-                    MouseEvent::default(),
+                    button::Props {
+                        text: w!("Primary"),
+                        appearance: button::Appearance::Primary,
+                        icon: Some(icon),
+                        ..Default::default()
+                    },
                 );
                 _ = qt.create_button(
                     window,
                     20,
                     30 + 50 * scaling_factor as i32,
-                    w!("Small with calender icon"),
-                    &button::Appearance::Secondary,
-                    Some(&icon),
-                    None,
-                    &button::Shape::Rounded,
-                    &button::Size::Small,
-                    MouseEvent::default(),
+                    button::Props {
+                        text: w!("Small with calender icon"),
+                        icon: Some(icon),
+                        size: button::Size::Small,
+                        ..Default::default()
+                    },
                 );
                 _ = qt.create_button(
                     window,
                     20,
                     30 + 100 * scaling_factor as i32,
-                    w!("With calendar icon after contents"),
-                    &button::Appearance::Secondary,
-                    Some(&icon),
-                    Some(&IconPosition::After),
-                    &button::Shape::Rounded,
-                    &button::Size::Medium,
-                    MouseEvent::default(),
+                    button::Props {
+                        text: w!("With calendar icon after contents"),
+                        icon: Some(icon),
+                        icon_position: Some(IconPosition::After),
+                        ..Default::default()
+                    },
                 );
                 _ = qt.create_button(
                     window,
                     20,
                     30 + 150 * scaling_factor as i32,
-                    w!("Large with calender icon"),
-                    &button::Appearance::Secondary,
-                    Some(&icon),
-                    None,
-                    &button::Shape::Rounded,
-                    &button::Size::Large,
-                    MouseEvent::default(),
+                    button::Props {
+                        text: w!("Large with calender icon"),
+                        icon: Some(icon),
+                        size: button::Size::Large,
+                        ..Default::default()
+                    },
                 );
                 _ = qt.create_input(
                     window,
                     20,
                     30 + 200 * scaling_factor as i32,
-                    200 * scaling_factor as i32,
-                    &input::Size::Medium,
-                    &input::Appearance::Outline,
-                    Some(w!("Default text")),
-                    &input::Type::Text,
-                    None,
+                    input::Props {
+                        width: 200 * scaling_factor as i32,
+                        default_value: Some(w!("Default text")),
+                        ..Default::default()
+                    },
                 );
                 _ = qt.create_input(
                     window,
                     20 + 220 * scaling_factor as i32,
                     30 + 200 * scaling_factor as i32,
-                    200 * scaling_factor as i32,
-                    &input::Size::Medium,
-                    &input::Appearance::FilledLighter,
-                    Some(w!("Filled lighter")),
-                    &input::Type::Text,
-                    None,
+                    input::Props {
+                        width: 200 * scaling_factor as i32,
+                        appearance: input::Appearance::FilledLighter,
+                        default_value: Some(w!("Filled lighter")),
+                        ..Default::default()
+                    },
                 );
                 _ = qt.create_input(
                     window,
                     20,
                     30 + 250 * scaling_factor as i32,
-                    380 * scaling_factor as i32,
-                    &input::Size::Small,
-                    &input::Appearance::Outline,
-                    None,
-                    &input::Type::Password,
-                    Some(w!("Small with placeholder")),
+                    input::Props {
+                        width: 380 * scaling_factor as i32,
+                        size: input::Size::Small,
+                        input_type: input::Type::Password,
+                        placeholder: Some(w!("Small with placeholder")),
+                        ..Default::default()
+                    },
                 );
                 _ = qt.create_progress_bar(
                     window,
                     20,
                     30 + 300 * scaling_factor as i32,
-                    400 * scaling_factor as i32,
-                    &progress_bar::Shape::Rounded,
-                    None,
-                    None,
-                    &progress_bar::Thickness::Medium,
+                    progress_bar::Props {
+                        width: 400 * scaling_factor as i32,
+                        ..Default::default()
+                    },
                 );
                 _ = qt.create_progress_bar(
                     window,
                     20,
                     30 + 325 * scaling_factor as i32,
-                    400 * scaling_factor as i32,
-                    &progress_bar::Shape::Rounded,
-                    Some(0.4),
-                    None,
-                    &progress_bar::Thickness::Large,
+                    progress_bar::Props {
+                        width: 400 * scaling_factor as i32,
+                        value: Some(0.4),
+                        thickness: progress_bar::Thickness::Large,
+                        ..Default::default()
+                    },
                 );
                 SetWindowLongPtrW(
                     window,
@@ -319,7 +308,12 @@ extern "system" fn window_process(
                         ],
                     },
                 ];
-                _ = qt.open_menu(window, menu_list, x, y);
+                _ = qt.open_menu(
+                    window,
+                    x,
+                    y,
+                    menu::Props { menu_list },
+                );
                 LRESULT::default()
             }
             _ => DefWindowProcW(window, message, w_param, l_param),

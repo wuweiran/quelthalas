@@ -124,14 +124,13 @@ fn convert_menu_info_list_to_menu(menu_info_list: Vec<MenuInfo>) -> Menu {
 
 const CLASS_NAME: PCWSTR = w!("QT_MENU");
 
+#[derive(Default)]
+pub struct Props {
+    pub menu_list: Vec<MenuInfo>,
+}
+
 impl QT {
-    pub fn open_menu(
-        &self,
-        parent_window: HWND,
-        menu_list: Vec<MenuInfo>,
-        x: i32,
-        y: i32,
-    ) -> Result<()> {
+    pub fn open_menu(&self, parent_window: HWND, x: i32, y: i32, props: Props) -> Result<()> {
         unsafe {
             static REGISTER: Once = Once::new();
             REGISTER.call_once(|| {
@@ -148,7 +147,7 @@ impl QT {
             if !IsWindow(Some(parent_window)).as_bool() {
                 return Err(Error::from(ERROR_INVALID_WINDOW_HANDLE));
             }
-            let menu = Rc::new(RefCell::new(convert_menu_info_list_to_menu(menu_list)));
+            let menu = Rc::new(RefCell::new(convert_menu_info_list_to_menu(props.menu_list)));
             init_popup(self.clone(), parent_window, menu.clone(), x, y, 0, 0)?;
             init_tracking(parent_window)?;
             track_menu(menu.clone(), 0, 0, parent_window).and(exit_tracking(parent_window))?;

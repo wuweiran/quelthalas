@@ -65,6 +65,30 @@ pub enum Size {
     Large,
 }
 
+pub struct Props {
+    pub text: PCWSTR,
+    pub appearance: Appearance,
+    pub icon: Option<Icon>,
+    pub icon_position: Option<IconPosition>,
+    pub shape: Shape,
+    pub size: Size,
+    pub mouse_event: MouseEvent,
+}
+
+impl Default for Props {
+    fn default() -> Self {
+        Props {
+            text: w!(""),
+            appearance: Appearance::Secondary,
+            icon: None,
+            icon_position: None,
+            shape: Shape::Rounded,
+            size: Size::Medium,
+            mouse_event: MouseEvent::default(),
+        }
+    }
+}
+
 struct State {
     qt: QT,
     text: PCWSTR,
@@ -159,13 +183,7 @@ impl QT {
         parent_window: HWND,
         x: i32,
         y: i32,
-        text: PCWSTR,
-        appearance: &Appearance,
-        icon: Option<&Icon>,
-        icon_position: Option<&IconPosition>,
-        shape: &Shape,
-        size: &Size,
-        mouse_event: MouseEvent,
+        props: Props,
     ) -> Result<HWND> {
         let class_name: PCWSTR = w!("QT_BUTTON");
         unsafe {
@@ -183,13 +201,13 @@ impl QT {
             });
             let boxed = Box::new(State {
                 qt: self.clone(),
-                text,
-                appearance: *appearance,
-                icon: icon.map(|a| *a),
-                icon_position: icon_position.map(|a| *a),
-                shape: *shape,
-                size: *size,
-                mouse_event,
+                text: props.text,
+                appearance: props.appearance,
+                icon: props.icon,
+                icon_position: props.icon_position,
+                shape: props.shape,
+                size: props.size,
+                mouse_event: props.mouse_event,
             });
             let scaling_factor = get_scaling_factor(parent_window);
             CreateWindowExW(

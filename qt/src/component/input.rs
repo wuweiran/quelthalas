@@ -83,6 +83,28 @@ pub enum Type {
     Password,
 }
 
+pub struct Props {
+    pub width: i32,
+    pub size: Size,
+    pub appearance: Appearance,
+    pub default_value: Option<PCWSTR>,
+    pub input_type: Type,
+    pub placeholder: Option<PCWSTR>,
+}
+
+impl Default for Props {
+    fn default() -> Self {
+        Props {
+            width: 0,
+            size: Size::Medium,
+            appearance: Appearance::Outline,
+            default_value: None,
+            input_type: Type::Text,
+            placeholder: None,
+        }
+    }
+}
+
 pub struct State {
     qt: QT,
     width: f32,
@@ -246,12 +268,7 @@ impl QT {
         parent_window: HWND,
         x: i32,
         y: i32,
-        width: i32,
-        size: &Size,
-        appearance: &Appearance,
-        default_value: Option<PCWSTR>,
-        input_type: &Type,
-        placeholder: Option<PCWSTR>,
+        props: Props,
     ) -> Result<HWND> {
         let class_name: PCWSTR = w!("QT_INPUT");
         unsafe {
@@ -270,12 +287,12 @@ impl QT {
             let scaling_factor = get_scaling_factor(parent_window);
             let boxed = Box::new(State {
                 qt: self.clone(),
-                width: width as f32 / scaling_factor,
-                size: *size,
-                appearance: *appearance,
-                default_value,
-                input_type: *input_type,
-                placeholder,
+                width: props.width as f32 / scaling_factor,
+                size: props.size,
+                appearance: props.appearance,
+                default_value: props.default_value,
+                input_type: props.input_type,
+                placeholder: props.placeholder,
             });
             CreateWindowExW(
                 WINDOW_EX_STYLE::default(),

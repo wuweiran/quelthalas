@@ -151,36 +151,33 @@ fn on_create(window: HWND, state: State) -> Result<Context> {
             window,
             0,
             0,
-            w!("OK"),
-            &button::Appearance::Primary,
-            None,
-            None,
-            &button::Shape::Rounded,
-            &button::Size::Medium,
-            MouseEvent {
-                on_click: Box::new(move |_| {
-                    let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
-                    (*raw).result = DialogResult::OK;
-                    _ = PostMessageW(Some(window), WM_USER, WPARAM(0), LPARAM(0));
-                }),
+            button::Props {
+                text: w!("OK"),
+                appearance: button::Appearance::Primary,
+                mouse_event: MouseEvent {
+                    on_click: Box::new(move |_| {
+                        let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
+                        (*raw).result = DialogResult::OK;
+                        _ = PostMessageW(Some(window), WM_USER, WPARAM(0), LPARAM(0));
+                    }),
+                },
+                ..Default::default()
             },
         )?;
         let cancel_button = qt.create_button(
             window,
             0,
             0,
-            w!("Cancel"),
-            &button::Appearance::Secondary,
-            None,
-            None,
-            &button::Shape::Rounded,
-            &button::Size::Medium,
-            MouseEvent {
-                on_click: Box::new(move |_| {
-                    let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
-                    (*raw).result = DialogResult::Cancel;
-                    _ = PostMessageW(Some(window), WM_USER, WPARAM(0), LPARAM(0));
-                }),
+            button::Props {
+                text: w!("Cancel"),
+                mouse_event: MouseEvent {
+                    on_click: Box::new(move |_| {
+                        let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
+                        (*raw).result = DialogResult::Cancel;
+                        _ = PostMessageW(Some(window), WM_USER, WPARAM(0), LPARAM(0));
+                    }),
+                },
+                ..Default::default()
             },
         )?;
         Ok(Context {

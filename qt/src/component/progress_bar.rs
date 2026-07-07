@@ -35,6 +35,27 @@ pub enum Thickness {
     Medium,
     Large,
 }
+
+pub struct Props {
+    pub width: i32,
+    pub shape: Shape,
+    pub value: Option<f32>,
+    pub max: Option<f32>,
+    pub thickness: Thickness,
+}
+
+impl Default for Props {
+    fn default() -> Self {
+        Props {
+            width: 0,
+            shape: Shape::Rounded,
+            value: None,
+            max: None,
+            thickness: Thickness::Medium,
+        }
+    }
+}
+
 pub struct State {
     qt: QT,
     shape: Shape,
@@ -69,11 +90,7 @@ impl QT {
         parent_window: HWND,
         x: i32,
         y: i32,
-        width: i32,
-        shape: &Shape,
-        value: Option<f32>,
-        max: Option<f32>,
-        thickness: &Thickness,
+        props: Props,
     ) -> Result<HWND> {
         let class_name: PCWSTR = w!("QT_PROGRESS_BAR");
         unsafe {
@@ -92,11 +109,11 @@ impl QT {
             let scaling_factor = get_scaling_factor(parent_window);
             let boxed = Box::new(State {
                 qt: self.clone(),
-                value,
-                max: max.unwrap_or(1f32),
-                shape: *shape,
-                thickness: *thickness,
-                width: width as f32 / scaling_factor,
+                value: props.value,
+                max: props.max.unwrap_or(1f32),
+                shape: props.shape,
+                thickness: props.thickness,
+                width: props.width as f32 / scaling_factor,
             });
             CreateWindowExW(
                 WINDOW_EX_STYLE::default(),
@@ -105,7 +122,7 @@ impl QT {
                 WS_VISIBLE | WS_CHILD,
                 x,
                 y,
-                width,
+                props.width,
                 (boxed.as_ref().get_height() * scaling_factor) as i32,
                 Some(parent_window),
                 None,
