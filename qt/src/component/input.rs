@@ -1,30 +1,34 @@
-use std::ffi::c_void;
 use std::mem::{size_of, swap};
-use std::ptr::{null, null_mut};
 use std::slice::from_raw_parts_mut;
 use std::sync::Once;
 
 use windows::Win32::Foundation::{
-    COLORREF, FALSE, HANDLE, HGLOBAL, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, SIZE, TRUE,
-    WPARAM,
+    FALSE, HANDLE, HGLOBAL, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, TRUE, WPARAM,
 };
-use windows::Win32::Globalization::ScriptStringAnalyse;
 use windows::Win32::Globalization::{
-    SCRIPT_ANALYSIS, SCRIPT_LOGATTR, SCRIPT_UNDEFINED, SSA_FALLBACK, SSA_GLYPHS, SSA_LINK,
-    SSA_PASSWORD, ScriptBreak, ScriptString_pSize, ScriptStringCPtoX, ScriptStringFree,
-    ScriptStringOut, ScriptStringXtoCP, lstrcpynW, lstrlenW, u_memcpy,
+    SCRIPT_ANALYSIS, SCRIPT_LOGATTR, SCRIPT_UNDEFINED, ScriptBreak, lstrcpynW, lstrlenW, u_memcpy,
 };
-use windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F;
+use windows::Win32::Graphics::Direct2D::Common::{
+    D2D_RECT_F, D2D_SIZE_F, D2D_SIZE_U, D2D1_COLOR_F, D2D1_FIGURE_BEGIN_HOLLOW, D2D1_FIGURE_END_OPEN,
+};
+use windows::Win32::Graphics::Direct2D::{
+    D2D1_ANTIALIAS_MODE_ALIASED, D2D1_ARC_SEGMENT, D2D1_ARC_SIZE_SMALL, D2D1_DRAW_TEXT_OPTIONS_NONE,
+    D2D1_HWND_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_PROPERTIES, D2D1_ROUNDED_RECT,
+    D2D1_SWEEP_DIRECTION_COUNTER_CLOCKWISE, ID2D1Factory1, ID2D1HwndRenderTarget,
+    ID2D1PathGeometry1,
+};
+use windows::Win32::Graphics::DirectWrite::{
+    DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_HIT_TEST_METRICS,
+    DWRITE_MEASURING_MODE_NATURAL, DWRITE_TEXT_METRICS, DWRITE_WORD_WRAPPING_NO_WRAP,
+    IDWriteTextFormat, IDWriteTextLayout,
+};
 use windows::Win32::Graphics::Gdi::{
-    AngleArc, BACKGROUND_MODE, BeginPaint, BitBlt, CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS,
-    COLOR_GRAYTEXT, COLOR_HIGHLIGHT, COLOR_HIGHLIGHTTEXT, CreateCompatibleBitmap,
-    CreateCompatibleDC, CreateFontW, CreatePen, CreateRoundRectRgn, CreateSolidBrush,
-    DEFAULT_CHARSET, DeleteDC, DeleteObject, ETO_OPTIONS, EndPaint, FF_SWISS, FillRect, GetBkColor,
-    GetBkMode, GetClipBox, GetDC, GetObjectW, GetSysColor, GetTextColor, GetTextExtentPoint32W,
-    GetTextMetricsW, HBRUSH, HDC, HFONT, HPEN, InflateRect, IntersectRect, InvalidateRect,
-    LOGFONTW, MapWindowPoints, MoveToEx, OPAQUE, OUT_OUTLINE_PRECIS, PAINTSTRUCT, PATCOPY,
-    PS_SOLID, PatBlt, RDW_INVALIDATE, RedrawWindow, ReleaseDC, SRCCOPY, SelectObject, SetBkColor,
-    SetBkMode, SetTextColor, SetWindowRgn, TEXTMETRICW, TextOutW, VARIABLE_PITCH,
+    BeginPaint, CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, COLOR_GRAYTEXT, COLOR_HIGHLIGHT,
+    COLOR_HIGHLIGHTTEXT, CreateFontW, CreateRoundRectRgn, DEFAULT_CHARSET, DeleteObject, EndPaint,
+    FF_SWISS, GetDC, GetObjectW, GetSysColor, GetTextMetricsW, HFONT, InflateRect, IntersectRect,
+    InvalidateRect, LOGFONTW, MapWindowPoints, OUT_OUTLINE_PRECIS, PAINTSTRUCT, RDW_INVALIDATE,
+    RedrawWindow, ReleaseDC, SelectObject, SetWindowRgn, SYS_COLOR_INDEX, TEXTMETRICW,
+    VARIABLE_PITCH,
 };
 use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
 use windows::Win32::System::DataExchange::{
@@ -51,6 +55,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::*;
+use windows_numerics::Vector2;
 
 use crate::theme::TypographyStyle;
 use crate::{QT, get_scaling_factor};
@@ -214,19 +219,14 @@ pub struct Context {
     is_captured: bool,
     is_focused: bool,
     format_rect: RECT,
+    render_target: ID2D1HwndRenderTarget,
+    text_format: IDWriteTextFormat,
+    text_layout: Option<IDWriteTextLayout>,
     font: HFONT,
-    background_color: COLORREF,
-    background_color_brush: HBRUSH,
-    border_pen: HPEN,
-    border_pen_focused: HPEN,
-    border_bottom_pen: HPEN,
-    border_bottom_color_focused_brush: HBRUSH,
-    text_color: COLORREF,
     line_height: i32,
     char_width: i32,
     text_width: i32,
     log_attribute: Vec<SCRIPT_LOGATTR>,
-    ssa: *mut c_void,
 }
 
 impl Context {
@@ -240,20 +240,86 @@ impl Context {
             Some(text_length) => text_length,
         }
     }
-    fn invalidate_uniscribe_data(&mut self) -> Result<()> {
-        unsafe {
-            if !self.ssa.is_null() {
-                ScriptStringFree(&mut self.ssa)?;
-                self.ssa = null_mut();
+    fn invalidate_text_layout(&mut self) {
+        self.text_layout = None;
+    }
+
+    /// Cached text layout over the display string (bullets for passwords).
+    fn update_text_layout(&mut self) -> Result<Option<IDWriteTextLayout>> {
+        if self.text_layout.is_none() {
+            let length = self.get_text_length();
+            if length == 0 {
+                return Ok(None);
             }
-            Ok(())
+            let display: Vec<u16> = match self.state.input_type {
+                Type::Password => vec!['\u{2022}' as u16; length],
+                _ => unsafe { self.buffer.as_wcs().as_wide()[..length].to_vec() },
+            };
+            let layout = unsafe {
+                self.state.qt.dwrite_factory.CreateTextLayout(
+                    &display,
+                    &self.text_format,
+                    f32::MAX,
+                    f32::MAX,
+                )?
+            };
+            self.text_layout = Some(layout);
         }
+        Ok(self.text_layout.clone())
     }
 
     fn text_buffer_changed(&mut self) -> Result<()> {
         self.cached_text_length = None;
         self.log_attribute.clear();
-        self.invalidate_uniscribe_data()
+        self.invalidate_text_layout();
+        Ok(())
+    }
+
+    fn layout_text_width(&mut self) -> Result<i32> {
+        match self.update_text_layout()? {
+            None => Ok(0),
+            Some(layout) => {
+                let mut metrics = DWRITE_TEXT_METRICS::default();
+                unsafe { layout.GetMetrics(&mut metrics)? };
+                Ok(metrics.widthIncludingTrailingWhitespace.round() as i32)
+            }
+        }
+    }
+
+    fn layout_cp_to_x(&mut self, cp: usize) -> Result<i32> {
+        match self.update_text_layout()? {
+            None => Ok(0),
+            Some(layout) => {
+                let mut x = 0f32;
+                let mut y = 0f32;
+                let mut metrics = DWRITE_HIT_TEST_METRICS::default();
+                unsafe {
+                    layout.HitTestTextPosition(cp as u32, false, &mut x, &mut y, &mut metrics)?
+                };
+                Ok(x.round() as i32)
+            }
+        }
+    }
+
+    fn layout_x_to_cp(&mut self, x: i32) -> Result<(i32, bool)> {
+        match self.update_text_layout()? {
+            None => Ok((0, false)),
+            Some(layout) => {
+                let mut is_trailing = FALSE;
+                let mut is_inside = FALSE;
+                let mut metrics = DWRITE_HIT_TEST_METRICS::default();
+                unsafe {
+                    layout.HitTestPoint(
+                        x as f32,
+                        0f32,
+                        &mut is_trailing,
+                        &mut is_inside,
+                        &mut metrics,
+                    )?
+                };
+                Ok((metrics.textPosition as i32, is_trailing.as_bool()))
+            }
+        }
     }
 
     fn empty_undo_buffer(&mut self) {
@@ -329,20 +395,12 @@ fn get_single_line_rect(
         None => context.format_rect.right,
         Some(col) => position_from_char(window, context, col)?.x,
     };
-    unsafe {
-        let pt3 = if !context.ssa.is_null() && start_col < context.get_text_length() {
-            ScriptStringCPtoX(context.ssa, start_col as i32, false)? + context.format_rect.left
-        } else {
-            pt1
-        };
-
-        Ok(RECT {
-            left: pt1.min(pt2).min(pt3),
-            top: context.format_rect.top,
-            right: pt1.max(pt2).max(pt3),
-            bottom: context.format_rect.top + context.line_height,
-        })
-    }
+    Ok(RECT {
+        left: pt1.min(pt2),
+        top: context.format_rect.top,
+        right: pt1.max(pt2),
+        bottom: context.format_rect.top + context.line_height,
+    })
 }
 
 fn invalidate_text(window: HWND, context: &mut Context, start: usize, end: usize) -> Result<()> {
@@ -420,7 +478,7 @@ fn replace_selection(
 ) -> Result<()> {
     let mut start = context.selection_start;
     let mut end = context.selection_end;
-    context.invalidate_uniscribe_data()?;
+    context.invalidate_text_layout();
     let mut replace_length = replace.len();
     if start == end && replace_length == 0 {
         return Ok(());
@@ -458,14 +516,14 @@ fn replace_selection(
     }
 
     let fw = context.format_rect.right - context.format_rect.left;
-    context.invalidate_uniscribe_data()?;
+    context.invalidate_text_layout();
     calculate_line_width(window, context)?;
     if honor_limit && context.text_width > fw {
         while (context.text_width > fw) && start + replace_length >= start {
             context.buffer.remove_at(start + replace_length - 1);
             replace_length = replace_length - 1;
             context.cached_text_length = None;
-            context.invalidate_uniscribe_data()?;
+            context.invalidate_text_layout();
             calculate_line_width(window, context)?;
         }
         context.text_buffer_changed()?;
@@ -536,68 +594,9 @@ fn replace_selection(
     scroll_caret(window, context)?;
     update_scroll_info(window, context);
 
-    context.invalidate_uniscribe_data()?;
+    context.invalidate_text_layout();
 
     Ok(())
-}
-
-fn update_uniscribe_data(
-    window: HWND,
-    context: &mut Context,
-    dc: Option<HDC>,
-) -> Result<*mut c_void> {
-    if context.ssa.is_null() {
-        let length = context.get_text_length();
-        if length == 0 {
-            return Ok(null_mut());
-        }
-        unsafe {
-            let udc = dc.unwrap_or(GetDC(Some(window)));
-            let old_font = SelectObject(udc, context.font.into());
-            match context.state.input_type {
-                Type::Password => {
-                    ScriptStringAnalyse(
-                        udc,
-                        w!("•").as_ptr() as _,
-                        length as i32,
-                        (1.5 * length as f32 + 16f32) as i32,
-                        -1,
-                        SSA_LINK | SSA_FALLBACK | SSA_GLYPHS | SSA_PASSWORD,
-                        -1,
-                        None,
-                        None,
-                        None,
-                        None,
-                        null(),
-                        &mut context.ssa,
-                    )?;
-                }
-                _ => {
-                    ScriptStringAnalyse(
-                        udc,
-                        context.buffer.as_ptr() as _,
-                        length as i32,
-                        (1.5 * length as f32 + 16f32) as i32,
-                        -1,
-                        SSA_LINK | SSA_FALLBACK | SSA_GLYPHS,
-                        -1,
-                        None,
-                        None,
-                        None,
-                        None,
-                        null(),
-                        &mut context.ssa,
-                    )?;
-                }
-            }
-
-            SelectObject(udc, old_font);
-            if dc.map(|x| x == udc).unwrap_or(false) {
-                ReleaseDC(Some(window), udc);
-            }
-        }
-    }
-    Ok(context.ssa)
 }
 
 fn set_caret_position(window: HWND, context: &mut Context, position: usize) -> Result<()> {
@@ -670,7 +669,7 @@ fn set_text(window: HWND, context: &mut Context, text: PCWSTR) -> Result<()> {
     set_selection(window, context, Some(0), Some(0))?;
     scroll_caret(window, context)?;
     update_scroll_info(window, context);
-    context.invalidate_uniscribe_data()?;
+    context.invalidate_text_layout();
     Ok(())
 }
 
@@ -726,117 +725,78 @@ fn set_rect_np(window: HWND, context: &mut Context) -> Result<()> {
     adjust_format_rect(window, context)
 }
 
-fn calculate_line_width(window: HWND, context: &mut Context) -> Result<()> {
-    update_uniscribe_data(window, context, None)?;
-    unsafe {
-        context.char_width = if !context.ssa.is_null() {
-            let size = ScriptString_pSize(context.ssa);
-            (*size).cx
-        } else {
-            0
-        };
-    }
+fn calculate_line_width(_window: HWND, context: &mut Context) -> Result<()> {
+    context.char_width = context.layout_text_width()?;
     Ok(())
 }
 
-fn position_from_char(window: HWND, context: &mut Context, index: usize) -> Result<POINT> {
+fn position_from_char(_window: HWND, context: &mut Context, index: usize) -> Result<POINT> {
     let length = context.get_text_length();
-    unsafe {
-        update_uniscribe_data(window, context, None)?;
-        let mut x_off: usize = 0;
-        if context.x_offset != 0 {
-            if !context.ssa.is_null() {
-                if context.x_offset >= length {
-                    let leftover = context.x_offset - length;
-                    let size = ScriptString_pSize(context.ssa);
-                    x_off = (*size).cx as usize;
-                    x_off += context.char_width as usize * leftover;
-                } else {
-                    x_off =
-                        ScriptStringCPtoX(context.ssa, context.x_offset as i32, false)? as usize;
-                }
-            } else {
-                x_off = 0;
-            }
-        }
-        let index = index.min(length);
-        let xi = if index != 0 {
-            if index >= length {
-                if !context.ssa.is_null() {
-                    let size = ScriptString_pSize(context.ssa);
-                    (*size).cx as usize
-                } else {
-                    0
-                }
-            } else if !context.ssa.is_null() {
-                ScriptStringCPtoX(context.ssa, index as i32, false)? as usize
-            } else {
-                0
-            }
+    let mut x_off: usize = 0;
+    if context.x_offset != 0 {
+        if context.x_offset >= length {
+            let leftover = context.x_offset - length;
+            x_off = context.layout_text_width()? as usize;
+            x_off += context.char_width as usize * leftover;
         } else {
-            0
-        };
-        Ok(POINT {
-            x: xi as i32 - x_off as i32 + context.format_rect.left,
-            y: context.format_rect.top,
-        })
+            x_off = context.layout_cp_to_x(context.x_offset)? as usize;
+        }
     }
+    let index = index.min(length);
+    let xi = if index != 0 {
+        if index >= length {
+            context.layout_text_width()? as usize
+        } else {
+            context.layout_cp_to_x(index)? as usize
+        }
+    } else {
+        0
+    };
+    Ok(POINT {
+        x: xi as i32 - x_off as i32 + context.format_rect.left,
+        y: context.format_rect.top,
+    })
 }
 
-fn char_from_position(window: HWND, context: &mut Context, point: POINT) -> Result<usize> {
+fn char_from_position(_window: HWND, context: &mut Context, point: POINT) -> Result<usize> {
     let x = point.x - context.format_rect.left;
     if x == 0 {
         return Ok(context.x_offset);
     }
 
-    update_uniscribe_data(window, context, None)?;
-    unsafe {
-        let x_off = if context.x_offset != 0 {
-            let length = context.get_text_length();
-            if !context.ssa.is_null() {
-                if context.x_offset >= length {
-                    let size = ScriptString_pSize(context.ssa);
-                    (*size).cx
-                } else {
-                    ScriptStringCPtoX(context.ssa, context.x_offset as i32, false)?
-                }
-            } else {
-                0
-            }
+    let x_off = if context.x_offset != 0 {
+        let length = context.get_text_length();
+        if context.x_offset >= length {
+            context.layout_text_width()?
         } else {
-            0
-        };
-        let mut index = 0;
-        if x < 0 {
-            if x + x_off > 0 || context.ssa.is_null() {
-                let mut trailing = 0;
-                ScriptStringXtoCP(context.ssa, x + x_off, &mut index, &mut trailing)?;
-                if trailing != 0 {
-                    index = index + 1;
-                }
-            }
-        } else {
-            if x != 0 {
-                let length = context.get_text_length();
-                if !context.ssa.is_null() {
-                    let size = ScriptString_pSize(context.ssa);
-                    if x > (*size).cx {
-                        index = length as i32;
-                    }
-                    let mut trailing = 0;
-                    ScriptStringXtoCP(context.ssa, x + x_off, &mut index, &mut trailing)?;
-                    if trailing != 0 {
-                        index = index + 1;
-                    }
-                } else {
-                    index = 0;
-                }
-            } else {
-                index = context.x_offset as i32;
-            }
+            context.layout_cp_to_x(context.x_offset)?
         }
-        Ok(index as usize)
+    } else {
+        0
+    };
+    let mut index;
+    if x < 0 {
+        let (cp, trailing) = context.layout_x_to_cp(x + x_off)?;
+        index = cp;
+        if trailing {
+            index = index + 1;
+        }
+    } else {
+        if x != 0 {
+            let length = context.get_text_length();
+            let text_width = context.layout_text_width()?;
+            let (cp, trailing) = context.layout_x_to_cp(x + x_off)?;
+            index = cp;
+            if x > text_width {
+                index = length as i32;
+            } else if trailing {
+                index = index + 1;
+            }
+        } else {
+            index = context.x_offset as i32;
+        }
     }
+    Ok(index as usize)
 }
 
 fn clear(window: HWND, context: &mut Context) -> Result<()> {
@@ -880,12 +840,6 @@ fn move_backward(window: HWND, context: &mut Context, extend: bool) -> Result<()
     set_selection(window, context, Some(start), Some(e))?;
     scroll_caret(window, context)?;
     Ok(())
-}
-fn convert_to_color_ref(from: &D2D1_COLOR_F) -> COLORREF {
-    let r = (from.r * 255.0) as u32;
-    let g = (from.g * 255.0) as u32;
-    let b = (from.b * 255.0) as u32;
-    COLORREF(b << 16 | g << 8 | r)
 }
 
 fn create_font_from_typography_style(
@@ -949,7 +903,6 @@ impl IUIAnimationTimerEventHandler_Impl for AnimationTimerEventHandler_Impl {
 }
 
 fn on_create(window: HWND, state: State) -> Result<Context> {
-    let tokens = &state.qt.theme.tokens;
     let scaling_factor = get_scaling_factor(window);
     let typography_style = state.get_typography_style();
     let font = create_font_from_typography_style(typography_style, scaling_factor);
@@ -962,6 +915,36 @@ fn on_create(window: HWND, state: State) -> Result<Context> {
         }
         SelectObject(dc, old_font);
         ReleaseDC(Some(window), dc);
+
+        // Identity-DPI render target; the font is pre-scaled, so DIPs == device pixels.
+        let mut client_rect = RECT::default();
+        GetClientRect(window, &mut client_rect)?;
+        let render_target = state.qt.d2d_factory.CreateHwndRenderTarget(
+            &D2D1_RENDER_TARGET_PROPERTIES {
+                dpiX: USER_DEFAULT_SCREEN_DPI as f32,
+                dpiY: USER_DEFAULT_SCREEN_DPI as f32,
+                ..Default::default()
+            },
+            &D2D1_HWND_RENDER_TARGET_PROPERTIES {
+                hwnd: window,
+                pixelSize: D2D_SIZE_U {
+                    width: (client_rect.right - client_rect.left) as u32,
+                    height: (client_rect.bottom - client_rect.top) as u32,
+                },
+                presentOptions: Default::default(),
+            },
+        )?;
+        let text_format = state.qt.dwrite_factory.CreateTextFormat(
+            typography_style.font_family,
+            None,
+            typography_style.font_weight,
+            DWRITE_FONT_STYLE_NORMAL,
+            DWRITE_FONT_STRETCH_NORMAL,
+            typography_style.font_size * scaling_factor,
+            w!(""),
+        )?;
+        text_format.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)?;
+
         let animation_timer: IUIAnimationTimer =
             CoCreateInstance(&UIAnimationTimer, None, CLSCTX_INPROC_SERVER)?;
         let transition_library = state.qt.transition_library.clone();
@@ -974,28 +957,6 @@ fn on_create(window: HWND, state: State) -> Result<Context> {
             AnimationTimerEventHandler { window }.into();
         animation_timer.SetTimerEventHandler(&timer_event_handler)?;
         let bottom_focus_border = animation_manager.CreateAnimationVariable(0.0)?;
-        let background_color = match state.appearance {
-            Appearance::Outline => convert_to_color_ref(&tokens.color_neutral_background1),
-            Appearance::FilledLighter => convert_to_color_ref(&tokens.color_neutral_background1),
-            Appearance::FilledDarker => convert_to_color_ref(&tokens.color_neutral_background3),
-        };
-        let border_pen = CreatePen(
-            PS_SOLID,
-            (1.0 * scaling_factor * 2f32) as i32,
-            convert_to_color_ref(&tokens.color_neutral_stroke1),
-        );
-        let border_pen_focused = CreatePen(
-            PS_SOLID,
-            (1.0 * scaling_factor * 2f32) as i32,
-            convert_to_color_ref(&tokens.color_neutral_stroke1_pressed),
-        );
-        let border_bottom_pen = CreatePen(
-            PS_SOLID,
-            (1.0 * scaling_factor * 2f32) as i32,
-            convert_to_color_ref(&tokens.color_neutral_stroke_accessible),
-        );
-        let border_bottom_focused_color = convert_to_color_ref(&tokens.color_compound_brand_stroke);
-        let text_color = convert_to_color_ref(&tokens.color_neutral_foreground1);
         Ok(Context {
             state,
             animation_manager,
@@ -1013,19 +974,14 @@ fn on_create(window: HWND, state: State) -> Result<Context> {
             is_captured: false,
             is_focused: false,
             format_rect: RECT::default(),
+            render_target,
+            text_format,
+            text_layout: None,
             font,
-            background_color,
-            background_color_brush: CreateSolidBrush(background_color),
-            border_pen,
-            border_pen_focused,
-            border_bottom_pen,
-            border_bottom_color_focused_brush: CreateSolidBrush(border_bottom_focused_color),
-            text_color,
             line_height: tm.tmHeight,
             char_width: tm.tmAveCharWidth,
             text_width: 0,
             log_attribute: Vec::new(),
-            ssa: null_mut(),
         })
     }
 }
@@ -1385,288 +1341,232 @@ fn on_mouse_move(window: HWND, context: &mut Context, x: i32, y: i32) -> Result<
     Ok(())
 }
 
-fn paint_text(
-    context: &Context,
-    dc: HDC,
-    x: i32,
-    y: i32,
-    col: usize,
-    count: usize,
-    rev: bool,
-) -> Result<i32> {
-    if count == 0 {
-        return Ok(0);
-    }
-
-    unsafe {
-        let bk_mode = GetBkMode(dc);
-        let bk_color = GetBkColor(dc);
-        let text_color = GetTextColor(dc);
-        if rev {
-            SetBkColor(dc, COLORREF(GetSysColor(COLOR_HIGHLIGHT)));
-            SetTextColor(dc, COLORREF(GetSysColor(COLOR_HIGHLIGHTTEXT)));
-            SetBkMode(dc, OPAQUE);
-        }
-
-        _ = TextOutW(
-            dc,
-            x,
-            y,
-            &context.buffer.as_wcs().as_wide()[col..col + count],
-        );
-        let mut size = SIZE::default();
-        if !GetTextExtentPoint32W(
-            dc,
-            &context.buffer.as_wcs().as_wide()[col..col + count],
-            &mut size,
-        )
-        .as_bool()
-        {
-            return Err(Error::empty());
-        }
-
-        if rev {
-            SetBkColor(dc, bk_color);
-            SetTextColor(dc, text_color);
-            SetBkMode(dc, BACKGROUND_MODE(bk_mode as u32));
-        }
-        Ok(size.cx)
+fn sys_color_to_d2d(index: SYS_COLOR_INDEX) -> D2D1_COLOR_F {
+    let c = unsafe { GetSysColor(index) };
+    D2D1_COLOR_F {
+        r: (c & 0xff) as f32 / 255.0,
+        g: ((c >> 8) & 0xff) as f32 / 255.0,
+        b: ((c >> 16) & 0xff) as f32 / 255.0,
+        a: 1.0,
     }
 }
 
-fn paint_line(window: HWND, context: &mut Context, dc: HDC, rev: bool) -> Result<()> {
-    let ssa = update_uniscribe_data(window, context, Some(dc))?;
-    let pos = position_from_char(window, context, 0)?;
-    let mut x = pos.x;
-    let y = pos.y;
-    let mut ll = 0;
-    let mut start = 0;
-    let mut end = 0;
-    if rev {
-        ll = context.get_text_length();
-        start = context.selection_start.min(context.selection_end);
-        end = context.selection_start.max(context.selection_end);
-        start = ll.min(start);
-        end = ll.min(end);
+/// Content pass: text, selection, placeholder. Chrome is drawn by the caller.
+fn paint(window: HWND, context: &mut Context) -> Result<()> {
+    // Owned snapshots so the `tokens` borrow doesn't outlive the mutable calls below.
+    let background_color = context.state.qt.theme.tokens.color_neutral_background1;
+    let foreground_color = context.state.qt.theme.tokens.color_neutral_foreground1;
+    let rt = context.render_target.clone();
+    unsafe {
+        rt.Clear(Some(&background_color));
     }
 
-    if !ssa.is_null() {
-        unsafe {
-            ScriptStringOut(
-                ssa,
-                x,
-                y,
-                ETO_OPTIONS::default(),
-                Some(&context.format_rect),
-                start as i32,
-                end as i32,
-                false,
-            )?;
+    let format_rect = context.format_rect;
+    let clip = D2D_RECT_F {
+        left: format_rect.left as f32,
+        top: format_rect.top as f32,
+        right: format_rect.right as f32,
+        bottom: (format_rect.top + context.line_height) as f32,
+    };
+
+    if context.get_text_length() == 0 {
+        if let Some(placeholder) = context.state.placeholder {
+            let brush = unsafe {
+                rt.CreateSolidColorBrush(&sys_color_to_d2d(COLOR_GRAYTEXT), None)?
+            };
+            let rect = D2D_RECT_F {
+                left: format_rect.left as f32,
+                top: format_rect.top as f32,
+                right: format_rect.right as f32,
+                bottom: (format_rect.top + context.line_height) as f32,
+            };
+            unsafe {
+                rt.DrawText(
+                    placeholder.as_wide(),
+                    &context.text_format,
+                    &rect,
+                    &brush,
+                    D2D1_DRAW_TEXT_OPTIONS_NONE,
+                    DWRITE_MEASURING_MODE_NATURAL,
+                );
+            }
         }
-    } else if rev && start == end && context.is_focused {
-        x = x + paint_text(context, dc, x, y, 0, start, false)?;
-        x = x + paint_text(context, dc, x, y, start, end - start, true)?;
-        paint_text(context, dc, x, y, end, ll - end, false)?;
-    } else {
-        paint_text(context, dc, x, y, 0, ll, false)?;
+        return Ok(());
+    }
+
+    let origin_x = position_from_char(window, context, 0)?.x as f32;
+    let origin = Vector2 {
+        X: origin_x,
+        Y: format_rect.top as f32,
+    };
+    let text_brush = unsafe {
+        rt.CreateSolidColorBrush(&foreground_color, None)?
+    };
+
+    let layout = match context.update_text_layout()? {
+        None => return Ok(()),
+        Some(layout) => layout,
+    };
+
+    unsafe {
+        rt.PushAxisAlignedClip(&clip, D2D1_ANTIALIAS_MODE_ALIASED);
+        rt.DrawTextLayout(origin, &layout, &text_brush, D2D1_DRAW_TEXT_OPTIONS_NONE);
+
+        // Selection is shown only while focused (matches classic EDIT).
+        let sel_start = context.selection_start.min(context.selection_end);
+        let sel_end = context.selection_start.max(context.selection_end);
+        if context.is_focused && sel_start != sel_end {
+            let x0 = position_from_char(window, context, sel_start)?.x as f32;
+            let x1 = position_from_char(window, context, sel_end)?.x as f32;
+            let sel_rect = D2D_RECT_F {
+                left: x0,
+                top: format_rect.top as f32,
+                right: x1,
+                bottom: (format_rect.top + context.line_height) as f32,
+            };
+            let hl_brush = rt.CreateSolidColorBrush(&sys_color_to_d2d(COLOR_HIGHLIGHT), None)?;
+            rt.FillRectangle(&sel_rect, &hl_brush);
+            let hl_text_brush =
+                rt.CreateSolidColorBrush(&sys_color_to_d2d(COLOR_HIGHLIGHTTEXT), None)?;
+            rt.PushAxisAlignedClip(&sel_rect, D2D1_ANTIALIAS_MODE_ALIASED);
+            rt.DrawTextLayout(origin, &layout, &hl_text_brush, D2D1_DRAW_TEXT_OPTIONS_NONE);
+            rt.PopAxisAlignedClip();
+        }
+
+        rt.PopAxisAlignedClip();
     }
     Ok(())
 }
 
-fn on_paint(window: HWND, context: &mut Context, dc: HDC, full_draw: bool) -> Result<()> {
-    let rev = context.is_focused;
+fn on_paint(window: HWND, context: &mut Context) -> Result<()> {
+    let rt = context.render_target.clone();
     unsafe {
-        let mut rc_rgn = RECT::default();
-        GetClipBox(dc, &mut rc_rgn);
+        HideCaret(Some(window)).ok();
+        rt.BeginDraw();
+        let result = paint_content_and_chrome(window, context);
+        let end = rt.EndDraw(None, None);
+        ShowCaret(Some(window)).ok();
+        result.and(end)
+    }
+}
 
-        let scaling_factor = get_scaling_factor(window);
-        let mut rc = RECT::default();
+/// Bottom edge plus the lower half of each rounded corner (the resting underline).
+fn bottom_accent_geometry(
+    factory: &ID2D1Factory1,
+    width: f32,
+    r: f32,
+    cy: f32,
+) -> Result<ID2D1PathGeometry1> {
+    let left_cx = r;
+    let right_cx = width - r;
+    let corner_cy = cy - r;
+    let d = r * std::f32::consts::FRAC_1_SQRT_2;
+    unsafe {
+        let geometry = factory.CreatePathGeometry()?;
+        let sink = geometry.Open()?;
+        sink.BeginFigure(
+            Vector2 {
+                X: left_cx - d,
+                Y: corner_cy + d,
+            },
+            D2D1_FIGURE_BEGIN_HOLLOW,
+        );
+        sink.AddArc(&D2D1_ARC_SEGMENT {
+            point: Vector2 {
+                X: left_cx,
+                Y: cy,
+            },
+            size: D2D_SIZE_F {
+                width: r,
+                height: r,
+            },
+            rotationAngle: 0.0,
+            sweepDirection: D2D1_SWEEP_DIRECTION_COUNTER_CLOCKWISE,
+            arcSize: D2D1_ARC_SIZE_SMALL,
+        });
+        sink.AddLine(Vector2 {
+            X: right_cx,
+            Y: cy,
+        });
+        sink.AddArc(&D2D1_ARC_SEGMENT {
+            point: Vector2 {
+                X: right_cx + d,
+                Y: corner_cy + d,
+            },
+            size: D2D_SIZE_F {
+                width: r,
+                height: r,
+            },
+            rotationAngle: 0.0,
+            sweepDirection: D2D1_SWEEP_DIRECTION_COUNTER_CLOCKWISE,
+            arcSize: D2D1_ARC_SIZE_SMALL,
+        });
+        sink.EndFigure(D2D1_FIGURE_END_OPEN);
+        sink.Close()?;
+        Ok(geometry)
+    }
+}
+
+fn paint_content_and_chrome(window: HWND, context: &mut Context) -> Result<()> {
+    paint(window, context)?;
+
+    let rt = context.render_target.clone();
+    let tokens = &context.state.qt.theme.tokens;
+    let scaling_factor = get_scaling_factor(window);
+    let mut rc = RECT::default();
+    unsafe {
         GetClientRect(window, &mut rc)?;
+    }
+    let width = rc.right as f32;
+    let height = rc.bottom as f32;
+    let stroke = tokens.stroke_width_thin * scaling_factor;
+    let radius = tokens.border_radius_medium * scaling_factor;
+    let border_bottom_width = 2.0 * scaling_factor;
 
-        FillRect(dc, &rc, context.background_color_brush);
-
-        let mut rc_intersect = RECT::default();
-        let rc_line = get_single_line_rect(window, context, 0, None)?;
-        if IntersectRect(&mut rc_intersect, &rc_rgn, &rc_line).into() || full_draw {
-            let old_font = SelectObject(dc, context.font.into());
-            SetBkColor(dc, context.background_color);
-            if context.get_text_length() == 0 {
-                if let Some(placeholder) = context.state.placeholder {
-                    SetTextColor(dc, COLORREF(GetSysColor(COLOR_GRAYTEXT)));
-                    _ = TextOutW(
-                        dc,
-                        context.format_rect.left,
-                        context.format_rect.top,
-                        &placeholder.as_wide(),
-                    );
-                }
+    unsafe {
+        // Filled variants skip the full border, keeping only the bottom accent.
+        if let Appearance::Outline = context.state.appearance {
+            let border_color = if context.is_focused {
+                &tokens.color_neutral_stroke1_pressed
             } else {
-                SetTextColor(dc, context.text_color);
-                context.invalidate_uniscribe_data()?;
-                update_uniscribe_data(window, context, Some(dc))?;
-                paint_line(window, context, dc, rev)?;
-            }
-            SelectObject(dc, old_font);
-
-            FillRect(
-                dc,
-                &RECT {
-                    left: rc.left,
-                    top: rc.top,
-                    right: context.format_rect.left,
-                    bottom: rc.bottom,
-                },
-                context.background_color_brush,
-            );
-            FillRect(
-                dc,
-                &RECT {
-                    left: context.format_rect.right,
-                    top: rc.top,
-                    right: rc.right,
-                    bottom: rc.bottom,
-                },
-                context.background_color_brush,
-            );
-        }
-
-        let border_width = (1.0 * scaling_factor) as i32;
-        let border_bottom_width = (2.0 * scaling_factor) as i32;
-
-        let tokens = &context.state.qt.theme.tokens;
-        let need_draw_border = (IntersectRect(
-            &mut rc_intersect,
-            &rc_rgn,
-            &RECT {
-                left: rc.left,
-                top: rc.top,
-                right: rc.left + border_width,
-                bottom: rc.bottom - border_width,
-            },
-        )
-        .as_bool()
-            || IntersectRect(
-                &mut rc_intersect,
-                &rc_rgn,
-                &RECT {
-                    left: rc.left,
-                    top: rc.top,
-                    right: rc.right,
-                    bottom: rc.top + border_width,
-                },
-            )
-            .as_bool()
-            || IntersectRect(
-                &mut rc_intersect,
-                &rc_rgn,
-                &RECT {
-                    left: rc.right - border_width,
-                    top: rc.top,
-                    right: rc.right,
-                    bottom: rc.bottom - border_width,
-                },
-            )
-            .as_bool())
-            && match context.state.appearance {
-                Appearance::Outline => true,
-                _ => false,
+                &tokens.color_neutral_stroke1
             };
-        if need_draw_border || full_draw {
-            SelectObject(
-                dc,
-                if context.is_focused {
-                    context.border_pen_focused
-                } else {
-                    context.border_pen
-                }
-                .into(),
-            );
-            let radius = (tokens.border_radius_medium * scaling_factor) as i32;
-            _ = MoveToEx(dc, rc.right - radius, rc.top, None).as_bool()
-                && AngleArc(
-                    dc,
-                    rc.left + radius,
-                    rc.top + radius,
-                    radius as u32,
-                    90.0,
-                    90.0,
-                )
-                .as_bool()
-                && AngleArc(
-                    dc,
-                    rc.left + radius,
-                    rc.bottom - radius,
-                    radius as u32,
-                    180.0,
-                    90.0,
-                )
-                .as_bool()
-                && AngleArc(
-                    dc,
-                    rc.right - radius,
-                    rc.bottom - radius,
-                    radius as u32,
-                    270.0,
-                    90.0,
-                )
-                .as_bool()
-                && AngleArc(
-                    dc,
-                    rc.right - radius,
-                    rc.top + radius,
-                    radius as u32,
-                    0.0,
-                    90.0,
-                )
-                .as_bool();
+            let border_brush = rt.CreateSolidColorBrush(border_color, None)?;
+            let rounded = D2D1_ROUNDED_RECT {
+                rect: D2D_RECT_F {
+                    left: stroke * 0.5,
+                    top: stroke * 0.5,
+                    right: width - stroke * 0.5,
+                    bottom: height - stroke * 0.5,
+                },
+                radiusX: radius,
+                radiusY: radius,
+            };
+            rt.DrawRoundedRectangle(&rounded, &border_brush, stroke, &context.state.qt.stroke_style);
         }
 
-        if IntersectRect(
-            &mut rc_intersect,
-            &rc_rgn,
-            &RECT {
-                left: rc.left,
-                top: (rc.bottom - border_bottom_width).max(rc.top + border_width),
-                right: rc.right,
-                bottom: rc.bottom,
-            },
-        )
-        .into()
-            || full_draw
-        {
-            SelectObject(dc, context.border_bottom_pen.into());
+        let accent_brush = rt.CreateSolidColorBrush(&tokens.color_neutral_stroke_accessible, None)?;
+        let accent_geometry =
+            bottom_accent_geometry(&context.state.qt.d2d_factory, width, radius, height - stroke * 0.5)?;
+        rt.DrawGeometry(&accent_geometry, &accent_brush, stroke, &context.state.qt.stroke_style);
 
-            let radius = (tokens.border_radius_medium * scaling_factor) as i32;
-
-            _ = MoveToEx(dc, radius, rc.bottom, None).as_bool()
-                && AngleArc(dc, radius, rc.bottom - radius, radius as u32, 270.0, -45.0).as_bool();
-            _ = MoveToEx(dc, radius, rc.bottom, None).as_bool()
-                && AngleArc(
-                    dc,
-                    rc.right - radius,
-                    rc.bottom - radius,
-                    radius as u32,
-                    270.0,
-                    45.0,
-                )
-                .as_bool();
-
-            if context.is_focused {
-                SelectObject(dc, context.border_bottom_color_focused_brush.into());
-                let percentage = context.bottom_focus_border.GetValue()?;
-                _ = PatBlt(
-                    dc,
-                    (rc.left as f64 * (1.0 + percentage) / 2.0
-                        + rc.right as f64 * (1.0 - percentage) / 2.0) as i32,
-                    rc.bottom - border_bottom_width,
-                    ((rc.right - rc.left) as f64 * percentage) as i32,
-                    border_bottom_width,
-                    PATCOPY,
-                );
-            }
+        // Brand underline grows from the centre on focus, over the resting line.
+        if context.is_focused {
+            let percentage = context.bottom_focus_border.GetValue()?;
+            let left = width as f64 * (1.0 - percentage) / 2.0;
+            let underline_brush =
+                rt.CreateSolidColorBrush(&tokens.color_compound_brand_stroke, None)?;
+            rt.FillRectangle(
+                &D2D_RECT_F {
+                    left: left as f32,
+                    top: height - border_bottom_width,
+                    right: (left + width as f64 * percentage) as f32,
+                    bottom: height,
+                },
+                &underline_brush,
+            );
         }
     }
-
     Ok(())
 }
 
@@ -1767,14 +1667,8 @@ extern "system" fn window_proc(
         },
         WM_DESTROY => unsafe {
             let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
-            let mut context = Box::<Context>::from_raw(raw);
-            _ = context.invalidate_uniscribe_data();
+            let context = Box::<Context>::from_raw(raw);
             _ = DeleteObject(context.font.into());
-            _ = DeleteObject(context.background_color_brush.into());
-            _ = DeleteObject(context.border_pen.into());
-            _ = DeleteObject(context.border_pen_focused.into());
-            _ = DeleteObject(context.border_bottom_pen.into());
-            _ = DeleteObject(context.border_bottom_color_focused_brush.into());
             LRESULT(0)
         },
         WM_CHAR => unsafe {
@@ -1891,35 +1785,16 @@ extern "system" fn window_proc(
         WM_PAINT => unsafe {
             let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
             let context = &mut *raw;
-            let mut rc = RECT::default();
-            if GetClientRect(window, &mut rc).is_ok() {
-                let mut ps = PAINTSTRUCT::default();
-                let dc = BeginPaint(window, &mut ps);
-                let mem_dc = CreateCompatibleDC(Some(dc));
-                let bit_map = CreateCompatibleBitmap(dc, rc.right, rc.bottom);
-                SelectObject(mem_dc, bit_map.into());
-                _ = on_paint(window, context, mem_dc, false).and(BitBlt(
-                    dc,
-                    ps.rcPaint.left,
-                    ps.rcPaint.top,
-                    ps.rcPaint.right - ps.rcPaint.left,
-                    ps.rcPaint.bottom - ps.rcPaint.top,
-                    Some(mem_dc),
-                    ps.rcPaint.left,
-                    ps.rcPaint.top,
-                    SRCCOPY,
-                ));
-                _ = DeleteObject(bit_map.into());
-                _ = DeleteDC(mem_dc);
-                _ = EndPaint(window, &ps);
-            }
+            let mut ps = PAINTSTRUCT::default();
+            BeginPaint(window, &mut ps);
+            _ = on_paint(window, context);
+            _ = EndPaint(window, &ps);
             LRESULT(0)
         },
         WM_PRINTCLIENT => unsafe {
             let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
             let context = &mut *raw;
-            let dc = HDC(w_param.0 as _);
-            _ = on_paint(window, context, dc, true);
+            _ = on_paint(window, context);
             LRESULT(0)
         },
         WM_ERASEBKGND => LRESULT(1),
@@ -2016,8 +1891,8 @@ extern "system" fn window_proc(
             )
             .is_ok()
             {
-                let tokens = &context.state.qt.theme.tokens;
                 let typography_style = context.state.get_typography_style();
+                // GDI font is still used for text metrics and IME composition.
                 let font = create_font_from_typography_style(typography_style, scaling_factor);
                 let dc = GetDC(Some(window));
                 let old_font = SelectObject(dc, font.into());
@@ -2028,22 +1903,31 @@ extern "system" fn window_proc(
                 }
                 SelectObject(dc, old_font);
                 ReleaseDC(Some(window), dc);
+                _ = DeleteObject(context.font.into());
                 context.font = font;
-                context.border_pen = CreatePen(
-                    PS_SOLID,
-                    (1.0 * scaling_factor * 2f32) as i32,
-                    convert_to_color_ref(&tokens.color_neutral_stroke1),
-                );
-                context.border_pen_focused = CreatePen(
-                    PS_SOLID,
-                    (1.0 * scaling_factor * 2f32) as i32,
-                    convert_to_color_ref(&tokens.color_neutral_stroke1_pressed),
-                );
-                context.border_bottom_pen = CreatePen(
-                    PS_SOLID,
-                    (1.0 * scaling_factor * 2f32) as i32,
-                    convert_to_color_ref(&tokens.color_neutral_stroke_accessible),
-                );
+
+                // Rebuild text format at the new scale; resize the target; drop the layout.
+                if let Ok(text_format) = context.state.qt.dwrite_factory.CreateTextFormat(
+                    typography_style.font_family,
+                    None,
+                    typography_style.font_weight,
+                    DWRITE_FONT_STYLE_NORMAL,
+                    DWRITE_FONT_STRETCH_NORMAL,
+                    typography_style.font_size * scaling_factor,
+                    w!(""),
+                ) {
+                    _ = text_format.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+                    context.text_format = text_format;
+                }
+                context.invalidate_text_layout();
+                let mut client_rect = RECT::default();
+                if GetClientRect(window, &mut client_rect).is_ok() {
+                    _ = context.render_target.Resize(&D2D_SIZE_U {
+                        width: (client_rect.right - client_rect.left) as u32,
+                        height: (client_rect.bottom - client_rect.top) as u32,
+                    });
+                }
+
                 if set_rect_np(window, context).is_ok() {
                     _ = InvalidateRect(Some(window), None, true);
                 }
