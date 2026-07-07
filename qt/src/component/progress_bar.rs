@@ -1,4 +1,5 @@
 use std::mem::size_of;
+use std::sync::Once;
 
 use crate::{QT, get_scaling_factor};
 use windows::Win32::Foundation::{FALSE, HINSTANCE, HWND, LPARAM, LRESULT, RECT, TRUE, WPARAM};
@@ -76,15 +77,18 @@ impl QT {
     ) -> Result<HWND> {
         let class_name: PCWSTR = w!("QT_PROGRESS_BAR");
         unsafe {
-            let window_class = WNDCLASSEXW {
-                cbSize: size_of::<WNDCLASSEXW>() as u32,
-                lpszClassName: class_name,
-                style: CS_CLASSDC,
-                lpfnWndProc: Some(window_proc),
-                hCursor: LoadCursorW(None, IDC_ARROW)?,
-                ..Default::default()
-            };
-            RegisterClassExW(&window_class);
+            static REGISTER: Once = Once::new();
+            REGISTER.call_once(|| {
+                let window_class = WNDCLASSEXW {
+                    cbSize: size_of::<WNDCLASSEXW>() as u32,
+                    lpszClassName: class_name,
+                    style: CS_CLASSDC,
+                    lpfnWndProc: Some(window_proc),
+                    hCursor: LoadCursorW(None, IDC_ARROW).unwrap_or_default(),
+                    ..Default::default()
+                };
+                RegisterClassExW(&window_class);
+            });
             let scaling_factor = get_scaling_factor(parent_window);
             let boxed = Box::new(State {
                 qt: self.clone(),

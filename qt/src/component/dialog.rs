@@ -1,4 +1,5 @@
 use std::mem::size_of;
+use std::sync::Once;
 
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Direct2D::Common::{D2D_RECT_F, D2D_SIZE_U};
@@ -56,15 +57,18 @@ impl QT {
     ) -> Result<DialogResult> {
         let class_name: PCWSTR = w!("QT_DIALOG");
         unsafe {
-            let window_class = WNDCLASSEXW {
-                cbSize: size_of::<WNDCLASSEXW>() as u32,
-                lpszClassName: class_name,
-                style: CS_OWNDC,
-                lpfnWndProc: Some(window_proc),
-                hCursor: LoadCursorW(None, IDC_ARROW)?,
-                ..Default::default()
-            };
-            RegisterClassExW(&window_class);
+            static REGISTER: Once = Once::new();
+            REGISTER.call_once(|| {
+                let window_class = WNDCLASSEXW {
+                    cbSize: size_of::<WNDCLASSEXW>() as u32,
+                    lpszClassName: class_name,
+                    style: CS_OWNDC,
+                    lpfnWndProc: Some(window_proc),
+                    hCursor: LoadCursorW(None, IDC_ARROW).unwrap_or_default(),
+                    ..Default::default()
+                };
+                RegisterClassExW(&window_class);
+            });
             let scaling_factor = get_scaling_factor(parent_window);
             _ = EnableWindow(parent_window, false);
             let boxed = Box::new(State {

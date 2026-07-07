@@ -2,6 +2,7 @@ use std::ffi::c_void;
 use std::mem::{size_of, swap};
 use std::ptr::{null, null_mut};
 use std::slice::from_raw_parts_mut;
+use std::sync::Once;
 
 use windows::Win32::Foundation::{
     COLORREF, FALSE, HANDLE, HGLOBAL, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, SIZE, TRUE,
@@ -254,15 +255,18 @@ impl QT {
     ) -> Result<HWND> {
         let class_name: PCWSTR = w!("QT_INPUT");
         unsafe {
-            let window_class = WNDCLASSEXW {
-                cbSize: size_of::<WNDCLASSEXW>() as u32,
-                lpszClassName: class_name,
-                style: CS_CLASSDC | CS_DBLCLKS,
-                lpfnWndProc: Some(window_proc),
-                hCursor: LoadCursorW(None, IDC_IBEAM)?,
-                ..Default::default()
-            };
-            RegisterClassExW(&window_class);
+            static REGISTER: Once = Once::new();
+            REGISTER.call_once(|| {
+                let window_class = WNDCLASSEXW {
+                    cbSize: size_of::<WNDCLASSEXW>() as u32,
+                    lpszClassName: class_name,
+                    style: CS_CLASSDC | CS_DBLCLKS,
+                    lpfnWndProc: Some(window_proc),
+                    hCursor: LoadCursorW(None, IDC_IBEAM).unwrap_or_default(),
+                    ..Default::default()
+                };
+                RegisterClassExW(&window_class);
+            });
             let scaling_factor = get_scaling_factor(parent_window);
             let boxed = Box::new(State {
                 qt: self.clone(),

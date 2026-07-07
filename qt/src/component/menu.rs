@@ -1,6 +1,7 @@
 use std::cell::RefCell;
 use std::mem::size_of;
 use std::rc::Rc;
+use std::sync::Once;
 
 use crate::icon::Icon;
 use crate::{QT, get_scaling_factor};
@@ -132,15 +133,18 @@ impl QT {
         y: i32,
     ) -> Result<()> {
         unsafe {
-            let window_class = WNDCLASSEXW {
-                cbSize: size_of::<WNDCLASSEXW>() as u32,
-                lpszClassName: CLASS_NAME,
-                style: CS_DROPSHADOW | CS_SAVEBITS | CS_DBLCLKS,
-                lpfnWndProc: Some(window_proc),
-                hCursor: LoadCursorW(None, IDC_ARROW)?,
-                ..Default::default()
-            };
-            RegisterClassExW(&window_class);
+            static REGISTER: Once = Once::new();
+            REGISTER.call_once(|| {
+                let window_class = WNDCLASSEXW {
+                    cbSize: size_of::<WNDCLASSEXW>() as u32,
+                    lpszClassName: CLASS_NAME,
+                    style: CS_DROPSHADOW | CS_SAVEBITS | CS_DBLCLKS,
+                    lpfnWndProc: Some(window_proc),
+                    hCursor: LoadCursorW(None, IDC_ARROW).unwrap_or_default(),
+                    ..Default::default()
+                };
+                RegisterClassExW(&window_class);
+            });
             if !IsWindow(Some(parent_window)).as_bool() {
                 return Err(Error::from(ERROR_INVALID_WINDOW_HANDLE));
             }
