@@ -16,7 +16,9 @@ use windows::core::*;
 use quelthalas::component::button::IconPosition;
 use quelthalas::component::dialog::DialogResult;
 use quelthalas::component::menu::MenuInfo;
-use quelthalas::component::{button, checkbox, dialog, input, menu, progress_bar, radio, text};
+use quelthalas::component::{
+    button, checkbox, dialog, input, menu, progress_bar, radio, switch, text,
+};
 use quelthalas::icon::Icon;
 use quelthalas::layout::Stack;
 use quelthalas::{MouseEvent, QT};
@@ -395,6 +397,21 @@ extern "system" fn window_process(
                     )
                     .unwrap_or_default();
 
+                // Switch: click to toggle; the thumb slides (WAM-eased).
+                let switch_label = section(w!("Switch"));
+                let switch = qt
+                    .create_switch(
+                        window,
+                        0,
+                        0,
+                        switch::Props {
+                            label: w!("This is a switch"),
+                            background: Some(CANVAS),
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap_or_default();
+
                 // Text section: an intro line, then every preset labelled by name.
                 let text_intro = qt
                     .create_body1(
@@ -484,6 +501,25 @@ extern "system" fn window_process(
                             .gap(8.0)
                             .add(checkbox_label)
                             .add(checkbox),
+                    );
+
+                let right_column = Stack::vertical()
+                    .gap(24.0)
+                    .add_stack(
+                        Stack::vertical()
+                            .gap(8.0)
+                            .add(text_label)
+                            .add(text_intro)
+                            .add(p_caption1)
+                            .add(p_caption1_strong)
+                            .add(p_body1)
+                            .add(p_body1_strong)
+                            .add(p_body2)
+                            .add(p_subtitle2)
+                            .add(p_subtitle1)
+                            .add(p_title3)
+                            .add(p_title2)
+                            .add(p_title1),
                     )
                     .add_stack(
                         Stack::vertical()
@@ -498,22 +534,13 @@ extern "system" fn window_process(
                                     .add(radio_banana)
                                     .add(radio_orange),
                             ),
+                    )
+                    .add_stack(
+                        Stack::vertical()
+                            .gap(8.0)
+                            .add(switch_label)
+                            .add(switch),
                     );
-
-                let right_column = Stack::vertical()
-                    .gap(8.0)
-                    .add(text_label)
-                    .add(text_intro)
-                    .add(p_caption1)
-                    .add(p_caption1_strong)
-                    .add(p_body1)
-                    .add(p_body1_strong)
-                    .add(p_body2)
-                    .add(p_subtitle2)
-                    .add(p_subtitle1)
-                    .add(p_title3)
-                    .add(p_title2)
-                    .add(p_title1);
 
                 let layout = Stack::vertical()
                     .padding(24.0)
