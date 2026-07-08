@@ -106,6 +106,12 @@ impl QT {
                     let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
                     let context = &*raw;
                     result = context.result;
+                    // Re-enable + reactivate the parent BEFORE WM_USER dispatches
+                    // to DestroyWindow. If the parent is still disabled when the
+                    // dialog is destroyed, the system transfers activation to some
+                    // other window and bounces it back — the close flicker.
+                    _ = EnableWindow(parent_window, true);
+                    _ = SetActiveWindow(parent_window);
                 }
                 _ = TranslateMessage(&message);
                 DispatchMessageW(&message);
