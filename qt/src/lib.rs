@@ -73,4 +73,5 @@ pub(crate) fn get_scaling_factor(window: HWND) -> f32 {
 
 pub mod component;
 pub mod icon;
+pub mod layout;
 mod theme;

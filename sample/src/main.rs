@@ -1,13 +1,12 @@
 //#![windows_subsystem = "windows"]
 use std::mem::size_of;
 
-use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, CreateSolidBrush, EndPaint, FillRect, PAINTSTRUCT,
 };
 use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::*;
 
@@ -16,7 +15,13 @@ use quelthalas::component::dialog::DialogResult;
 use quelthalas::component::menu::MenuInfo;
 use quelthalas::component::{button, dialog, input, menu, progress_bar};
 use quelthalas::icon::Icon;
-use quelthalas::QT;
+use quelthalas::layout::Stack;
+use quelthalas::{MouseEvent, QT};
+
+struct AppState {
+    qt: QT,
+    layout: Stack,
+}
 
 fn main() -> Result<()> {
     unsafe {
@@ -73,145 +78,243 @@ extern "system" fn window_process(
                 let Ok(qt) = QT::new() else {
                     return LRESULT(-1);
                 };
-                let scaling_factor = GetDpiForWindow(window) / USER_DEFAULT_SCREEN_DPI;
                 let icon = Icon::calendar_month_regular();
 
-                _ = qt.create_button(
-                    window,
-                    20,
-                    30,
-                    button::Props {
-                        text: w!("Rounded"),
-                        ..Default::default()
-                    },
-                );
-                _ = qt.create_button(
-                    window,
-                    20 + 110 * scaling_factor as i32,
-                    30,
-                    button::Props {
-                        text: w!("Circular"),
-                        shape: button::Shape::Circular,
-                        ..Default::default()
-                    },
-                );
-                _ = qt.create_button(
-                    window,
-                    20 + 220 * scaling_factor as i32,
-                    30,
-                    button::Props {
-                        text: w!("Square"),
-                        shape: button::Shape::Square,
-                        ..Default::default()
-                    },
-                );
-                _ = qt.create_button(
-                    window,
-                    20 + 330 * scaling_factor as i32,
-                    30,
-                    button::Props {
-                        text: w!("Primary"),
-                        appearance: button::Appearance::Primary,
-                        icon: Some(icon),
-                        ..Default::default()
-                    },
-                );
-                _ = qt.create_button(
-                    window,
-                    20,
-                    30 + 50 * scaling_factor as i32,
-                    button::Props {
-                        text: w!("Small with calender icon"),
-                        icon: Some(icon),
-                        size: button::Size::Small,
-                        ..Default::default()
-                    },
-                );
-                _ = qt.create_button(
-                    window,
-                    20,
-                    30 + 100 * scaling_factor as i32,
-                    button::Props {
-                        text: w!("With calendar icon after contents"),
-                        icon: Some(icon),
-                        icon_position: Some(IconPosition::After),
-                        ..Default::default()
-                    },
-                );
-                _ = qt.create_button(
-                    window,
-                    20,
-                    30 + 150 * scaling_factor as i32,
-                    button::Props {
-                        text: w!("Large with calender icon"),
-                        icon: Some(icon),
-                        size: button::Size::Large,
-                        ..Default::default()
-                    },
-                );
-                _ = qt.create_input(
-                    window,
-                    20,
-                    30 + 200 * scaling_factor as i32,
-                    input::Props {
-                        width: 200 * scaling_factor as i32,
-                        default_value: Some(w!("Default text")),
-                        ..Default::default()
-                    },
-                );
-                _ = qt.create_input(
-                    window,
-                    20 + 220 * scaling_factor as i32,
-                    30 + 200 * scaling_factor as i32,
-                    input::Props {
-                        width: 200 * scaling_factor as i32,
-                        appearance: input::Appearance::FilledLighter,
-                        default_value: Some(w!("Filled lighter")),
-                        ..Default::default()
-                    },
-                );
-                _ = qt.create_input(
-                    window,
-                    20,
-                    30 + 250 * scaling_factor as i32,
-                    input::Props {
-                        width: 380 * scaling_factor as i32,
-                        size: input::Size::Small,
-                        input_type: input::Type::Password,
-                        placeholder: Some(w!("Small with placeholder")),
-                        ..Default::default()
-                    },
-                );
-                _ = qt.create_progress_bar(
-                    window,
-                    20,
-                    30 + 300 * scaling_factor as i32,
-                    progress_bar::Props {
-                        width: 400 * scaling_factor as i32,
-                        ..Default::default()
-                    },
-                );
-                _ = qt.create_progress_bar(
-                    window,
-                    20,
-                    30 + 325 * scaling_factor as i32,
-                    progress_bar::Props {
-                        width: 400 * scaling_factor as i32,
-                        value: Some(0.4),
-                        thickness: progress_bar::Thickness::Large,
-                        ..Default::default()
-                    },
-                );
-                SetWindowLongPtrW(
-                    window,
-                    GWLP_USERDATA,
-                    Box::<QT>::into_raw(Box::from(qt)) as _,
-                );
+                // Controls are created at (0,0); the Stack owns their positions.
+                let rounded = qt
+                    .create_button(
+                        window,
+                        0,
+                        0,
+                        button::Props {
+                            text: w!("Rounded"),
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap_or_default();
+                let circular = qt
+                    .create_button(
+                        window,
+                        0,
+                        0,
+                        button::Props {
+                            text: w!("Circular"),
+                            shape: button::Shape::Circular,
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap_or_default();
+                let square = qt
+                    .create_button(
+                        window,
+                        0,
+                        0,
+                        button::Props {
+                            text: w!("Square"),
+                            shape: button::Shape::Square,
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap_or_default();
+                let primary = qt
+                    .create_button(
+                        window,
+                        0,
+                        0,
+                        button::Props {
+                            text: w!("Primary"),
+                            appearance: button::Appearance::Primary,
+                            icon: Some(icon),
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap_or_default();
+                let small_icon = qt
+                    .create_button(
+                        window,
+                        0,
+                        0,
+                        button::Props {
+                            text: w!("Small with calender icon"),
+                            icon: Some(icon),
+                            size: button::Size::Small,
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap_or_default();
+                let icon_after = qt
+                    .create_button(
+                        window,
+                        0,
+                        0,
+                        button::Props {
+                            text: w!("With calendar icon after contents"),
+                            icon: Some(icon),
+                            icon_position: Some(IconPosition::After),
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap_or_default();
+                let large_icon = qt
+                    .create_button(
+                        window,
+                        0,
+                        0,
+                        button::Props {
+                            text: w!("Large with calender icon"),
+                            icon: Some(icon),
+                            size: button::Size::Large,
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap_or_default();
+                let input_default = qt
+                    .create_input(
+                        window,
+                        0,
+                        0,
+                        input::Props {
+                            width: 280,
+                            default_value: Some(w!("Default text")),
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap_or_default();
+                let input_filled = qt
+                    .create_input(
+                        window,
+                        0,
+                        0,
+                        input::Props {
+                            width: 280,
+                            appearance: input::Appearance::FilledLighter,
+                            default_value: Some(w!("Filled lighter")),
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap_or_default();
+                let input_password = qt
+                    .create_input(
+                        window,
+                        0,
+                        0,
+                        input::Props {
+                            width: 380,
+                            size: input::Size::Small,
+                            input_type: input::Type::Password,
+                            placeholder: Some(w!("Small with placeholder")),
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap_or_default();
+                let progress_medium = qt
+                    .create_progress_bar(
+                        window,
+                        0,
+                        0,
+                        progress_bar::Props {
+                            width: 400,
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap_or_default();
+                let progress_large = qt
+                    .create_progress_bar(
+                        window,
+                        0,
+                        0,
+                        progress_bar::Props {
+                            width: 400,
+                            value: Some(0.4),
+                            thickness: progress_bar::Thickness::Large,
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap_or_default();
+                let close = qt
+                    .create_button(
+                        window,
+                        0,
+                        0,
+                        button::Props {
+                            text: w!("Close"),
+                            mouse_event: MouseEvent {
+                                on_click: Box::new(move |_| {
+                                    _ = PostMessageW(Some(window), WM_CLOSE, WPARAM(0), LPARAM(0));
+                                }),
+                            },
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap_or_default();
+
+                // Gallery grouped by component type (top-anchored); a spring pins
+                // the Close footer to the bottom-right.
+                let section_gap = 24.0;
+                let layout = Stack::vertical()
+                    .padding(24.0)
+                    .gap(section_gap)
+                    .add_stack(
+                        Stack::vertical()
+                            .gap(8.0)
+                            .add_stack(
+                                Stack::horizontal()
+                                    .gap(8.0)
+                                    .add(rounded)
+                                    .add(circular)
+                                    .add(square)
+                                    .add(primary),
+                            )
+                            .add_stack(
+                                Stack::horizontal()
+                                    .gap(8.0)
+                                    .add(small_icon)
+                                    .add(icon_after)
+                                    .add(large_icon),
+                            ),
+                    )
+                    .add_stack(
+                        Stack::vertical()
+                            .gap(8.0)
+                            .add_stack(
+                                Stack::horizontal()
+                                    .gap(12.0)
+                                    .add(input_default)
+                                    .add(input_filled),
+                            )
+                            .add(input_password),
+                    )
+                    .add_stack(
+                        Stack::vertical()
+                            .gap(8.0)
+                            .add(progress_medium)
+                            .add(progress_large),
+                    )
+                    .spring()
+                    .add_stack(Stack::horizontal().spring().add(close));
+
+                let mut rc = RECT::default();
+                if GetClientRect(window, &mut rc).is_ok() {
+                    _ = layout.arrange(window, rc);
+                }
+
+                let state = Box::new(AppState { qt, layout });
+                SetWindowLongPtrW(window, GWLP_USERDATA, Box::into_raw(state) as _);
                 DefWindowProcW(window, message, w_param, l_param)
             }
+            WM_SIZE => {
+                let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *const AppState;
+                if !raw.is_null() {
+                    let mut rc = RECT::default();
+                    if GetClientRect(window, &mut rc).is_ok() {
+                        _ = (*raw).layout.arrange(window, rc);
+                    }
+                }
+                LRESULT(0)
+            }
             WM_CLOSE => {
-                let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *const QT;
-                let qt = &*raw;
+                let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *const AppState;
+                let qt = &(*raw).qt;
                 match qt.open_dialog(
                     window,
                     w!("Dialog title"),
@@ -228,6 +331,10 @@ extern "system" fn window_process(
                 }
             }
             WM_DESTROY => {
+                let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut AppState;
+                if !raw.is_null() {
+                    _ = Box::from_raw(raw);
+                }
                 PostQuitMessage(0);
                 LRESULT(0)
             }
@@ -242,8 +349,8 @@ extern "system" fn window_process(
                 let x = l_param.0 as i16 as i32;
                 let y = (l_param.0 >> 16) as i16 as i32;
 
-                let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *const QT;
-                let qt = &*raw;
+                let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *const AppState;
+                let qt = &(*raw).qt;
                 let menu_list = vec![
                     MenuInfo::MenuItem {
                         text: w!("New"),
@@ -308,12 +415,7 @@ extern "system" fn window_process(
                         ],
                     },
                 ];
-                _ = qt.open_menu(
-                    window,
-                    x,
-                    y,
-                    menu::Props { menu_list },
-                );
+                _ = qt.open_menu(window, x, y, menu::Props { menu_list });
                 LRESULT::default()
             }
             _ => DefWindowProcW(window, message, w_param, l_param),
