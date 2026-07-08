@@ -2,6 +2,7 @@
 use std::mem::size_of;
 
 use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F;
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, CreateSolidBrush, EndPaint, FillRect, PAINTSTRUCT,
 };
@@ -13,7 +14,7 @@ use windows::core::*;
 use quelthalas::component::button::IconPosition;
 use quelthalas::component::dialog::DialogResult;
 use quelthalas::component::menu::MenuInfo;
-use quelthalas::component::{button, dialog, input, menu, progress_bar};
+use quelthalas::component::{button, dialog, input, menu, progress_bar, text};
 use quelthalas::icon::Icon;
 use quelthalas::layout::Stack;
 use quelthalas::{MouseEvent, QT};
@@ -22,6 +23,14 @@ struct AppState {
     qt: QT,
     layout: Stack,
 }
+
+// Window canvas background (#fafafa). Labels use it so they blend seamlessly.
+const CANVAS: D2D1_COLOR_F = D2D1_COLOR_F {
+    r: 250.0 / 255.0,
+    g: 250.0 / 255.0,
+    b: 250.0 / 255.0,
+    a: 1.0,
+};
 
 fn main() -> Result<()> {
     unsafe {
@@ -247,6 +256,42 @@ extern "system" fn window_process(
                         },
                     )
                     .unwrap_or_default();
+                let buttons_label = qt
+                    .create_subtitle2(
+                        window,
+                        0,
+                        0,
+                        text::PresetProps {
+                            text: w!("Buttons"),
+                            background: Some(CANVAS),
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap_or_default();
+                let inputs_label = qt
+                    .create_subtitle2(
+                        window,
+                        0,
+                        0,
+                        text::PresetProps {
+                            text: w!("Inputs"),
+                            background: Some(CANVAS),
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap_or_default();
+                let progress_label = qt
+                    .create_subtitle2(
+                        window,
+                        0,
+                        0,
+                        text::PresetProps {
+                            text: w!("Progress bar"),
+                            background: Some(CANVAS),
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap_or_default();
 
                 // Gallery grouped by component type (top-anchored); a spring pins
                 // the Close footer to the bottom-right.
@@ -257,6 +302,7 @@ extern "system" fn window_process(
                     .add_stack(
                         Stack::vertical()
                             .gap(8.0)
+                            .add(buttons_label)
                             .add_stack(
                                 Stack::horizontal()
                                     .gap(8.0)
@@ -276,6 +322,7 @@ extern "system" fn window_process(
                     .add_stack(
                         Stack::vertical()
                             .gap(8.0)
+                            .add(inputs_label)
                             .add_stack(
                                 Stack::horizontal()
                                     .gap(12.0)
@@ -287,6 +334,7 @@ extern "system" fn window_process(
                     .add_stack(
                         Stack::vertical()
                             .gap(8.0)
+                            .add(progress_label)
                             .add(progress_medium)
                             .add(progress_large),
                     )
