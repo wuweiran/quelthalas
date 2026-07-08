@@ -2,7 +2,7 @@ use crate::icon::Icon;
 use windows_core::s;
 
 impl Icon {
-    pub fn chevron_right_regular() -> Icon {
+    pub fn chevron_right_20_regular() -> Icon {
         Icon {
             svg: s!(
                 r##"<svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -12,7 +12,7 @@ impl Icon {
             size: 20,
         }
     }
-    pub fn chevron_right_filled() -> Icon {
+    pub fn chevron_right_20_filled() -> Icon {
         Icon {
             svg: s!(
                 r##"<svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">

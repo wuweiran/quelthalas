@@ -1,6 +1,7 @@
 use windows::core::PCSTR;
 
 pub mod calendar_month;
+pub mod checkmark;
 pub mod chevron_right;
 
 #[derive(Copy, Clone)]

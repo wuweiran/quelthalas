@@ -1305,7 +1305,7 @@ fn on_create(window: HWND, params: CreateParams, x: i32, y: i32) -> Result<Conte
         let secondary_text_brush =
             render_target.CreateSolidColorBrush(&tokens.color_neutral_foreground3, None)?;
         let device_context5 = render_target.cast::<ID2D1DeviceContext5>()?;
-        let sub_menu_indicator_icon = Icon::chevron_right_regular();
+        let sub_menu_indicator_icon = Icon::chevron_right_20_regular();
         let sub_menu_indicator_svg =
             match SHCreateMemStream(Some(sub_menu_indicator_icon.svg.as_bytes())) {
                 None => device_context5.CreateSvgDocument(
@@ -1323,7 +1323,7 @@ fn on_create(window: HWND, params: CreateParams, x: i32, y: i32) -> Result<Conte
                     },
                 )?,
             };
-        let sub_menu_indicator_focused_icon = Icon::chevron_right_filled();
+        let sub_menu_indicator_focused_icon = Icon::chevron_right_20_filled();
         let sub_menu_indicator_focused_svg =
             match SHCreateMemStream(Some(sub_menu_indicator_focused_icon.svg.as_bytes())) {
                 None => device_context5.CreateSvgDocument(
