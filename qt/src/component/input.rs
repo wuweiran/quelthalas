@@ -1835,6 +1835,11 @@ extern "system" fn window_proc(
             LRESULT::default()
         },
         WM_CONTEXTMENU => unsafe {
+            // Native edit controls focus on right-click. Do it before taking the
+            // &mut borrow below, since SetFocus synchronously re-enters this
+            // window_proc via WM_SETFOCUS (which takes its own borrow). No-op when
+            // the control is already focused (e.g. keyboard Shift+F10).
+            _ = SetFocus(Some(window));
             let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
             let context = &mut *raw;
             // Snapshot state, then drop the borrow before open_menu (it runs a
