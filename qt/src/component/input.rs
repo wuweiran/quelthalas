@@ -1778,21 +1778,25 @@ extern "system" fn window_proc(
                     text: system_string(IDS_CUT, w!("Cut")),
                     command_id: CMD_CUT,
                     disabled: !can_copy,
+                    secondary_text: Some(w!("Ctrl+X")),
                 },
                 MenuInfo::MenuItem {
                     text: system_string(IDS_COPY, w!("Copy")),
                     command_id: CMD_COPY,
                     disabled: !can_copy,
+                    secondary_text: Some(w!("Ctrl+C")),
                 },
                 MenuInfo::MenuItem {
                     text: system_string(IDS_PASTE, w!("Paste")),
                     command_id: CMD_PASTE,
                     disabled: !can_paste,
+                    secondary_text: Some(w!("Ctrl+V")),
                 },
                 MenuInfo::MenuItem {
                     text: system_string(IDS_SELECT_ALL, w!("Select All")),
                     command_id: CMD_SELECT_ALL,
                     disabled: !has_text,
+                    secondary_text: Some(w!("Ctrl+A")),
                 },
             ];
             _ = qt.open_menu(window, x, y, crate::component::menu::Props { menu_list });

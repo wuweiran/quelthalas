@@ -16,7 +16,8 @@ use windows::Win32::Graphics::Direct2D::{
 };
 use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_MEASURING_MODE_NATURAL,
-    DWRITE_TEXT_METRICS, IDWriteTextFormat,
+    DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_TRAILING, DWRITE_TEXT_METRICS,
+    IDWriteTextFormat,
 };
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, ClientToScreen, CreateRoundRectRgn, EndPaint, GetMonitorInfoW,
@@ -38,6 +39,7 @@ pub enum MenuInfo {
         text: PCWSTR,
         command_id: u32,
         disabled: bool,
+        secondary_text: Option<PCWSTR>,
     },
     SubMenu {
         menu_list: Vec<MenuInfo>,
@@ -52,6 +54,7 @@ enum MenuItem {
         id: u32,
         rect: RECT,
         disabled: bool,
+        secondary_text: Option<PCWSTR>,
     },
     SubMenu {
         sub_menu: Rc<RefCell<Menu>>,
@@ -81,6 +84,8 @@ pub struct Context {
     text_brush: ID2D1SolidColorBrush,
     text_focused_brush: ID2D1SolidColorBrush,
     text_disabled_brush: ID2D1SolidColorBrush,
+    secondary_text_format: IDWriteTextFormat,
+    secondary_text_brush: ID2D1SolidColorBrush,
     sub_menu_indicator_svg: ID2D1SvgDocument,
     sub_menu_indicator_focused_svg: ID2D1SvgDocument,
 }
@@ -93,11 +98,13 @@ fn convert_menu_info_list_to_menu(menu_info_list: Vec<MenuInfo>) -> Menu {
                 text,
                 command_id,
                 disabled,
+                secondary_text,
             } => MenuItem::MenuItem {
                 text,
                 id: command_id,
                 rect: RECT::default(),
                 disabled,
+                secondary_text,
             },
             MenuInfo::SubMenu { menu_list, text } => {
                 let sub_menu = convert_menu_info_list_to_menu(menu_list);
@@ -829,7 +836,42 @@ fn calc_menu_item_size(
     let tokens = &qt.theme.tokens;
     unsafe {
         match menu_item {
-            MenuItem::MenuItem { rect, text, .. } | MenuItem::SubMenu { rect, text, .. } => {
+            MenuItem::MenuItem {
+                rect,
+                text,
+                secondary_text,
+                ..
+            } => {
+                SetRect(rect, org_x, org_y, org_x, org_y);
+                let direct_write_factory = &qt.dwrite_factory;
+                let text_layout = direct_write_factory.CreateTextLayout(
+                    text.as_wide(),
+                    text_format,
+                    290f32,
+                    500f32,
+                )?;
+                let mut metrics = DWRITE_TEXT_METRICS::default();
+                text_layout.GetMetrics(&mut metrics)?;
+                let mut content_width = metrics.width.ceil() as i32;
+                // Reserve room for the shortcut hint + a gap after the label.
+                if let Some(secondary) = secondary_text {
+                    let secondary_layout = direct_write_factory.CreateTextLayout(
+                        secondary.as_wide(),
+                        text_format,
+                        290f32,
+                        500f32,
+                    )?;
+                    let mut secondary_metrics = DWRITE_TEXT_METRICS::default();
+                    secondary_layout.GetMetrics(&mut secondary_metrics)?;
+                    content_width += secondary_metrics.width.ceil() as i32
+                        + 6 * tokens.spacing_vertical_s_nudge as i32;
+                }
+                rect.right += content_width + 2 * tokens.spacing_vertical_s_nudge as i32;
+                rect.bottom += (metrics.height.ceil() as i32
+                    + 2 * tokens.spacing_vertical_s_nudge as i32)
+                    .max(32);
+            }
+            MenuItem::SubMenu { rect, text, .. } => {
                 SetRect(rect, org_x, org_y, org_x, org_y);
                 let direct_write_factory = &qt.dwrite_factory;
                 let text_layout = direct_write_factory.CreateTextLayout(
@@ -1054,7 +1096,12 @@ fn draw_menu_item(
     }
     unsafe {
         match menu_item {
-            MenuItem::MenuItem { text, disabled, .. } => {
+            MenuItem::MenuItem {
+                text,
+                disabled,
+                secondary_text,
+                ..
+            } => {
                 let text_rect = D2D_RECT_F {
                     left: rect.left as f32 + tokens.spacing_vertical_s_nudge,
                     top: rect.top as f32 + tokens.spacing_vertical_s_nudge,
@@ -1076,6 +1123,21 @@ fn draw_menu_item(
                     D2D1_DRAW_TEXT_OPTIONS_NONE,
                     DWRITE_MEASURING_MODE_NATURAL,
                 );
+                if let Some(secondary) = secondary_text {
+                    let secondary_brush = if *disabled {
+                        &context.text_disabled_brush
+                    } else {
+                        &context.secondary_text_brush
+                    };
+                    context.render_target.DrawText(
+                        secondary.as_wide(),
+                        &context.secondary_text_format,
+                        &text_rect,
+                        secondary_brush,
+                        D2D1_DRAW_TEXT_OPTIONS_NONE,
+                        DWRITE_MEASURING_MODE_NATURAL,
+                    );
+                }
             }
             MenuItem::SubMenu { text, .. } => {
                 let text_rect = D2D_RECT_F {
@@ -1198,6 +1260,20 @@ fn on_create(window: HWND, params: CreateParams, x: i32, y: i32) -> Result<Conte
             render_target.CreateSolidColorBrush(&tokens.color_neutral_foreground1_hover, None)?;
         let text_disabled_brush =
             render_target.CreateSolidColorBrush(&tokens.color_neutral_foreground_disabled, None)?;
+        // Secondary content (shortcut hints): base200, right-aligned, foreground3.
+        let secondary_text_format = params.qt.dwrite_factory.CreateTextFormat(
+            tokens.font_family_base,
+            None,
+            tokens.font_weight_regular,
+            DWRITE_FONT_STYLE_NORMAL,
+            DWRITE_FONT_STRETCH_NORMAL,
+            tokens.font_size_base200,
+            w!(""),
+        )?;
+        secondary_text_format.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING)?;
+        secondary_text_format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
+        let secondary_text_brush =
+            render_target.CreateSolidColorBrush(&tokens.color_neutral_foreground3, None)?;
         let device_context5 = render_target.cast::<ID2D1DeviceContext5>()?;
         let sub_menu_indicator_icon = Icon::chevron_right_regular();
         let sub_menu_indicator_svg =
@@ -1244,6 +1320,8 @@ fn on_create(window: HWND, params: CreateParams, x: i32, y: i32) -> Result<Conte
             text_brush,
             text_focused_brush,
             text_disabled_brush,
+            secondary_text_format,
+            secondary_text_brush,
             sub_menu_indicator_svg,
             sub_menu_indicator_focused_svg,
         })
