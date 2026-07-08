@@ -1,10 +1,12 @@
 //#![windows_subsystem = "windows"]
 use std::mem::size_of;
 
-use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows::Win32::Foundation::{
+    COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM,
+};
 use windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F;
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, CreateSolidBrush, EndPaint, FillRect, PAINTSTRUCT,
+    BeginPaint, CreateSolidBrush, EndPaint, FillRect, PAINTSTRUCT, PtInRect,
 };
 use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -22,6 +24,7 @@ use quelthalas::{MouseEvent, QT};
 struct AppState {
     qt: QT,
     layout: Stack,
+    menu_target: HWND,
 }
 
 // Window canvas background (#fafafa). Labels use it so they blend seamlessly.
@@ -29,6 +32,14 @@ const CANVAS: D2D1_COLOR_F = D2D1_COLOR_F {
     r: 250.0 / 255.0,
     g: 250.0 / 255.0,
     b: 250.0 / 255.0,
+    a: 1.0,
+};
+
+// Distinct fill (#e6e6e6) for the right-click target so the area is visible.
+const MENU_AREA: D2D1_COLOR_F = D2D1_COLOR_F {
+    r: 230.0 / 255.0,
+    g: 230.0 / 255.0,
+    b: 230.0 / 255.0,
     a: 1.0,
 };
 
@@ -240,6 +251,30 @@ extern "system" fn window_process(
                         },
                     )
                     .unwrap_or_default();
+                let open_dialog = qt
+                    .create_button(
+                        window,
+                        0,
+                        0,
+                        button::Props {
+                            text: w!("Open dialog"),
+                            mouse_event: MouseEvent {
+                                on_click: Box::new({
+                                    let qt = qt.clone();
+                                    move |_| {
+                                        _ = qt.open_dialog(
+                                            window,
+                                            w!("Dialog title"),
+                                            w!("Lorem ipsum dolor sit amet consectetur adipisicing elit. Quisquam exercitationem cumque repellendus eaque est dolor eius expedita nulla ullam? Tenetur reprehenderit aut voluptatum impedit voluptates in natus iure cumque eaque?"),
+                                            &dialog::ModelType::Alert,
+                                        );
+                                    }
+                                }),
+                            },
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap_or_default();
                 let close = qt
                     .create_button(
                         window,
@@ -256,49 +291,84 @@ extern "system" fn window_process(
                         },
                     )
                     .unwrap_or_default();
-                let buttons_label = qt
-                    .create_subtitle2(
+
+                // Section header (subtitle2) blended onto the canvas.
+                let section = |text: PCWSTR| {
+                    qt.create_subtitle2(
                         window,
                         0,
                         0,
                         text::PresetProps {
-                            text: w!("Buttons"),
+                            text,
                             background: Some(CANVAS),
                             ..Default::default()
                         },
                     )
-                    .unwrap_or_default();
-                let inputs_label = qt
-                    .create_subtitle2(
+                    .unwrap_or_default()
+                };
+                let buttons_label = section(w!("Buttons"));
+                let inputs_label = section(w!("Inputs"));
+                let progress_label = section(w!("Progress bar"));
+                let dialog_label = section(w!("Dialog"));
+                let menu_label = section(w!("Menu"));
+                let text_label = section(w!("Text"));
+
+                let menu_hint = qt
+                    .create_body1(
                         window,
                         0,
                         0,
                         text::PresetProps {
-                            text: w!("Inputs"),
-                            background: Some(CANVAS),
-                            ..Default::default()
-                        },
-                    )
-                    .unwrap_or_default();
-                let progress_label = qt
-                    .create_subtitle2(
-                        window,
-                        0,
-                        0,
-                        text::PresetProps {
-                            text: w!("Progress bar"),
-                            background: Some(CANVAS),
+                            text: w!("Right-click here for a context menu."),
+                            background: Some(MENU_AREA),
                             ..Default::default()
                         },
                     )
                     .unwrap_or_default();
 
-                // Gallery grouped by component type (top-anchored); a spring pins
-                // the Close footer to the bottom-right.
-                let section_gap = 24.0;
-                let layout = Stack::vertical()
-                    .padding(24.0)
-                    .gap(section_gap)
+                // Text section: an intro line, then every preset labelled by name.
+                let text_intro = qt
+                    .create_body1(
+                        window,
+                        0,
+                        0,
+                        text::PresetProps {
+                            text: w!("This is an example of the Text component's usage."),
+                            background: Some(CANVAS),
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap_or_default();
+                macro_rules! preset {
+                    ($method:ident, $label:expr) => {
+                        qt.$method(
+                            window,
+                            0,
+                            0,
+                            text::PresetProps {
+                                text: $label,
+                                background: Some(CANVAS),
+                                ..Default::default()
+                            },
+                        )
+                        .unwrap_or_default()
+                    };
+                }
+                let p_caption1 = preset!(create_caption1, w!("Caption1"));
+                let p_caption1_strong = preset!(create_caption1_strong, w!("Caption1Strong"));
+                let p_body1 = preset!(create_body1, w!("Body1"));
+                let p_body1_strong = preset!(create_body1_strong, w!("Body1Strong"));
+                let p_body2 = preset!(create_body2, w!("Body2"));
+                let p_subtitle2 = preset!(create_subtitle2, w!("Subtitle2"));
+                let p_subtitle1 = preset!(create_subtitle1, w!("Subtitle1"));
+                let p_title3 = preset!(create_title3, w!("Title3"));
+                let p_title2 = preset!(create_title2, w!("Title2"));
+                let p_title1 = preset!(create_title1, w!("Title1"));
+
+                // Two columns: components on the left, Text presets on the right;
+                // a spring pins the Close footer to the bottom-right.
+                let left_column = Stack::vertical()
+                    .gap(24.0)
                     .add_stack(
                         Stack::vertical()
                             .gap(8.0)
@@ -338,6 +408,33 @@ extern "system" fn window_process(
                             .add(progress_medium)
                             .add(progress_large),
                     )
+                    .add_stack(Stack::vertical().gap(8.0).add(dialog_label).add(open_dialog))
+                    .add_stack(Stack::vertical().gap(8.0).add(menu_label).add(menu_hint));
+
+                let right_column = Stack::vertical()
+                    .gap(8.0)
+                    .add(text_label)
+                    .add(text_intro)
+                    .add(p_caption1)
+                    .add(p_caption1_strong)
+                    .add(p_body1)
+                    .add(p_body1_strong)
+                    .add(p_body2)
+                    .add(p_subtitle2)
+                    .add(p_subtitle1)
+                    .add(p_title3)
+                    .add(p_title2)
+                    .add(p_title1);
+
+                let layout = Stack::vertical()
+                    .padding(24.0)
+                    .gap(24.0)
+                    .add_stack(
+                        Stack::horizontal()
+                            .gap(48.0)
+                            .add_stack(left_column)
+                            .add_stack(right_column),
+                    )
                     .spring()
                     .add_stack(Stack::horizontal().spring().add(close));
 
@@ -346,7 +443,11 @@ extern "system" fn window_process(
                     _ = layout.arrange(window, rc);
                 }
 
-                let state = Box::new(AppState { qt, layout });
+                let state = Box::new(AppState {
+                    qt,
+                    layout,
+                    menu_target: menu_hint,
+                });
                 SetWindowLongPtrW(window, GWLP_USERDATA, Box::into_raw(state) as _);
                 DefWindowProcW(window, message, w_param, l_param)
             }
@@ -365,8 +466,8 @@ extern "system" fn window_process(
                 let qt = &(*raw).qt;
                 match qt.open_dialog(
                     window,
-                    w!("Dialog title"),
-                    w!("Lorem ipsum dolor sit amet consectetur adipisicing elit. Quisquam exercitationem cumque repellendus eaque est dolor eius expedita nulla ullam? Tenetur reprehenderit aut voluptatum impedit voluptates in natus iure cumque eaque?"),
+                    w!("Close"),
+                    w!("Are you sure you want to close this window?"),
                     &dialog::ModelType::Alert
                 ) {
                     Ok(result) => {
@@ -398,6 +499,14 @@ extern "system" fn window_process(
                 let y = (l_param.0 >> 16) as i16 as i32;
 
                 let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *const AppState;
+                // Only pop the menu when the right-click lands on the designated
+                // target label; otherwise let default handling proceed.
+                let mut target_rect = RECT::default();
+                if GetWindowRect((*raw).menu_target, &mut target_rect).is_err()
+                    || !PtInRect(&target_rect, POINT { x, y }).as_bool()
+                {
+                    return DefWindowProcW(window, message, w_param, l_param);
+                }
                 let qt = &(*raw).qt;
                 let menu_list = vec![
                     MenuInfo::MenuItem {
