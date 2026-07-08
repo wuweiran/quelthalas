@@ -15,7 +15,7 @@ use windows::Win32::Graphics::Direct2D::{
     D2D1_ANTIALIAS_MODE_ALIASED, D2D1_ARC_SEGMENT, D2D1_ARC_SIZE_SMALL, D2D1_DRAW_TEXT_OPTIONS_NONE,
     D2D1_HWND_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_PROPERTIES, D2D1_ROUNDED_RECT,
     D2D1_SWEEP_DIRECTION_COUNTER_CLOCKWISE, ID2D1Factory1, ID2D1HwndRenderTarget,
-    ID2D1PathGeometry1,
+    ID2D1PathGeometry1, ID2D1SolidColorBrush,
 };
 use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_HIT_TEST_METRICS,
@@ -62,6 +62,9 @@ use windows_numerics::Vector2;
 use crate::component::menu::MenuInfo;
 use crate::theme::TypographyStyle;
 use crate::{QT, get_scaling_factor};
+
+// Caret blink timer id.
+const CARET_TIMER_ID: usize = 1;
 
 macro_rules! order_usize {
     ($x:expr, $y:expr) => {{
@@ -262,6 +265,7 @@ pub struct Context {
     selection_end: usize,
     is_captured: bool,
     is_focused: bool,
+    caret_visible: bool,
     format_rect: RECT,
     render_target: ID2D1HwndRenderTarget,
     text_format: IDWriteTextFormat,
@@ -489,6 +493,10 @@ fn set_selection(
         return Ok(false);
     }
 
+    // Erase the caret at its current (old) position before it moves — the
+    // selection-delta invalidation below skips zero-width caret ranges.
+    invalidate_caret(window, context)?;
+
     context.selection_start = new_start;
     context.selection_end = new_end;
 
@@ -509,6 +517,16 @@ fn set_selection(
         }
     } else {
         invalidate_text(window, context, new_start, old_end)?;
+    }
+
+    // Reset the blink on move: show the caret solid immediately and re-arm the
+    // timer so it starts a fresh full-on interval (like a normal editor).
+    if context.is_focused {
+        context.caret_visible = true;
+        unsafe {
+            SetTimer(Some(window), CARET_TIMER_ID, GetCaretBlinkTime(), None);
+        }
+        invalidate_caret(window, context)?;
     }
     Ok(true)
 }
@@ -646,10 +664,53 @@ fn replace_selection(
 fn set_caret_position(window: HWND, context: &mut Context, position: usize) -> Result<()> {
     if context.is_focused {
         let res = position_from_char(window, context, position)?;
-        unsafe {
-            SetCaretPos(res.x, res.y)?;
-            update_imm_composition_window(window, context, res.x, res.y);
-        }
+        update_imm_composition_window(window, context, res.x, res.y);
+    }
+    Ok(())
+}
+
+/// Caret column width in device pixels (DPI-scaled, at least 1). The single
+/// source of truth so the draw and the invalidate rects can never disagree.
+fn caret_width(window: HWND) -> i32 {
+    (get_scaling_factor(window).round() as i32).max(1)
+}
+
+/// Fill the caret column at `x` (device px). Used by both paint branches.
+fn draw_caret(
+    rt: &ID2D1HwndRenderTarget,
+    window: HWND,
+    x: i32,
+    format_rect: &RECT,
+    line_height: i32,
+    brush: &ID2D1SolidColorBrush,
+) {
+    let caret_rect = D2D_RECT_F {
+        left: x as f32,
+        top: format_rect.top as f32,
+        right: (x + caret_width(window)) as f32,
+        bottom: (format_rect.top + line_height) as f32,
+    };
+    unsafe {
+        rt.FillRectangle(&caret_rect, brush);
+    }
+}
+
+/// Invalidate the caret's current column so a stale caret (collapsed selection)
+/// is erased before it moves. `invalidate_text` no-ops on zero-width ranges, so
+/// the selection path alone never clears a moved caret.
+fn invalidate_caret(window: HWND, context: &mut Context) -> Result<()> {
+    if !context.is_focused {
+        return Ok(());
+    }
+    let x = position_from_char(window, context, context.selection_end)?.x;
+    let rc = RECT {
+        left: x - 1,
+        top: context.format_rect.top,
+        right: x + caret_width(window) + 1,
+        bottom: context.format_rect.top + context.line_height,
+    };
+    unsafe {
+        _ = InvalidateRect(Some(window), Some(&rc), false);
     }
     Ok(())
 }
@@ -1017,6 +1078,7 @@ fn on_create(window: HWND, state: State) -> Result<Context> {
             selection_end: 0,
             is_captured: false,
             is_focused: false,
+            caret_visible: false,
             format_rect: RECT::default(),
             render_target,
             text_format,
@@ -1227,8 +1289,9 @@ fn on_key_down(window: HWND, context: &mut Context, key: i32) -> Result<()> {
 
 fn on_kill_focus(window: HWND, context: &mut Context) -> Result<()> {
     context.is_focused = false;
+    context.caret_visible = false;
     unsafe {
-        DestroyCaret()?;
+        _ = KillTimer(Some(window), CARET_TIMER_ID);
     }
     invalidate_text(
         window,
@@ -1435,6 +1498,18 @@ fn paint(window: HWND, context: &mut Context) -> Result<()> {
                 );
             }
         }
+        // Caret at the field start, over the placeholder (matches native fields).
+        if context.is_focused && context.caret_visible {
+            let caret_brush = unsafe { rt.CreateSolidColorBrush(&foreground_color, None)? };
+            draw_caret(
+                &rt,
+                window,
+                format_rect.left,
+                &format_rect,
+                context.line_height,
+                &caret_brush,
+            );
+        }
         return Ok(());
     }
 
@@ -1477,6 +1552,23 @@ fn paint(window: HWND, context: &mut Context) -> Result<()> {
             rt.PopAxisAlignedClip();
         }
 
+        // Caret: a DPI-scaled column drawn in the same pass as the text (no GDI
+        // system caret), toggled by the blink timer. Hidden while a selection is
+        // active (matches classic EDIT, and avoids stale caret columns as the
+        // selection edge sweeps past).
+        if context.is_focused && context.caret_visible && sel_start == sel_end {
+            let caret_x = position_from_char(window, context, context.selection_end)?.x;
+            let caret_brush = rt.CreateSolidColorBrush(&foreground_color, None)?;
+            draw_caret(
+                &rt,
+                window,
+                caret_x,
+                &format_rect,
+                context.line_height,
+                &caret_brush,
+            );
+        }
+
         rt.PopAxisAlignedClip();
     }
     Ok(())
@@ -1485,11 +1577,9 @@ fn paint(window: HWND, context: &mut Context) -> Result<()> {
 fn on_paint(window: HWND, context: &mut Context) -> Result<()> {
     let rt = context.render_target.clone();
     unsafe {
-        HideCaret(Some(window)).ok();
         rt.BeginDraw();
         let result = paint_content_and_chrome(window, context);
         let end = rt.EndDraw(None, None);
-        ShowCaret(Some(window)).ok();
         result.and(end)
     }
 }
@@ -1616,22 +1706,17 @@ fn paint_content_and_chrome(window: HWND, context: &mut Context) -> Result<()> {
 
 fn set_focus(window: HWND, context: &mut Context) -> Result<()> {
     context.is_focused = true;
+    context.caret_visible = true;
     invalidate_text(
         window,
         context,
         context.selection_start,
         context.selection_end,
     )?;
-    let scaling_factor = get_scaling_factor(window);
     unsafe {
-        CreateCaret(
-            window,
-            None,
-            (1.0 * scaling_factor) as i32,
-            context.line_height,
-        )?;
+        // Blink the D2D-drawn caret ourselves at the system blink rate.
+        SetTimer(Some(window), CARET_TIMER_ID, GetCaretBlinkTime(), None);
         set_caret_position(window, context, context.selection_end)?;
-        ShowCaret(Some(window))?;
         _ = RedrawWindow(Some(window), None, None, RDW_INVALIDATE);
         let tokens = &context.state.qt.theme.tokens;
         let transition = context
@@ -1926,6 +2011,13 @@ extern "system" fn window_proc(
             let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
             let context = &mut *raw;
             _ = set_focus(window, context);
+            LRESULT(0)
+        },
+        WM_TIMER if w_param.0 == CARET_TIMER_ID => unsafe {
+            let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
+            let context = &mut *raw;
+            context.caret_visible = !context.caret_visible;
+            _ = invalidate_caret(window, context);
             LRESULT(0)
         },
         WM_SETTEXT => unsafe {
