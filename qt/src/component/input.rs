@@ -32,8 +32,10 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
 use windows::Win32::System::DataExchange::{
-    CloseClipboard, EmptyClipboard, GetClipboardData, OpenClipboard, SetClipboardData,
+    CloseClipboard, EmptyClipboard, GetClipboardData, IsClipboardFormatAvailable, OpenClipboard,
+    SetClipboardData,
 };
+use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock};
 use windows::Win32::System::Ole::CF_UNICODETEXT;
 use windows::Win32::System::SystemServices::MK_SHIFT;
@@ -57,6 +59,7 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::*;
 use windows_numerics::Vector2;
 
+use crate::component::menu::MenuInfo;
 use crate::theme::TypographyStyle;
 use crate::{QT, get_scaling_factor};
 
@@ -67,6 +70,47 @@ macro_rules! order_usize {
         }
     }};
 }
+
+// Context-menu command ids.
+const CMD_CUT: u32 = 1;
+const CMD_COPY: u32 = 2;
+const CMD_PASTE: u32 = 3;
+const CMD_SELECT_ALL: u32 = 4;
+
+// user32.dll string-table ids for the edit context menu (undocumented; verify per
+// OS with Resource Hacker). MUI resolves these to the current UI language.
+const IDS_CUT: u32 = 769;
+const IDS_COPY: u32 = 770;
+const IDS_PASTE: u32 = 771;
+const IDS_SELECT_ALL: u32 = 773;
+
+/// Load a localized string from user32's string table, falling back to `fallback`
+/// (and stripping the `&` accelerator marker). Buffer is leaked into a boxed slice
+/// so the returned `PCWSTR` stays valid for the menu's lifetime.
+fn system_string(id: u32, fallback: PCWSTR) -> PCWSTR {
+    unsafe {
+        let mut buf = [0u16; 128];
+        let module = GetModuleHandleW(w!("user32.dll")).unwrap_or_default();
+        let len = LoadStringW(
+            Some(HINSTANCE(module.0)),
+            id,
+            PWSTR(buf.as_mut_ptr()),
+            buf.len() as i32,
+        );
+        let text: Vec<u16> = if len > 0 {
+            buf[..len as usize]
+                .iter()
+                .copied()
+                .filter(|&c| c != '&' as u16)
+                .chain(std::iter::once(0))
+                .collect()
+        } else {
+            fallback.as_wide().iter().copied().chain(std::iter::once(0)).collect()
+        };
+        PCWSTR::from_raw(Box::leak(text.into_boxed_slice()).as_ptr())
+    }
+}
+
 #[derive(Copy, Clone)]
 pub enum Size {
     Small,
@@ -1705,7 +1749,77 @@ extern "system" fn window_proc(
             _ = clear(window, context);
             LRESULT::default()
         },
-        WM_CONTEXTMENU => LRESULT::default(),
+        WM_CONTEXTMENU => unsafe {
+            let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
+            let context = &mut *raw;
+            // Snapshot state, then drop the borrow before open_menu (it runs a
+            // nested modal loop that re-enters this window_proc).
+            let has_selection = context.selection_start != context.selection_end;
+            let has_text = context.get_text_length() > 0;
+            let is_password = matches!(context.state.input_type, Type::Password);
+            let qt = context.state.qt.clone();
+
+            let can_copy = has_selection && !is_password;
+            let can_paste = IsClipboardFormatAvailable(CF_UNICODETEXT.0 as u32).is_ok();
+
+            let mut x = l_param.0 as i16 as i32;
+            let mut y = (l_param.0 >> 16) as i16 as i32;
+            if x == -1 && y == -1 {
+                // Keyboard-invoked (Shift+F10): anchor at the control's top-left.
+                let mut rc = RECT::default();
+                if GetWindowRect(window, &mut rc).is_ok() {
+                    x = rc.left;
+                    y = rc.bottom;
+                }
+            }
+
+            let menu_list = vec![
+                MenuInfo::MenuItem {
+                    text: system_string(IDS_CUT, w!("Cut")),
+                    command_id: CMD_CUT,
+                    disabled: !can_copy,
+                },
+                MenuInfo::MenuItem {
+                    text: system_string(IDS_COPY, w!("Copy")),
+                    command_id: CMD_COPY,
+                    disabled: !can_copy,
+                },
+                MenuInfo::MenuItem {
+                    text: system_string(IDS_PASTE, w!("Paste")),
+                    command_id: CMD_PASTE,
+                    disabled: !can_paste,
+                },
+                MenuInfo::MenuItem {
+                    text: system_string(IDS_SELECT_ALL, w!("Select All")),
+                    command_id: CMD_SELECT_ALL,
+                    disabled: !has_text,
+                },
+            ];
+            _ = qt.open_menu(window, x, y, crate::component::menu::Props { menu_list });
+            LRESULT::default()
+        },
+        WM_COMMAND => unsafe {
+            match (w_param.0 & 0xffff) as u32 {
+                CMD_CUT => {
+                    SendMessageW(window, WM_CUT, None, None);
+                }
+                CMD_COPY => {
+                    SendMessageW(window, WM_COPY, None, None);
+                }
+                CMD_PASTE => {
+                    SendMessageW(window, WM_PASTE, None, None);
+                }
+                CMD_SELECT_ALL => {
+                    let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
+                    let context = &mut *raw;
+                    let length = context.get_text_length();
+                    _ = set_selection(window, context, Some(0), Some(length));
+                    _ = scroll_caret(window, context);
+                }
+                _ => {}
+            }
+            LRESULT::default()
+        },
         WM_COPY => unsafe {
             let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
             let context = &mut *raw;
