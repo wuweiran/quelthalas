@@ -1,35 +1,29 @@
 use std::mem::size_of;
 use std::sync::Once;
 
-use crate::icon::Icon;
 use crate::{QT, get_scaling_factor};
 use windows::Win32::Foundation::*;
-use windows::Win32::Graphics::Direct2D::Common::{
-    D2D_RECT_F, D2D_SIZE_F, D2D_SIZE_U, D2D1_COLOR_F,
-};
+use windows::Win32::Graphics::Direct2D::Common::{D2D_RECT_F, D2D_SIZE_U, D2D1_COLOR_F};
 use windows::Win32::Graphics::Direct2D::{
-    D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_HWND_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_PROPERTIES,
-    D2D1_ROUNDED_RECT, D2D1_SVG_PAINT_TYPE_COLOR, ID2D1DeviceContext5, ID2D1HwndRenderTarget,
-    ID2D1SvgAttribute, ID2D1SvgDocument,
+    D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_ELLIPSE, D2D1_HWND_RENDER_TARGET_PROPERTIES,
+    D2D1_RENDER_TARGET_PROPERTIES, ID2D1HwndRenderTarget,
 };
 use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_MEASURING_MODE_NATURAL,
     DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_TEXT_METRICS, IDWriteTextFormat,
 };
 use windows::Win32::Graphics::Gdi::{BeginPaint, EndPaint, InvalidateRect, PAINTSTRUCT};
-use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Controls::WM_MOUSELEAVE;
+use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::{TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent};
-use windows::Win32::UI::Shell::SHCreateMemStream;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::*;
-use windows_numerics::Matrix3x2;
+use windows_numerics::Vector2;
 
-#[derive(Copy, Clone)]
-pub enum Size {
-    Medium,
-    Large,
-}
+/// Private message a selected radio sends to its group siblings to clear them.
+/// Filtered to `QT_RADIO` windows so it can't be misread by other WM_USER-based
+/// controls that happen to share the group.
+const WM_RADIO_UNCHECK: u32 = WM_USER + 1;
 
 pub struct MouseEvent {
     pub on_change: Box<dyn Fn(&HWND, bool)>,
@@ -46,7 +40,9 @@ impl Default for MouseEvent {
 pub struct Props {
     pub label: PCWSTR,
     pub checked: bool,
-    pub size: Size,
+    /// Set `true` on the FIRST radio of each group. It ORs in `WS_GROUP`, which
+    /// delimits the group in z-order — exactly how Win32 dialogs group radios.
+    pub group_start: bool,
     pub mouse_event: MouseEvent,
     /// Background fill. `None` uses the theme surface (`color_neutral_background1`).
     pub background: Option<D2D1_COLOR_F>,
@@ -57,7 +53,7 @@ impl Default for Props {
         Props {
             label: w!(""),
             checked: false,
-            size: Size::Medium,
+            group_start: false,
             mouse_event: MouseEvent::default(),
             background: None,
         }
@@ -70,51 +66,32 @@ struct State {
 }
 
 impl State {
+    /// Fluent's radio is a fixed 16px indicator (no medium/large variants).
     fn box_size(&self) -> f32 {
-        match self.props.size {
-            Size::Medium => 16.0,
-            Size::Large => 20.0,
-        }
-    }
-
-    /// Checkmark glyph size (Fluent's indicator `fontSize`), drawn at its natural
-    /// size and centred — not stretched to fill the box.
-    fn check_size(&self) -> f32 {
-        match self.props.size {
-            Size::Medium => 12.0,
-            Size::Large => 16.0,
-        }
+        16.0
     }
 
     fn font_size(&self) -> f32 {
-        let tokens = &self.qt.theme.tokens;
-        match self.props.size {
-            Size::Medium => tokens.font_size_base300,
-            Size::Large => tokens.font_size_base400,
-        }
+        self.qt.theme.tokens.font_size_base300
     }
 
     fn line_height(&self) -> f32 {
-        let tokens = &self.qt.theme.tokens;
-        match self.props.size {
-            Size::Medium => tokens.line_height_base300,
-            Size::Large => tokens.line_height_base400,
-        }
+        self.qt.theme.tokens.line_height_base300
     }
 
-    /// Padding around the box (Fluent's indicator margin) and trailing the label
+    /// Padding around the ring (Fluent's indicator margin) and trailing the label
     /// — `spacingHorizontalS`.
     fn pad(&self) -> f32 {
         self.qt.theme.tokens.spacing_horizontal_s
     }
 
-    /// Space between the box's padding and the label text — `spacingHorizontalXS`.
+    /// Space between the ring's padding and the label text — `spacingHorizontalXS`.
     fn gap(&self) -> f32 {
         self.qt.theme.tokens.spacing_horizontal_xs
     }
 
-    /// Vertical padding above and below the box — `spacingVerticalS`. Gives the
-    /// Fluent 32px row (8 + 16 box + 8) for the medium size.
+    /// Vertical padding above and below the ring — `spacingVerticalS`. Gives the
+    /// Fluent 32px row (8 + 16 ring + 8).
     fn vpad(&self) -> f32 {
         self.qt.theme.tokens.spacing_vertical_s
     }
@@ -124,21 +101,20 @@ struct Context {
     state: State,
     text_format: IDWriteTextFormat,
     render_target: ID2D1HwndRenderTarget,
-    checkmark_svg: ID2D1SvgDocument,
     checked: bool,
     hovered: bool,
     pressed: bool,
 }
 
 impl QT {
-    pub fn create_checkbox(
+    pub fn create_radio(
         &self,
         parent_window: HWND,
         x: i32,
         y: i32,
         props: Props,
     ) -> Result<HWND> {
-        let class_name: PCWSTR = w!("QT_CHECKBOX");
+        let class_name: PCWSTR = w!("QT_RADIO");
         unsafe {
             static REGISTER: Once = Once::new();
             REGISTER.call_once(|| {
@@ -152,6 +128,10 @@ impl QT {
                 };
                 RegisterClassExW(&window_class);
             });
+            let mut style = WS_TABSTOP | WS_VISIBLE | WS_CHILD;
+            if props.group_start {
+                style |= WS_GROUP;
+            }
             let boxed = Box::new(State {
                 qt: self.clone(),
                 props,
@@ -160,7 +140,7 @@ impl QT {
                 WINDOW_EX_STYLE::default(),
                 class_name,
                 w!(""),
-                WS_TABSTOP | WS_VISIBLE | WS_CHILD,
+                style,
                 x,
                 y,
                 0,
@@ -175,10 +155,10 @@ impl QT {
         }
     }
 
-    /// Current checked state of a checkbox created by `create_checkbox`.
-    pub fn checkbox_checked(&self, checkbox: HWND) -> bool {
+    /// Current checked state of a radio created by `create_radio`.
+    pub fn radio_checked(&self, radio: HWND) -> bool {
         unsafe {
-            let raw = GetWindowLongPtrW(checkbox, GWLP_USERDATA) as *const Context;
+            let raw = GetWindowLongPtrW(radio, GWLP_USERDATA) as *const Context;
             if raw.is_null() {
                 false
             } else {
@@ -188,14 +168,14 @@ impl QT {
     }
 }
 
-fn set_svg_color(svg: &ID2D1SvgDocument, color: &D2D1_COLOR_F) -> Result<()> {
+/// True when `hwnd` is one of our radio windows. Used to bound the group walk so
+/// only radios are toggled, even if `WS_GROUP` boundaries are imperfect.
+fn is_radio(hwnd: HWND) -> bool {
     unsafe {
-        let svg_paint = svg.CreatePaint(D2D1_SVG_PAINT_TYPE_COLOR, Some(color), w!(""))?;
-        svg.GetRoot()?
-            .GetFirstChild()?
-            .SetAttributeValue(w!("fill"), &svg_paint.cast::<ID2D1SvgAttribute>()?)?;
+        let mut buf = [0u16; 16];
+        let len = GetClassNameW(hwnd, &mut buf);
+        len > 0 && String::from_utf16_lossy(&buf[..len as usize]) == "QT_RADIO"
     }
-    Ok(())
 }
 
 fn on_create(window: HWND, state: State) -> Result<Context> {
@@ -230,23 +210,10 @@ fn on_create(window: HWND, state: State) -> Result<Context> {
             },
         )?;
 
-        let icon = Icon::checkmark_12_filled();
-        let device_context5 = render_target.cast::<ID2D1DeviceContext5>()?;
-        let svg_stream = SHCreateMemStream(Some(icon.svg.as_bytes()));
-        let checkmark_svg = device_context5.CreateSvgDocument(
-            svg_stream.as_ref(),
-            D2D_SIZE_F {
-                width: icon.size as f32,
-                height: icon.size as f32,
-            },
-        )?;
-        _ = set_svg_color(&checkmark_svg, &tokens.color_neutral_foreground_on_brand);
-
         Ok(Context {
             state,
             text_format,
             render_target,
-            checkmark_svg,
             checked,
             hovered: false,
             pressed: false,
@@ -254,7 +221,7 @@ fn on_create(window: HWND, state: State) -> Result<Context> {
     }
 }
 
-/// Auto-size to the box + gap + label and resize the render target.
+/// Auto-size to the ring + gap + label and resize the render target.
 fn layout(window: HWND, context: &Context) -> Result<()> {
     let state = &context.state;
     unsafe {
@@ -269,16 +236,15 @@ fn layout(window: HWND, context: &Context) -> Result<()> {
 
         let scaling_factor = get_scaling_factor(window);
         let has_label = !state.props.label.is_null() && !state.props.label.as_wide().is_empty();
-        // Fluent: `spacingHorizontalS` padding around the box on every side; the
-        // label adds `spacingHorizontalXS` before its text and `spacingHorizontalS`
-        // after.
+        // `spacingHorizontalS` padding around the ring on every side; the label
+        // adds `spacingHorizontalXS` before its text and `spacingHorizontalS` after.
         let width = if has_label {
             state.pad() + state.box_size() + state.pad() + state.gap() + metrics.width.ceil()
                 + state.pad()
         } else {
             state.pad() + state.box_size() + state.pad()
         };
-        // Fluent 32px row: `spacingVerticalS` above and below the box (8 + 16 + 8).
+        // Fluent 32px row: `spacingVerticalS` above and below the ring (8 + 16 + 8).
         // `.max(line_height)` guards against clipping if the label is ever taller.
         let height = (state.box_size() + state.vpad() * 2.0).max(state.line_height());
         let scaled_width = (width * scaling_factor).ceil() as i32;
@@ -319,26 +285,19 @@ fn paint(window: HWND, context: &Context) -> Result<()> {
         let box_size = state.box_size();
         let box_left = state.pad();
         let box_top = (height - box_size) / 2.0;
-        let radius = tokens.border_radius_small;
-        let box_rect = D2D1_ROUNDED_RECT {
-            rect: D2D_RECT_F {
-                left: box_left,
-                top: box_top,
-                right: box_left + box_size,
-                bottom: box_top + box_size,
-            },
-            radiusX: radius,
-            radiusY: radius,
+        let center = Vector2 {
+            X: box_left + box_size / 2.0,
+            Y: box_top + box_size / 2.0,
         };
 
-        // Resolve colours by state (per Fluent's checkbox rest/hover/pressed).
-        let box_color = if context.checked {
+        // Resolve colours by state (per Fluent's radio rest/hover/pressed).
+        let ring_color = if context.checked {
             if context.pressed {
-                &tokens.color_compound_brand_background_pressed
+                &tokens.color_compound_brand_stroke_pressed
             } else if context.hovered {
-                &tokens.color_compound_brand_background_hover
+                &tokens.color_compound_brand_stroke_hover
             } else {
-                &tokens.color_compound_brand_background
+                &tokens.color_compound_brand_stroke
             }
         } else if context.pressed {
             &tokens.color_neutral_stroke_accessible_pressed
@@ -357,47 +316,32 @@ fn paint(window: HWND, context: &Context) -> Result<()> {
             &tokens.color_neutral_foreground3
         };
 
+        // Ring: 1px stroke inset so it sits inside the 16px box.
+        let ring_brush = context.render_target.CreateSolidColorBrush(ring_color, None)?;
+        let ring = D2D1_ELLIPSE {
+            point: center,
+            radiusX: box_size / 2.0 - tokens.stroke_width_thin * 0.5,
+            radiusY: box_size / 2.0 - tokens.stroke_width_thin * 0.5,
+        };
+        context.render_target.DrawEllipse(
+            &ring,
+            &ring_brush,
+            tokens.stroke_width_thin,
+            &state.qt.stroke_style,
+        );
+        // Checked: concentric dot at Fluent's `scale(0.625)` (10px of the 16px box),
+        // same brand colour as the ring.
         if context.checked {
-            let fill = context.render_target.CreateSolidColorBrush(box_color, None)?;
-            context.render_target.FillRoundedRectangle(&box_rect, &fill);
-            // Checkmark at its natural glyph size (Fluent's fontSize), centred in
-            // the box — not stretched to the edges.
-            let device_context5 = context.render_target.cast::<ID2D1DeviceContext5>()?;
-            let viewport = context.checkmark_svg.GetViewportSize();
-            let check = state.check_size();
-            let scale = check / viewport.width;
-            let inset = (box_size - check) / 2.0;
-            device_context5.SetTransform(&Matrix3x2 {
-                M11: scale,
-                M12: 0.0,
-                M21: 0.0,
-                M22: scale,
-                M31: box_left + inset,
-                M32: box_top + inset,
-            });
-            device_context5.DrawSvgDocument(&context.checkmark_svg);
-            device_context5.SetTransform(&Matrix3x2::identity());
-        } else {
-            let border = context.render_target.CreateSolidColorBrush(box_color, None)?;
-            let inset = D2D1_ROUNDED_RECT {
-                rect: D2D_RECT_F {
-                    left: box_left + tokens.stroke_width_thin * 0.5,
-                    top: box_top + tokens.stroke_width_thin * 0.5,
-                    right: box_left + box_size - tokens.stroke_width_thin * 0.5,
-                    bottom: box_top + box_size - tokens.stroke_width_thin * 0.5,
-                },
-                radiusX: radius,
-                radiusY: radius,
+            let dot_radius = box_size * 0.625 / 2.0;
+            let dot = D2D1_ELLIPSE {
+                point: center,
+                radiusX: dot_radius,
+                radiusY: dot_radius,
             };
-            context.render_target.DrawRoundedRectangle(
-                &inset,
-                &border,
-                tokens.stroke_width_thin,
-                &state.qt.stroke_style,
-            );
+            context.render_target.FillEllipse(&dot, &ring_brush);
         }
 
-        // Label to the right of the box, vertically centred.
+        // Label to the right of the ring, vertically centred.
         let has_label = !state.props.label.is_null() && !state.props.label.as_wide().is_empty();
         if has_label {
             let text_brush = context
@@ -431,6 +375,34 @@ fn on_paint(window: HWND, context: &Context) -> Result<()> {
                 context.render_target.EndDraw(None, None)?;
                 result
             }
+        }
+    }
+}
+
+/// Uncheck every other radio in this radio's `WS_GROUP` group. Walks the group
+/// with `GetNextDlgGroupItem` (the primitive `BS_AUTORADIOBUTTON` uses), sending
+/// each radio sibling the private uncheck message. Only `QT_RADIO` windows are
+/// touched, so imperfect group boundaries stay harmless.
+fn uncheck_group_siblings(window: HWND) {
+    unsafe {
+        let Ok(parent) = GetParent(window) else {
+            return;
+        };
+        let mut cur = window;
+        // The group cycles and wraps back to `window`; the cap is a defensive
+        // backstop against any pathological non-terminating walk.
+        for _ in 0..256 {
+            let next = match GetNextDlgGroupItem(parent, Some(cur), false) {
+                Ok(h) => h,
+                Err(_) => break,
+            };
+            if next == window || next == cur {
+                break;
+            }
+            if is_radio(next) {
+                SendMessageW(next, WM_RADIO_UNCHECK, None, None);
+            }
+            cur = next;
         }
     }
 }
@@ -511,9 +483,28 @@ extern "system" fn window_proc(
             let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
             let context = &mut *raw;
             context.pressed = false;
-            context.checked = !context.checked;
-            _ = InvalidateRect(Some(window), None, false);
-            (context.state.props.mouse_event.on_change)(&window, context.checked);
+            // A radio can only be selected, not toggled off by clicking itself.
+            if context.checked {
+                _ = InvalidateRect(Some(window), None, false);
+            } else {
+                context.checked = true;
+                _ = InvalidateRect(Some(window), None, false);
+                uncheck_group_siblings(window);
+                (context.state.props.mouse_event.on_change)(&window, true);
+            }
+            LRESULT(0)
+        },
+        WM_RADIO_UNCHECK => unsafe {
+            let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
+            if raw.is_null() {
+                return LRESULT(0);
+            }
+            let context = &mut *raw;
+            if context.checked {
+                context.checked = false;
+                _ = InvalidateRect(Some(window), None, false);
+                (context.state.props.mouse_event.on_change)(&window, false);
+            }
             LRESULT(0)
         },
         WM_DPICHANGED_BEFOREPARENT => unsafe {

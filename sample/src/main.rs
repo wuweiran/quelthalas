@@ -16,7 +16,7 @@ use windows::core::*;
 use quelthalas::component::button::IconPosition;
 use quelthalas::component::dialog::DialogResult;
 use quelthalas::component::menu::MenuInfo;
-use quelthalas::component::{button, checkbox, dialog, input, menu, progress_bar, text};
+use quelthalas::component::{button, checkbox, dialog, input, menu, progress_bar, radio, text};
 use quelthalas::icon::Icon;
 use quelthalas::layout::Stack;
 use quelthalas::{MouseEvent, QT};
@@ -327,26 +327,68 @@ extern "system" fn window_process(
                     .unwrap_or_default();
 
                 let checkbox_label = section(w!("Checkbox"));
-                let checkbox_unchecked = qt
+                let checkbox = qt
                     .create_checkbox(
                         window,
                         0,
                         0,
                         checkbox::Props {
-                            label: w!("Enable notifications"),
+                            label: w!("Checked"),
+                            checked: true,
                             background: Some(CANVAS),
                             ..Default::default()
                         },
                     )
                     .unwrap_or_default();
-                let checkbox_checked = qt
-                    .create_checkbox(
+
+                // Radio group: `group_start` on the first marks the WS_GROUP
+                // boundary; selecting one auto-clears the others.
+                let radio_label = section(w!("Radio"));
+                let radio_apple = qt
+                    .create_radio(
                         window,
                         0,
                         0,
-                        checkbox::Props {
-                            label: w!("Remember me"),
+                        radio::Props {
+                            label: w!("Apple"),
+                            group_start: true,
                             checked: true,
+                            background: Some(CANVAS),
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap_or_default();
+                let radio_pear = qt
+                    .create_radio(
+                        window,
+                        0,
+                        0,
+                        radio::Props {
+                            label: w!("Pear"),
+                            background: Some(CANVAS),
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap_or_default();
+                let radio_banana = qt
+                    .create_radio(
+                        window,
+                        0,
+                        0,
+                        radio::Props {
+                            label: w!("Banana"),
+                            background: Some(CANVAS),
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap_or_default();
+                let radio_orange = qt
+                    .create_radio(
+                        window,
+                        0,
+                        0,
+                        radio::Props {
+                            label: w!("Orange"),
                             background: Some(CANVAS),
                             ..Default::default()
                         },
@@ -441,8 +483,21 @@ extern "system" fn window_process(
                         Stack::vertical()
                             .gap(8.0)
                             .add(checkbox_label)
-                            .add(checkbox_unchecked)
-                            .add(checkbox_checked),
+                            .add(checkbox),
+                    )
+                    .add_stack(
+                        Stack::vertical()
+                            .gap(8.0)
+                            .add(radio_label)
+                            // Horizontal group. Each radio already carries its own
+                            // `pad()` on both sides, so no extra gap is needed.
+                            .add_stack(
+                                Stack::horizontal()
+                                    .add(radio_apple)
+                                    .add(radio_pear)
+                                    .add(radio_banana)
+                                    .add(radio_orange),
+                            ),
                     );
 
                 let right_column = Stack::vertical()

@@ -4,4 +4,5 @@ pub mod dialog;
 pub mod input;
 pub mod menu;
 pub mod progress_bar;
+pub mod radio;
 pub mod text;
