@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::mem::size_of;
 use std::rc::Rc;
 use std::sync::Once;
@@ -6,7 +6,8 @@ use std::sync::Once;
 use crate::icon::Icon;
 use crate::{QT, get_scaling_factor};
 use windows::Win32::Foundation::{
-    ERROR_INVALID_WINDOW_HANDLE, FALSE, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, TRUE, WPARAM,
+    COLORREF, ERROR_INVALID_WINDOW_HANDLE, FALSE, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT,
+    TRUE, WPARAM,
 };
 use windows::Win32::Graphics::Direct2D::Common::{D2D_RECT_F, D2D_SIZE_F, D2D_SIZE_U};
 use windows::Win32::Graphics::Direct2D::{
@@ -88,6 +89,7 @@ pub struct Context {
     secondary_text_brush: ID2D1SolidColorBrush,
     sub_menu_indicator_svg: ID2D1SvgDocument,
     sub_menu_indicator_focused_svg: ID2D1SvgDocument,
+    fade_elapsed_ms: Cell<u32>,
 }
 
 fn convert_menu_info_list_to_menu(menu_info_list: Vec<MenuInfo>) -> Menu {
@@ -189,7 +191,7 @@ fn init_popup(
     });
     let window = unsafe {
         CreateWindowExW(
-            WINDOW_EX_STYLE::default(),
+            WS_EX_LAYERED,
             CLASS_NAME,
             w!(""),
             WS_POPUP,
@@ -539,6 +541,30 @@ fn menu_key_escape(mt: &mut Tracker) -> Result<bool> {
 const MENU_MARGIN: i32 = 4;
 const MENU_BORDER_WIDTH: i32 = 1;
 const MENU_LIST_GAP: i32 = 2;
+
+// Fade-in animation: alpha eases 0 -> 255 over tokens.duration_normal using the
+// tokens.curve_decelerate_mid easing curve. (A bare fade wants a shorter duration
+// than Fluent's slower slide+fade surface motion.)
+const FADE_TIMER_ID: usize = 1;
+const FADE_INTERVAL_MS: u32 = 8;
+
+/// CSS cubic-bezier easing: time fraction `t` in [0,1] -> eased value, with
+/// control points (c[0],c[1]) and (c[2],c[3]) and implied (0,0)/(1,1).
+fn cubic_bezier(t: f64, c: [f64; 4]) -> f64 {
+    let axis = |s: f64, a: f64, b: f64| {
+        3.0 * (1.0 - s).powi(2) * s * a + 3.0 * (1.0 - s) * s * s * b + s.powi(3)
+    };
+    let (mut lo, mut hi, mut s) = (0.0, 1.0, t);
+    for _ in 0..20 {
+        s = 0.5 * (lo + hi);
+        if axis(s, c[0], c[2]) < t {
+            lo = s;
+        } else {
+            hi = s;
+        }
+    }
+    axis(s, c[1], c[3])
+}
 
 #[derive(PartialEq)]
 enum ExecutionResult {
@@ -1029,6 +1055,9 @@ fn show_popup(
     let scaled_height = (height as f32 * scaling_factor) as i32;
     let corner_diameter = (qt.theme.tokens.border_radius_medium * 2f32 * scaling_factor) as i32;
     unsafe {
+        // Start fully transparent (before it's shown, so there's no flash),
+        // then fade in via WM_TIMER.
+        _ = SetLayeredWindowAttributes(window, COLORREF(0), 0, LWA_ALPHA);
         SetWindowPos(
             window,
             Some(HWND_TOPMOST),
@@ -1047,6 +1076,7 @@ fn show_popup(
             corner_diameter,
         );
         SetWindowRgn(window, Some(region), false);
+        SetTimer(Some(window), FADE_TIMER_ID, FADE_INTERVAL_MS, None);
     }
     Ok(())
 }
@@ -1324,6 +1354,7 @@ fn on_create(window: HWND, params: CreateParams, x: i32, y: i32) -> Result<Conte
             secondary_text_brush,
             sub_menu_indicator_svg,
             sub_menu_indicator_focused_svg,
+            fade_elapsed_ms: Cell::new(0),
         })
     }
 }
@@ -1349,6 +1380,22 @@ extern "system" fn window_proc(
             }
         },
         WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),
+        WM_TIMER if w_param.0 == FADE_TIMER_ID => unsafe {
+            let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
+            let context = &*raw;
+            let tokens = &context.qt.theme.tokens;
+            let duration_ms = (tokens.duration_normal * 1000.0) as u32;
+            let elapsed = (context.fade_elapsed_ms.get() + FADE_INTERVAL_MS).min(duration_ms);
+            context.fade_elapsed_ms.set(elapsed);
+            let t = elapsed as f64 / duration_ms as f64;
+            let eased = cubic_bezier(t, tokens.curve_decelerate_mid);
+            let alpha = (eased * 255.0).round() as u8;
+            _ = SetLayeredWindowAttributes(window, COLORREF(0), alpha, LWA_ALPHA);
+            if elapsed >= duration_ms {
+                _ = KillTimer(Some(window), FADE_TIMER_ID);
+            }
+            LRESULT(0)
+        },
         WM_PAINT => unsafe {
             let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
             let context = &*raw;
