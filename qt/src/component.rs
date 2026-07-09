@@ -10,5 +10,6 @@ pub mod radio;
 pub mod slider;
 pub mod spinner;
 pub mod switch;
+pub mod tab_list;
 pub mod text;
 pub mod tooltip;

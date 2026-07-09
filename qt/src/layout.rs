@@ -26,6 +26,9 @@ enum Orientation {
 
 enum Item {
     Control(HWND),
+    /// Like `Control`, but resized to fill the cross axis (full container width in a
+    /// vertical stack). Used for a header-style control (e.g. a Fill-width TabList).
+    FillControl(HWND),
     Stack(Stack),
     Spacer(f32),
     Spring,
@@ -85,6 +88,15 @@ impl Stack {
         self
     }
 
+    /// Add a control that fills the cross axis (its full container width in a
+    /// vertical stack), re-stretched on every arrange so it tracks window resize.
+    /// Its main-axis size (height in a vertical stack) stays whatever the control
+    /// reports. Use for a header-style control such as a Fill-width TabList.
+    pub fn add_fill(mut self, control: HWND) -> Self {
+        self.items.push(Item::FillControl(control));
+        self
+    }
+
     pub fn add_stack(mut self, stack: Stack) -> Self {
         self.items.push(Item::Stack(stack));
         self
@@ -98,6 +110,24 @@ impl Stack {
     pub fn spring(mut self) -> Self {
         self.items.push(Item::Spring);
         self
+    }
+
+    /// Collect every leaf control HWND in this stack (recursing into nested
+    /// stacks) — used to show/hide a whole page's controls at once.
+    pub fn controls(&self) -> Vec<HWND> {
+        let mut out = Vec::new();
+        self.collect_controls(&mut out);
+        out
+    }
+
+    fn collect_controls(&self, out: &mut Vec<HWND>) {
+        for item in &self.items {
+            match item {
+                Item::Control(hwnd) | Item::FillControl(hwnd) => out.push(*hwnd),
+                Item::Stack(s) => s.collect_controls(out),
+                Item::Spacer(_) | Item::Spring => {}
+            }
+        }
     }
 
     /// Natural (width, height) in px, ignoring available space (springs count as 0).
@@ -124,7 +154,7 @@ impl Stack {
     /// Project an item's natural size onto this stack's (main, cross) axes.
     fn item_main_cross(&self, item: &Item, scale: f32) -> (i32, i32) {
         let (w, h) = match item {
-            Item::Control(hwnd) => window_size(*hwnd),
+            Item::Control(hwnd) | Item::FillControl(hwnd) => window_size(*hwnd),
             Item::Stack(s) => s.measure(scale),
             Item::Spacer(dips) => {
                 let s = (dips * scale) as i32;
@@ -216,6 +246,29 @@ impl Stack {
                             0,
                             0,
                             SWP_NOSIZE | SWP_NOZORDER | SWP_NOCOPYBITS,
+                        )?;
+                    }
+                }
+                Item::FillControl(hwnd) => {
+                    // Fill the cross axis (full width in a vertical stack); keep the
+                    // control's own main-axis size. Positioned at the cross start.
+                    let (x, y) = match self.orientation {
+                        Orientation::Vertical => (inner.left, cursor),
+                        Orientation::Horizontal => (cursor, inner.top),
+                    };
+                    let (w, h) = match self.orientation {
+                        Orientation::Vertical => (inner_cross, this_main),
+                        Orientation::Horizontal => (this_main, inner_cross),
+                    };
+                    unsafe {
+                        SetWindowPos(
+                            *hwnd,
+                            None,
+                            x,
+                            y,
+                            w,
+                            h,
+                            SWP_NOZORDER | SWP_NOCOPYBITS,
                         )?;
                     }
                 }

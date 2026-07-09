@@ -6,8 +6,8 @@ use windows::Win32::Foundation::{
 };
 use windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F;
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, CreateSolidBrush, EndPaint, FillRect, PAINTSTRUCT, PtInRect, RDW_ALLCHILDREN,
-    RDW_INVALIDATE, RDW_UPDATENOW, RedrawWindow,
+    BeginPaint, CreateSolidBrush, DeleteObject, EndPaint, FillRect, InvalidateRect, PAINTSTRUCT,
+    PtInRect, RDW_ALLCHILDREN, RDW_INVALIDATE, RDW_UPDATENOW, RedrawWindow,
 };
 use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -20,16 +20,62 @@ use quelthalas::component::dialog::DialogResult;
 use quelthalas::component::menu::MenuInfo;
 use quelthalas::component::{
     button, checkbox, dialog, dropdown, input, link, menu, progress_bar, radio, slider, spinner,
-    switch, text,
+    switch, tab_list, text,
 };
 use quelthalas::icon::Icon;
 use quelthalas::layout::Stack;
 use quelthalas::{MouseEvent, QT};
 
+/// One tab's page: a laid-out Stack + the flat list of its controls (so we can
+/// show/hide the whole page at once). `controls` excludes the always-visible
+/// chrome (tab strip + Close), which live in every page's Stack.
+struct Page {
+    stack: Stack,
+    controls: Vec<HWND>,
+}
+
 struct AppState {
     qt: QT,
-    layout: Stack,
+    pages: Vec<Page>,
+    active: usize,
     menu_target: HWND,
+    // The tab strip child — WM_PAINT reads its height to split the window into the
+    // chrome band (behind/around the strip) and the CANVAS page below it.
+    tab_list: HWND,
+}
+
+// The TabList's on_change posts this to the app window (like SysTabControl32 →
+// TCN_SELCHANGE); the app owns the page swap.
+const WM_APP_TAB: u32 = WM_APP + 1;
+
+/// Re-arrange the tab strip + the active page. The tab strip and Close button are
+/// members of every page's Stack, so arranging the active page's Stack lays out
+/// everything currently visible.
+unsafe fn arrange_all(state: &AppState, window: HWND) {
+    unsafe {
+        let mut rc = RECT::default();
+        if GetClientRect(window, &mut rc).is_ok() {
+            _ = state.pages[state.active].stack.arrange(window, rc);
+        }
+    }
+}
+
+/// Switch to page `idx`: hide the other pages' controls, show this one's, arrange.
+unsafe fn show_page(state: &mut AppState, window: HWND, idx: usize) {
+    unsafe {
+        for (i, page) in state.pages.iter().enumerate() {
+            let cmd = if i == idx { SW_SHOW } else { SW_HIDE };
+            for &hwnd in &page.controls {
+                _ = ShowWindow(hwnd, cmd);
+            }
+        }
+        state.active = idx;
+        arrange_all(state, window);
+        // Just invalidate the parent to repaint the canvas gaps left by the hidden
+        // page. WS_CLIPCHILDREN keeps that fill off the children, and each shown
+        // child repaints itself — no synchronous full-tree redraw (which flashed).
+        _ = InvalidateRect(Some(window), None, true);
+    }
 }
 
 // Window canvas background (#fafafa). Labels use it so they blend seamlessly.
@@ -37,6 +83,17 @@ const CANVAS: D2D1_COLOR_F = D2D1_COLOR_F {
     r: 250.0 / 255.0,
     g: 250.0 / 255.0,
     b: 250.0 / 255.0,
+    a: 1.0,
+};
+
+// Conventional Win32 app chrome background (#f0f0f0, i.e. COLOR_BTNFACE in the
+// classic/light scheme). Used for the window fill and the TabList strip so the
+// strip blends into the window and the (lighter) selected card reads as the
+// content surface lifting out of the chrome.
+const WIN32_GRAY: D2D1_COLOR_F = D2D1_COLOR_F {
+    r: 240.0 / 255.0,
+    g: 240.0 / 255.0,
+    b: 240.0 / 255.0,
     a: 1.0,
 };
 
@@ -68,7 +125,9 @@ fn main() -> Result<()> {
             WINDOW_EX_STYLE::default(),
             class_name,
             w!("Use Quel'Thalas"),
-            WS_OVERLAPPEDWINDOW,
+            // WS_CLIPCHILDREN so the parent never paints under its child controls
+            // (kills the tab-switch flash — the #fafafa fill can't touch children).
+            WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
             CW_USEDEFAULT,
             CW_USEDEFAULT,
             CW_USEDEFAULT,
@@ -571,9 +630,63 @@ extern "system" fn window_process(
                 let p_title2 = preset!(create_title2, w!("Title2"));
                 let p_title1 = preset!(create_title1, w!("Title1"));
 
-                // Two columns: components on the left, Text presets on the right;
-                // a spring pins the Close footer to the bottom-right.
-                let left_column = Stack::vertical()
+                // A tab strip organizes the controls into pages. Each page is a
+                // vertical Stack of sections; switching tabs hides the other pages'
+                // controls (the TabList reports the index; the app owns the swap).
+                let tabs = qt
+                    .create_tab_list(
+                        window,
+                        0,
+                        0,
+                        tab_list::Props {
+                            tabs: vec![
+                                w!("Basic Input"),
+                                w!("Text"),
+                                w!("Status & info"),
+                                w!("Other"),
+                            ],
+                            selected_index: 0,
+                            mouse_event: tab_list::MouseEvent {
+                                on_change: Box::new(move |_, idx| {
+                                    _ = PostMessageW(
+                                        Some(window),
+                                        WM_APP_TAB,
+                                        WPARAM(idx),
+                                        LPARAM(0),
+                                    );
+                                }),
+                            },
+                            background: Some(WIN32_GRAY),
+                            // Selected card matches the page canvas so it reads as
+                            // connected to the content below.
+                            selected_background: Some(CANVAS),
+                            // Header: stretch to the window width so the bottom line
+                            // spans edge to edge.
+                            width_behavior: tab_list::WidthBehavior::Fill,
+                        },
+                    )
+                    .unwrap_or_default();
+
+                // A standalone demo TabList for the "Other" page (no-op handler —
+                // it just showcases the control; it doesn't drive the app's pages).
+                let tablist_label = section(w!("Tab list"));
+                let demo_tabs = qt
+                    .create_tab_list(
+                        window,
+                        0,
+                        0,
+                        tab_list::Props {
+                            tabs: vec![w!("First"), w!("Second"), w!("Third")],
+                            selected_index: 0,
+                            background: Some(CANVAS),
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap_or_default();
+
+                // --- Page 0: Basic Input ---
+                // button, checkbox, dropdown, link, radio, slider, switch
+                let basic_input = Stack::vertical()
                     .gap(24.0)
                     .add_stack(
                         Stack::vertical()
@@ -595,6 +708,28 @@ extern "system" fn window_process(
                                     .add(large_icon),
                             ),
                     )
+                    .add_stack(Stack::vertical().gap(8.0).add(checkbox_label).add(checkbox))
+                    .add_stack(
+                        Stack::vertical()
+                            .gap(8.0)
+                            .add(radio_label)
+                            .add_stack(
+                                Stack::horizontal()
+                                    .add(radio_apple)
+                                    .add(radio_pear)
+                                    .add(radio_banana)
+                                    .add(radio_orange),
+                            ),
+                    )
+                    .add_stack(Stack::vertical().gap(8.0).add(dropdown_label).add(dropdown))
+                    .add_stack(Stack::vertical().gap(8.0).add(slider_label).add(slider))
+                    .add_stack(Stack::vertical().gap(8.0).add(switch_label).add(switch))
+                    .add_stack(Stack::vertical().gap(8.0).add(link_label).add(link));
+
+                // --- Page 1: Text ---
+                // input, text
+                let text_page = Stack::vertical()
+                    .gap(24.0)
                     .add_stack(
                         Stack::vertical()
                             .gap(8.0)
@@ -611,48 +746,6 @@ extern "system" fn window_process(
                     .add_stack(
                         Stack::vertical()
                             .gap(8.0)
-                            .add(progress_label)
-                            .add(progress_medium)
-                            .add(progress_large),
-                    )
-                    .add_stack(Stack::vertical().gap(8.0).add(dialog_label).add(open_dialog))
-                    .add_stack(Stack::vertical().gap(8.0).add(menu_label).add(menu_hint))
-                    .add_stack(
-                        Stack::vertical()
-                            .gap(8.0)
-                            .add(checkbox_label)
-                            .add(checkbox),
-                    )
-                    .add_stack(
-                        Stack::vertical()
-                            .gap(8.0)
-                            .add(slider_label)
-                            .add(slider),
-                    )
-                    .add_stack(
-                        Stack::vertical()
-                            .gap(8.0)
-                            .add(spinner_label)
-                            .add(spinner),
-                    )
-                    .add_stack(
-                        Stack::vertical()
-                            .gap(8.0)
-                            .add(link_label)
-                            .add(link),
-                    )
-                    .add_stack(
-                        Stack::vertical()
-                            .gap(8.0)
-                            .add(tooltip_label)
-                            .add(tooltip_button),
-                    );
-
-                let right_column = Stack::vertical()
-                    .gap(24.0)
-                    .add_stack(
-                        Stack::vertical()
-                            .gap(8.0)
                             .add(text_label)
                             .add(text_intro)
                             .add(p_caption1)
@@ -665,76 +758,93 @@ extern "system" fn window_process(
                             .add(p_title3)
                             .add(p_title2)
                             .add(p_title1),
-                    )
-                    .add_stack(
-                        Stack::vertical()
-                            .gap(8.0)
-                            .add(radio_label)
-                            // Horizontal group. Each radio already carries its own
-                            // `pad()` on both sides, so no extra gap is needed.
-                            .add_stack(
-                                Stack::horizontal()
-                                    .add(radio_apple)
-                                    .add(radio_pear)
-                                    .add(radio_banana)
-                                    .add(radio_orange),
-                            ),
-                    )
-                    .add_stack(
-                        Stack::vertical()
-                            .gap(8.0)
-                            .add(switch_label)
-                            .add(switch),
-                    )
-                    .add_stack(
-                        Stack::vertical()
-                            .gap(8.0)
-                            .add(dropdown_label)
-                            .add(dropdown),
                     );
 
-                let layout = Stack::vertical()
-                    .padding(24.0)
+                // --- Page 2: Status & info ---
+                // progress_bar, spinner, tooltip
+                let status_info = Stack::vertical()
                     .gap(24.0)
                     .add_stack(
-                        Stack::horizontal()
-                            .gap(48.0)
-                            .add_stack(left_column)
-                            .add_stack(right_column),
+                        Stack::vertical()
+                            .gap(8.0)
+                            .add(progress_label)
+                            .add(progress_medium)
+                            .add(progress_large),
                     )
-                    .spring()
-                    .add_stack(Stack::horizontal().spring().add(close));
+                    .add_stack(Stack::vertical().gap(8.0).add(spinner_label).add(spinner))
+                    .add_stack(
+                        Stack::vertical()
+                            .gap(8.0)
+                            .add(tooltip_label)
+                            .add(tooltip_button),
+                    );
 
-                let mut rc = RECT::default();
-                if GetClientRect(window, &mut rc).is_ok() {
-                    _ = layout.arrange(window, rc);
-                }
+                // --- Page 3: Other ---
+                // menu, dialog, tab_list
+                let other = Stack::vertical()
+                    .gap(24.0)
+                    .add_stack(Stack::vertical().gap(8.0).add(menu_label).add(menu_hint))
+                    .add_stack(Stack::vertical().gap(8.0).add(dialog_label).add(open_dialog))
+                    .add_stack(Stack::vertical().gap(8.0).add(tablist_label).add(demo_tabs));
 
-                let state = Box::new(AppState {
+                // Each page's own controls (for show/hide) — the strip + Close are
+                // always visible, so they're not in these lists.
+                let page_contents = [basic_input, text_page, status_info, other];
+                let pages: Vec<Page> = page_contents
+                    .into_iter()
+                    .map(|content| {
+                        let controls = content.controls();
+                        // Master Stack per page (arranged against the full window):
+                        // flush strip, then padded content, then a spring that pushes
+                        // the Close footer to the window's bottom-right. The spring
+                        // must live here (not inside the padded inner stack) so it has
+                        // the window's leftover height to expand into.
+                        let stack = Stack::vertical()
+                            .add_fill(tabs)
+                            .add_stack(
+                                Stack::vertical()
+                                    .padding(24.0)
+                                    .gap(24.0)
+                                    .add_stack(content),
+                            )
+                            .spring()
+                            .add_stack(
+                                Stack::horizontal().padding(24.0).spring().add(close),
+                            );
+                        Page { stack, controls }
+                    })
+                    .collect();
+
+                let mut state = Box::new(AppState {
                     qt,
-                    layout,
+                    pages,
+                    active: 0,
                     menu_target: menu_hint,
+                    tab_list: tabs,
                 });
+                // Show page 0, hide the rest, and do the initial arrange.
+                show_page(&mut state, window, 0);
                 SetWindowLongPtrW(window, GWLP_USERDATA, Box::into_raw(state) as _);
                 DefWindowProcW(window, message, w_param, l_param)
+            }
+            WM_APP_TAB => {
+                let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut AppState;
+                if !raw.is_null() {
+                    show_page(&mut *raw, window, w_param.0);
+                }
+                LRESULT(0)
             }
             WM_SIZE => {
                 let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *const AppState;
                 if !raw.is_null() {
-                    let mut rc = RECT::default();
-                    if GetClientRect(window, &mut rc).is_ok() {
-                        _ = (*raw).layout.arrange(window, rc);
-                    }
+                    arrange_all(&*raw, window);
                 }
                 LRESULT(0)
             }
             WM_DISPLAYCHANGE => {
                 let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *const AppState;
                 if !raw.is_null() {
-                    let mut rc = RECT::default();
-                    if GetClientRect(window, &mut rc).is_ok() {
-                        _ = (*raw).layout.arrange(window, rc);
-                    }
+                    arrange_all(&*raw, window);
                 }
                 _ = RedrawWindow(
                     Some(window),
@@ -773,7 +883,41 @@ extern "system" fn window_process(
             WM_PAINT => {
                 let mut ps = PAINTSTRUCT::default();
                 let hdc = BeginPaint(window, &mut ps);
-                FillRect(hdc, &ps.rcPaint, CreateSolidBrush(COLORREF(0xfafafa)));
+                // Two-tone: a chrome band (#f0f0f0) behind/around the tab strip, and
+                // the CANVAS page (#fafafa) below it — the selected tab's CANVAS card
+                // flares down into the matching page, so it reads as one surface.
+                let mut client = RECT::default();
+                _ = GetClientRect(window, &mut client);
+                let band = {
+                    let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *const AppState;
+                    if raw.is_null() {
+                        0
+                    } else {
+                        let mut tr = RECT::default();
+                        _ = GetClientRect((*raw).tab_list, &mut tr);
+                        tr.bottom
+                    }
+                };
+                let chrome = CreateSolidBrush(COLORREF(0xf0f0f0));
+                let page = CreateSolidBrush(COLORREF(0xfafafa));
+                FillRect(
+                    hdc,
+                    &RECT {
+                        bottom: band,
+                        ..client
+                    },
+                    chrome,
+                );
+                FillRect(
+                    hdc,
+                    &RECT {
+                        top: band,
+                        ..client
+                    },
+                    page,
+                );
+                _ = DeleteObject(chrome.into());
+                _ = DeleteObject(page.into());
                 _ = EndPaint(window, &ps);
                 LRESULT(0)
             }
