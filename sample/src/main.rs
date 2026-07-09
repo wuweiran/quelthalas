@@ -215,6 +215,19 @@ extern "system" fn window_process(
                         },
                     )
                     .unwrap_or_default();
+                let input_filled_darker = qt
+                    .create_input(
+                        window,
+                        0,
+                        0,
+                        input::Props {
+                            width: 280,
+                            appearance: input::Appearance::FilledDarker,
+                            default_value: Some(w!("Filled darker")),
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap_or_default();
                 let input_password = qt
                     .create_input(
                         window,
@@ -511,7 +524,8 @@ extern "system" fn window_process(
                                 Stack::horizontal()
                                     .gap(12.0)
                                     .add(input_default)
-                                    .add(input_filled),
+                                    .add(input_filled)
+                                    .add(input_filled_darker),
                             )
                             .add(input_password),
                     )

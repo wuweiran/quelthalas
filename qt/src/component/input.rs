@@ -1464,7 +1464,11 @@ fn sys_color_to_d2d(index: SYS_COLOR_INDEX) -> D2D1_COLOR_F {
 /// Content pass: text, selection, placeholder. Chrome is drawn by the caller.
 fn paint(window: HWND, context: &mut Context) -> Result<()> {
     // Owned snapshots so the `tokens` borrow doesn't outlive the mutable calls below.
-    let background_color = context.state.qt.theme.tokens.color_neutral_background1;
+    // FilledDarker uses background3; Outline and FilledLighter both use background1.
+    let background_color = match context.state.appearance {
+        Appearance::FilledDarker => context.state.qt.theme.tokens.color_neutral_background3,
+        _ => context.state.qt.theme.tokens.color_neutral_background1,
+    };
     let foreground_color = context.state.qt.theme.tokens.color_neutral_foreground1;
     let rt = context.render_target.clone();
     unsafe {
@@ -1661,7 +1665,10 @@ fn paint_content_and_chrome(window: HWND, context: &mut Context) -> Result<()> {
     let border_bottom_width = 2.0 * scaling_factor;
 
     unsafe {
-        // Filled variants skip the full border, keeping only the bottom accent.
+        // Outline draws the full rounded border; filled variants have a
+        // transparent border on every side (Fluent's `filled` sets
+        // borderColor: colorTransparentStroke), so they draw neither the border
+        // nor the resting bottom accent — only the brand focus underline below.
         if let Appearance::Outline = context.state.appearance {
             // Fluent Input outline :hover → colorNeutralStroke1Hover (focus wins).
             let border_color = if context.is_focused {
@@ -1683,19 +1690,23 @@ fn paint_content_and_chrome(window: HWND, context: &mut Context) -> Result<()> {
                 radiusY: radius,
             };
             rt.DrawRoundedRectangle(&rounded, &border_brush, stroke, &context.state.qt.stroke_style);
-        }
 
-        // Bottom accent; Fluent :hover → colorNeutralStrokeAccessibleHover (the
-        // focus brand underline is drawn over it below).
-        let accent_color = if context.is_hovered && !context.is_focused {
-            &tokens.color_neutral_stroke_accessible_hover
-        } else {
-            &tokens.color_neutral_stroke_accessible
-        };
-        let accent_brush = rt.CreateSolidColorBrush(accent_color, None)?;
-        let accent_geometry =
-            bottom_accent_geometry(&context.state.qt.d2d_factory, width, radius, height - stroke * 0.5)?;
-        rt.DrawGeometry(&accent_geometry, &accent_brush, stroke, &context.state.qt.stroke_style);
+            // Bottom accent; Fluent :hover → colorNeutralStrokeAccessibleHover (the
+            // focus brand underline is drawn over it below).
+            let accent_color = if context.is_hovered && !context.is_focused {
+                &tokens.color_neutral_stroke_accessible_hover
+            } else {
+                &tokens.color_neutral_stroke_accessible
+            };
+            let accent_brush = rt.CreateSolidColorBrush(accent_color, None)?;
+            let accent_geometry = bottom_accent_geometry(
+                &context.state.qt.d2d_factory,
+                width,
+                radius,
+                height - stroke * 0.5,
+            )?;
+            rt.DrawGeometry(&accent_geometry, &accent_brush, stroke, &context.state.qt.stroke_style);
+        }
 
         // Brand underline grows from the centre on focus, over the resting line.
         if context.is_focused {
