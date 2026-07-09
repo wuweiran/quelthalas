@@ -354,7 +354,7 @@ fn paint(window: HWND, context: &Context) -> Result<()> {
         let radius = track_h / 2.0;
 
         // Endpoint colours by hover/press. Unchecked → neutral stroke; checked →
-        // compound-brand fill + white thumb. Cross-faded by `p`.
+        // compound-brand fill + inverted thumb. Cross-faded by `p`.
         let unchecked_stroke = if context.pressed {
             &tokens.color_neutral_stroke_accessible_pressed
         } else if context.hovered {
@@ -369,7 +369,7 @@ fn paint(window: HWND, context: &Context) -> Result<()> {
         } else {
             &tokens.color_compound_brand_background
         };
-        let checked_thumb = &tokens.color_neutral_foreground_on_brand;
+        let checked_thumb = &tokens.color_neutral_foreground_inverted;
 
         let track_rect = D2D1_ROUNDED_RECT {
             rect: D2D_RECT_F {

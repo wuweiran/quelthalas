@@ -2,7 +2,7 @@
 use std::mem::size_of;
 
 use windows::Win32::Foundation::{
-    COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM,
+    COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, TRUE, WPARAM,
 };
 use windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F;
 use windows::Win32::Graphics::Gdi::{
@@ -25,7 +25,7 @@ use quelthalas::component::{
 };
 use quelthalas::icon::Icon;
 use quelthalas::layout::Stack;
-use quelthalas::{MouseEvent, QT};
+use quelthalas::{Appearance, MouseEvent, QT};
 
 /// One tab's page: a laid-out Stack + the flat list of its controls (so we can
 /// show/hide the whole page at once). `controls` excludes the always-visible
@@ -46,6 +46,10 @@ struct AppState {
     // The menu bar child (above the tab strip). WM_PAINT reads its geometry too so
     // the chrome band covers it; Alt/F10 forwards here to enter menu mode.
     menu_bar: HWND,
+    // The active theme + its sample-side surface palette. WM_PAINT reads the
+    // palette; the theme toggle rebuilds everything with the other appearance.
+    appearance: Appearance,
+    palette: Palette,
 }
 
 // The TabList's on_change posts this to the app window (like SysTabControl32 →
@@ -89,6 +93,55 @@ unsafe fn show_page(state: &mut AppState, window: HWND, idx: usize) {
     }
 }
 
+/// EnumChildWindows callback: collect each child HWND into the `Vec<HWND>` passed
+/// as `lparam`. (Collect first, then destroy — mutating the tree mid-enumeration is
+/// unsafe.)
+unsafe extern "system" fn collect_child(hwnd: HWND, lparam: LPARAM) -> BOOL {
+    unsafe {
+        let list = &mut *(lparam.0 as *mut Vec<HWND>);
+        list.push(hwnd);
+    }
+    TRUE
+}
+
+/// Rebuild the whole UI under `window` with `target` theme, preserving the active
+/// tab. Every control clones the theme at creation, so a theme change means
+/// destroy-all + recreate (see the plan): we can't re-theme frozen controls.
+unsafe fn retheme(window: HWND, target: Appearance) {
+    unsafe {
+        let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut AppState;
+        if raw.is_null() || (*raw).appearance == target {
+            return;
+        }
+        let active = (*raw).active;
+
+        // 1. Destroy every existing child control (collect then destroy).
+        let mut children: Vec<HWND> = Vec::new();
+        _ = EnumChildWindows(
+            Some(window),
+            Some(collect_child),
+            LPARAM(&mut children as *mut _ as isize),
+        );
+        for &child in &children {
+            _ = DestroyWindow(child);
+        }
+
+        // 2. Reclaim + drop the old AppState (releases the old QT + closures).
+        drop(Box::from_raw(raw));
+        SetWindowLongPtrW(window, GWLP_USERDATA, 0);
+
+        // 3. Rebuild with a fresh QT carrying the new theme.
+        let Ok(qt) = QT::new_with(target) else {
+            return;
+        };
+        let mut state = Box::new(build_ui(qt, window, target, active));
+        show_page(&mut state, window, active);
+        SetWindowLongPtrW(window, GWLP_USERDATA, Box::into_raw(state) as _);
+        // 4. Repaint the window chrome (the two-tone band) in the new palette.
+        _ = InvalidateRect(Some(window), None, true);
+    }
+}
+
 // Window canvas background (#fafafa). Labels use it so they blend seamlessly.
 const CANVAS: D2D1_COLOR_F = D2D1_COLOR_F {
     r: 250.0 / 255.0,
@@ -116,63 +169,69 @@ const MENU_AREA: D2D1_COLOR_F = D2D1_COLOR_F {
     a: 1.0,
 };
 
-fn main() -> Result<()> {
-    unsafe {
-        let instance = HINSTANCE::from(GetModuleHandleW(None)?);
-        CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok()?;
-
-        //Register the window class
-        let class_name = w!("Sample windows class");
-        let wc = WNDCLASSEXW {
-            cbSize: size_of::<WNDCLASSEXW>() as u32,
-            style: Default::default(),
-            lpfnWndProc: Some(window_process),
-            lpszClassName: class_name,
-            ..Default::default()
-        };
-        RegisterClassExW(&wc);
-
-        let window = CreateWindowExW(
-            WINDOW_EX_STYLE::default(),
-            class_name,
-            w!("Use Quel'Thalas"),
-            // WS_CLIPCHILDREN so the parent never paints under its child controls
-            // (kills the tab-switch flash — the #fafafa fill can't touch children).
-            WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
-            CW_USEDEFAULT,
-            CW_USEDEFAULT,
-            CW_USEDEFAULT,
-            CW_USEDEFAULT,
-            None,
-            None,
-            Some(instance),
-            None,
-        )?;
-
-        let _ = ShowWindow(window, SW_SHOW);
-
-        let mut message = MSG::default();
-        while GetMessageW(&mut message, None, 0, 0).into() {
-            let _ = TranslateMessage(&message);
-            DispatchMessageW(&message);
-        }
-
-        Ok(())
+/// A `#rrggbb`-style opaque D2D color from one gray byte (r==g==b).
+const fn gray(v: u8) -> D2D1_COLOR_F {
+    D2D1_COLOR_F {
+        r: v as f32 / 255.0,
+        g: v as f32 / 255.0,
+        b: v as f32 / 255.0,
+        a: 1.0,
     }
 }
 
-extern "system" fn window_process(
-    window: HWND,
-    message: u32,
-    w_param: WPARAM,
-    l_param: LPARAM,
-) -> LRESULT {
+/// The sample's own chrome surfaces (distinct from the library's control theme).
+/// These feed every control's `background:` prop and the two-tone `WM_PAINT`, so
+/// they must flip with the theme to avoid light halos on a dark window.
+#[derive(Copy, Clone)]
+struct Palette {
+    /// Page/content background (behind controls) — the D2D `background:` value.
+    canvas: D2D1_COLOR_F,
+    /// Chrome band behind the menu bar + tab strip.
+    chrome: D2D1_COLOR_F,
+    /// Right-click target fill (so the area is visible).
+    menu_area: D2D1_COLOR_F,
+    /// GDI COLORREF (0x00BBGGRR) equivalents for the two-tone `WM_PAINT`.
+    chrome_ref: COLORREF,
+    page_ref: COLORREF,
+}
+
+impl Palette {
+    fn light() -> Self {
+        Palette {
+            canvas: CANVAS,
+            chrome: WIN32_GRAY,
+            menu_area: MENU_AREA,
+            chrome_ref: COLORREF(0xf0f0f0),
+            page_ref: COLORREF(0xfafafa),
+        }
+    }
+    // Dark: all sample surfaces flatten to #1f1f1f (the two-tone band and the
+    // right-click target lose their distinct fills in dark; the selected tab still
+    // reads via its border stroke).
+    fn dark() -> Self {
+        Palette {
+            canvas: gray(0x1f),
+            chrome: gray(0x1f),
+            menu_area: gray(0x1f),
+            chrome_ref: COLORREF(0x1f1f1f),
+            page_ref: COLORREF(0x1f1f1f),
+        }
+    }
+    fn for_appearance(appearance: Appearance) -> Self {
+        match appearance {
+            Appearance::WebLight => Palette::light(),
+            Appearance::WebDark => Palette::dark(),
+        }
+    }
+}
+
+/// Build every control + the page/stack layout for the given theme, returning a
+/// fresh `AppState`. Called at startup and again on a theme toggle (the whole UI
+/// is recreated because each control clones the theme at creation). `active` is
+/// the tab to select, so a toggle keeps the current page.
+fn build_ui(qt: QT, window: HWND, appearance: Appearance, active: usize) -> AppState {
+    let palette = Palette::for_appearance(appearance);
     unsafe {
-        match message {
-            WM_CREATE => {
-                let Ok(qt) = QT::new() else {
-                    return LRESULT(-1);
-                };
                 let icon = Icon::calendar_month_20_regular();
 
                 // Controls are created at (0,0); the Stack owns their positions.
@@ -388,7 +447,7 @@ extern "system" fn window_process(
                         0,
                         text::PresetProps {
                             text,
-                            background: Some(CANVAS),
+                            background: Some(palette.canvas),
                             ..Default::default()
                         },
                     )
@@ -408,7 +467,7 @@ extern "system" fn window_process(
                         0,
                         text::PresetProps {
                             text: w!("Right-click here for a context menu."),
-                            background: Some(MENU_AREA),
+                            background: Some(palette.menu_area),
                             ..Default::default()
                         },
                     )
@@ -423,7 +482,7 @@ extern "system" fn window_process(
                         checkbox::Props {
                             label: w!("Checked"),
                             checked: true,
-                            background: Some(CANVAS),
+                            background: Some(palette.canvas),
                             ..Default::default()
                         },
                     )
@@ -441,7 +500,7 @@ extern "system" fn window_process(
                             label: w!("Apple"),
                             group_start: true,
                             checked: true,
-                            background: Some(CANVAS),
+                            background: Some(palette.canvas),
                             ..Default::default()
                         },
                     )
@@ -453,7 +512,7 @@ extern "system" fn window_process(
                         0,
                         radio::Props {
                             label: w!("Pear"),
-                            background: Some(CANVAS),
+                            background: Some(palette.canvas),
                             ..Default::default()
                         },
                     )
@@ -465,7 +524,7 @@ extern "system" fn window_process(
                         0,
                         radio::Props {
                             label: w!("Banana"),
-                            background: Some(CANVAS),
+                            background: Some(palette.canvas),
                             ..Default::default()
                         },
                     )
@@ -477,7 +536,7 @@ extern "system" fn window_process(
                         0,
                         radio::Props {
                             label: w!("Orange"),
-                            background: Some(CANVAS),
+                            background: Some(palette.canvas),
                             ..Default::default()
                         },
                     )
@@ -492,7 +551,7 @@ extern "system" fn window_process(
                         0,
                         switch::Props {
                             label: w!("This is a switch"),
-                            background: Some(CANVAS),
+                            background: Some(palette.canvas),
                             ..Default::default()
                         },
                     )
@@ -520,7 +579,7 @@ extern "system" fn window_process(
                                 dropdown::Item::new(w!("Snake")),
                             ],
                             placeholder: w!("Select an animal"),
-                            background: Some(CANVAS),
+                            background: Some(palette.canvas),
                             ..Default::default()
                         },
                     )
@@ -538,7 +597,7 @@ extern "system" fn window_process(
                             max: 100.0,
                             value: 40.0,
                             width: 200,
-                            background: Some(CANVAS),
+                            background: Some(palette.canvas),
                             ..Default::default()
                         },
                     )
@@ -553,7 +612,7 @@ extern "system" fn window_process(
                         0,
                         spinner::Props {
                             size: spinner::Size::Medium,
-                            background: Some(CANVAS),
+                            background: Some(palette.canvas),
                         },
                     )
                     .unwrap_or_default();
@@ -581,7 +640,7 @@ extern "system" fn window_process(
                                     );
                                 }),
                             },
-                            background: Some(CANVAS),
+                            background: Some(palette.canvas),
                         },
                     )
                     .unwrap_or_default();
@@ -610,7 +669,7 @@ extern "system" fn window_process(
                         0,
                         text::PresetProps {
                             text: w!("This is an example of the Text component's usage."),
-                            background: Some(CANVAS),
+                            background: Some(palette.canvas),
                             ..Default::default()
                         },
                     )
@@ -623,7 +682,7 @@ extern "system" fn window_process(
                             0,
                             text::PresetProps {
                                 text: $label,
-                                background: Some(CANVAS),
+                                background: Some(palette.canvas),
                                 ..Default::default()
                             },
                         )
@@ -667,16 +726,16 @@ extern "system" fn window_process(
                                         // follow-up; the selection is live today.)
                                         menu_list: vec![
                                             MenuInfo::MenuItemRadio {
-                                                text: w!("Light"),
+                                                text: w!("Web Light"),
                                                 command_id: CMD_VIEW_THEME_LIGHT,
-                                                checked: true,
+                                                checked: appearance == Appearance::WebLight,
                                                 disabled: false,
                                                 secondary_text: None,
                                             },
                                             MenuInfo::MenuItemRadio {
-                                                text: w!("Dark"),
+                                                text: w!("Web Dark"),
                                                 command_id: CMD_VIEW_THEME_DARK,
-                                                checked: false,
+                                                checked: appearance == Appearance::WebDark,
                                                 disabled: false,
                                                 secondary_text: None,
                                             },
@@ -693,7 +752,7 @@ extern "system" fn window_process(
                                     }],
                                 },
                             ],
-                            background: Some(WIN32_GRAY),
+                            background: Some(palette.chrome),
                         },
                     )
                     .unwrap_or_default();
@@ -710,7 +769,7 @@ extern "system" fn window_process(
                                 w!("Status & info"),
                                 w!("Other"),
                             ],
-                            selected_index: 0,
+                            selected_index: active,
                             mouse_event: tab_list::MouseEvent {
                                 on_change: Box::new(move |_, idx| {
                                     _ = PostMessageW(
@@ -721,10 +780,10 @@ extern "system" fn window_process(
                                     );
                                 }),
                             },
-                            background: Some(WIN32_GRAY),
+                            background: Some(palette.chrome),
                             // Selected card matches the page canvas so it reads as
                             // connected to the content below.
-                            selected_background: Some(CANVAS),
+                            selected_background: Some(palette.canvas),
                             // Header: stretch to the window width so the bottom line
                             // spans edge to edge.
                             width_behavior: tab_list::WidthBehavior::Fill,
@@ -743,7 +802,7 @@ extern "system" fn window_process(
                         tab_list::Props {
                             tabs: vec![w!("First"), w!("Second"), w!("Third")],
                             selected_index: 0,
-                            background: Some(CANVAS),
+                            background: Some(palette.canvas),
                             ..Default::default()
                         },
                     )
@@ -880,16 +939,78 @@ extern "system" fn window_process(
                         Page { stack, controls }
                     })
                     .collect();
+        AppState {
+            qt,
+            pages,
+            active,
+            menu_target: menu_hint,
+            tab_list: tabs,
+            menu_bar,
+            appearance,
+            palette,
+        }
+    }
+}
 
-                let mut state = Box::new(AppState {
-                    qt,
-                    pages,
-                    active: 0,
-                    menu_target: menu_hint,
-                    tab_list: tabs,
-                    menu_bar,
-                });
-                // Show page 0, hide the rest, and do the initial arrange.
+fn main() -> Result<()> {
+    unsafe {
+        let instance = HINSTANCE::from(GetModuleHandleW(None)?);
+        CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok()?;
+
+        //Register the window class
+        let class_name = w!("Sample windows class");
+        let wc = WNDCLASSEXW {
+            cbSize: size_of::<WNDCLASSEXW>() as u32,
+            style: Default::default(),
+            lpfnWndProc: Some(window_process),
+            lpszClassName: class_name,
+            ..Default::default()
+        };
+        RegisterClassExW(&wc);
+
+        let window = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            class_name,
+            w!("Use Quel'Thalas"),
+            // WS_CLIPCHILDREN so the parent never paints under its child controls
+            // (kills the tab-switch flash — the #fafafa fill can't touch children).
+            WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
+            CW_USEDEFAULT,
+            CW_USEDEFAULT,
+            CW_USEDEFAULT,
+            CW_USEDEFAULT,
+            None,
+            None,
+            Some(instance),
+            None,
+        )?;
+
+        let _ = ShowWindow(window, SW_SHOW);
+
+        let mut message = MSG::default();
+        while GetMessageW(&mut message, None, 0, 0).into() {
+            let _ = TranslateMessage(&message);
+            DispatchMessageW(&message);
+        }
+
+        Ok(())
+    }
+}
+
+extern "system" fn window_process(
+    window: HWND,
+    message: u32,
+    w_param: WPARAM,
+    l_param: LPARAM,
+) -> LRESULT {
+    unsafe {
+        match message {
+            WM_CREATE => {
+                let Ok(qt) = QT::new_with(Appearance::WebLight) else {
+                    return LRESULT(-1);
+                };
+                let mut state = Box::new(build_ui(qt, window, Appearance::WebLight, 0));
+                // Show the initial page, hide the rest, and do the initial arrange.
                 show_page(&mut state, window, 0);
                 SetWindowLongPtrW(window, GWLP_USERDATA, Box::into_raw(state) as _);
                 DefWindowProcW(window, message, w_param, l_param)
@@ -955,16 +1076,19 @@ extern "system" fn window_process(
                 // card flares down into the matching page, so it reads as one surface.
                 let mut client = RECT::default();
                 _ = GetClientRect(window, &mut client);
-                let band = {
+                // Pull the band edge + the palette's GDI refs from AppState (default
+                // to the light palette before it exists / if null).
+                let (band, chrome_ref, page_ref) = {
                     let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *const AppState;
                     if raw.is_null() {
-                        0
+                        let p = Palette::light();
+                        (0, p.chrome_ref, p.page_ref)
                     } else {
                         // The tab strip sits below the menu bar now, so its bottom in
                         // window-client coords (GetWindowRect → ScreenToClient) is the
                         // band edge and covers the menu bar above it automatically.
                         let mut wr = RECT::default();
-                        if GetWindowRect((*raw).tab_list, &mut wr).is_ok() {
+                        let band = if GetWindowRect((*raw).tab_list, &mut wr).is_ok() {
                             let mut bl = POINT {
                                 x: wr.left,
                                 y: wr.bottom,
@@ -973,11 +1097,12 @@ extern "system" fn window_process(
                             bl.y
                         } else {
                             0
-                        }
+                        };
+                        (band, (*raw).palette.chrome_ref, (*raw).palette.page_ref)
                     }
                 };
-                let chrome = CreateSolidBrush(COLORREF(0xf0f0f0));
-                let page = CreateSolidBrush(COLORREF(0xfafafa));
+                let chrome = CreateSolidBrush(chrome_ref);
+                let page = CreateSolidBrush(page_ref);
                 FillRect(
                     hdc,
                     &RECT {
@@ -1020,21 +1145,18 @@ extern "system" fn window_process(
             }
             WM_COMMAND => {
                 // Menu-bar picks arrive here (the menu posts WM_COMMAND with the
-                // item's command_id in wParam). About shows a dialog; the Theme radios
-                // move the checkmark to the picked option.
+                // item's command_id in wParam). Theme radios rebuild the whole UI in
+                // the picked theme; About shows a dialog.
                 let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *const AppState;
                 if raw.is_null() {
                     return DefWindowProcW(window, message, w_param, l_param);
                 }
-                let qt = &(*raw).qt;
                 let id = w_param.0 as u32;
                 match id {
-                    CMD_VIEW_THEME_LIGHT | CMD_VIEW_THEME_DARK => {
-                        // Move the radio selection; the checkmark follows next open.
-                        // (Actually recoloring the app is a follow-up.)
-                        qt.menu_bar_set_radio((*raw).menu_bar, id);
-                    }
+                    CMD_VIEW_THEME_LIGHT => retheme(window, Appearance::WebLight),
+                    CMD_VIEW_THEME_DARK => retheme(window, Appearance::WebDark),
                     CMD_HELP_ABOUT => {
+                        let qt = &(*raw).qt;
                         _ = qt.open_dialog(
                             window,
                             w!("About"),

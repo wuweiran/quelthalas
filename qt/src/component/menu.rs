@@ -9,11 +9,13 @@ use windows::Win32::Foundation::{
     COLORREF, ERROR_INVALID_WINDOW_HANDLE, FALSE, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT,
     TRUE, WPARAM,
 };
-use windows::Win32::Graphics::Direct2D::Common::{D2D_RECT_F, D2D_SIZE_F, D2D_SIZE_U};
+use windows::Win32::Graphics::Direct2D::Common::{
+    D2D_RECT_F, D2D_SIZE_F, D2D_SIZE_U, D2D1_COLOR_F,
+};
 use windows::Win32::Graphics::Direct2D::{
     D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_HWND_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_PROPERTIES,
-    D2D1_ROUNDED_RECT, ID2D1DeviceContext5, ID2D1HwndRenderTarget, ID2D1SolidColorBrush,
-    ID2D1SvgDocument,
+    D2D1_ROUNDED_RECT, D2D1_SVG_PAINT_TYPE_COLOR, ID2D1DeviceContext5, ID2D1HwndRenderTarget,
+    ID2D1SolidColorBrush, ID2D1SvgAttribute, ID2D1SvgDocument,
 };
 use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_MEASURING_MODE_NATURAL,
@@ -167,6 +169,17 @@ fn convert_menu_info_list_to_menu(menu_info_list: Vec<MenuInfo>) -> Menu {
 }
 
 const CLASS_NAME: PCWSTR = w!("QT_MENU");
+
+fn set_svg_color(svg: &ID2D1SvgDocument, color: &D2D1_COLOR_F) -> Result<()> {
+    unsafe {
+        let svg_paint = svg.CreatePaint(D2D1_SVG_PAINT_TYPE_COLOR, Some(color), w!(""))?;
+        svg.GetRoot()?
+            .GetFirstChild()?
+            .SetAttributeValue(w!("fill"), &svg_paint.cast::<ID2D1SvgAttribute>()?)?;
+    }
+    Ok(())
+}
+
 
 #[derive(Default)]
 pub struct Props {
@@ -1600,6 +1613,7 @@ fn on_create(window: HWND, params: CreateParams, x: i32, y: i32) -> Result<Conte
                     },
                 )?,
             };
+        _ = set_svg_color(&sub_menu_indicator_svg, &tokens.color_neutral_foreground2);
         let sub_menu_indicator_focused_icon = Icon::chevron_right_20_filled();
         let sub_menu_indicator_focused_svg =
             match SHCreateMemStream(Some(sub_menu_indicator_focused_icon.svg.as_bytes())) {
@@ -1618,9 +1632,11 @@ fn on_create(window: HWND, params: CreateParams, x: i32, y: i32) -> Result<Conte
                     },
                 )?,
             };
-        // Leading checkmark for checked radio items — same glyph the dropdown uses
-        // (checkmark_20_filled, drawn at CHECK_SIZE). Baked #212121 = foreground1,
-        // reads on both the white and hover-gray item backgrounds.
+        _ = set_svg_color(
+            &sub_menu_indicator_focused_svg,
+            &tokens.color_neutral_foreground2,
+        );
+        // Leading checkmark for checked radio items — same glyph the dropdown uses.
         let checkmark_icon = Icon::checkmark_20_filled();
         let checkmark_svg = match SHCreateMemStream(Some(checkmark_icon.svg.as_bytes())) {
             None => device_context5.CreateSvgDocument(
@@ -1638,6 +1654,7 @@ fn on_create(window: HWND, params: CreateParams, x: i32, y: i32) -> Result<Conte
                 },
             )?,
         };
+        _ = set_svg_color(&checkmark_svg, &tokens.color_neutral_foreground2);
         Ok(Context {
             qt: params.qt,
             menu: params.menu,

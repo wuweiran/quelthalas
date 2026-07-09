@@ -242,7 +242,7 @@ fn on_create(window: HWND, state: State) -> Result<Context> {
                 height: icon.size as f32,
             },
         )?;
-        _ = set_svg_color(&checkmark_svg, &tokens.color_neutral_foreground_on_brand);
+        _ = set_svg_color(&checkmark_svg, &tokens.color_neutral_foreground_inverted);
 
         Ok(Context {
             state,
