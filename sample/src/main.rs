@@ -18,7 +18,8 @@ use quelthalas::component::button::IconPosition;
 use quelthalas::component::dialog::DialogResult;
 use quelthalas::component::menu::MenuInfo;
 use quelthalas::component::{
-    button, checkbox, dialog, dropdown, input, menu, progress_bar, radio, slider, switch, text,
+    button, checkbox, dialog, dropdown, input, menu, progress_bar, radio, slider, spinner, switch,
+    text,
 };
 use quelthalas::icon::Icon;
 use quelthalas::layout::Stack;
@@ -472,6 +473,20 @@ extern "system" fn window_process(
                     )
                     .unwrap_or_default();
 
+                // Spinner: an indeterminate rotating busy indicator.
+                let spinner_label = section(w!("Spinner"));
+                let spinner = qt
+                    .create_spinner(
+                        window,
+                        0,
+                        0,
+                        spinner::Props {
+                            size: spinner::Size::Medium,
+                            background: Some(CANVAS),
+                        },
+                    )
+                    .unwrap_or_default();
+
                 // Text section: an intro line, then every preset labelled by name.
                 let text_intro = qt
                     .create_body1(
@@ -568,6 +583,12 @@ extern "system" fn window_process(
                             .gap(8.0)
                             .add(slider_label)
                             .add(slider),
+                    )
+                    .add_stack(
+                        Stack::vertical()
+                            .gap(8.0)
+                            .add(spinner_label)
+                            .add(spinner),
                     );
 
                 let right_column = Stack::vertical()
