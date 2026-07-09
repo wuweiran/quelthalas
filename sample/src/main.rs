@@ -11,6 +11,7 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::*;
 
@@ -495,18 +496,19 @@ extern "system" fn window_process(
                         0,
                         0,
                         link::Props {
-                            text: w!("Open the Fluent UI docs"),
+                            text: w!("This is a link"),
                             mouse_event: MouseEvent {
-                                on_click: Box::new({
-                                    let qt = qt.clone();
-                                    move |_| {
-                                        _ = qt.open_dialog(
-                                            window,
-                                            w!("Link clicked"),
-                                            w!("You activated the link."),
-                                            &dialog::ModelType::Alert,
-                                        );
-                                    }
+                                on_click: Box::new(move |_| {
+                                    // Open the URL in the default browser — the
+                                    // "open" verb, exactly what SysLink does.
+                                    ShellExecuteW(
+                                        Some(window),
+                                        w!("open"),
+                                        w!("https://www.bing.com"),
+                                        PCWSTR::null(),
+                                        PCWSTR::null(),
+                                        SW_SHOWNORMAL,
+                                    );
                                 }),
                             },
                             background: Some(CANVAS),
