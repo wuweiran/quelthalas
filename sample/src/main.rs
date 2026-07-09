@@ -6,7 +6,8 @@ use windows::Win32::Foundation::{
 };
 use windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F;
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, CreateSolidBrush, EndPaint, FillRect, PAINTSTRUCT, PtInRect,
+    BeginPaint, CreateSolidBrush, EndPaint, FillRect, PAINTSTRUCT, PtInRect, RDW_ALLCHILDREN,
+    RDW_INVALIDATE, RDW_UPDATENOW, RedrawWindow,
 };
 use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -623,6 +624,22 @@ extern "system" fn window_process(
                         _ = (*raw).layout.arrange(window, rc);
                     }
                 }
+                LRESULT(0)
+            }
+            WM_DISPLAYCHANGE => {
+                let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *const AppState;
+                if !raw.is_null() {
+                    let mut rc = RECT::default();
+                    if GetClientRect(window, &mut rc).is_ok() {
+                        _ = (*raw).layout.arrange(window, rc);
+                    }
+                }
+                _ = RedrawWindow(
+                    Some(window),
+                    None,
+                    None,
+                    RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_UPDATENOW,
+                );
                 LRESULT(0)
             }
             WM_CLOSE => {
