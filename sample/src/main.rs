@@ -516,6 +516,21 @@ extern "system" fn window_process(
                     )
                     .unwrap_or_default();
 
+                // Tooltip: an icon-only button that shows "Example tooltip" on hover
+                let tooltip_label = section(w!("Tooltip"));
+                let tooltip_button = qt
+                    .create_button(
+                        window,
+                        0,
+                        0,
+                        button::Props {
+                            icon: Some(Icon::slide_text_20_regular()),
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap_or_default();
+                _ = qt.add_tooltip(tooltip_button, w!("Example tooltip"));
+
                 // Text section: an intro line, then every preset labelled by name.
                 let text_intro = qt
                     .create_body1(
@@ -624,6 +639,12 @@ extern "system" fn window_process(
                             .gap(8.0)
                             .add(link_label)
                             .add(link),
+                    )
+                    .add_stack(
+                        Stack::vertical()
+                            .gap(8.0)
+                            .add(tooltip_label)
+                            .add(tooltip_button),
                     );
 
                 let right_column = Stack::vertical()

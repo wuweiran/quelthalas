@@ -11,3 +11,4 @@ pub mod slider;
 pub mod spinner;
 pub mod switch;
 pub mod text;
+pub mod tooltip;
