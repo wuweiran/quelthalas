@@ -46,14 +46,15 @@ use windows::Win32::UI::Animation::{
     UIAnimationManager2, UIAnimationTimer,
 };
 use windows::Win32::UI::Controls::{SetScrollInfo, WORD_BREAK_ACTION};
-use windows::Win32::UI::Controls::{WB_ISDELIMITER, WB_LEFT, WB_RIGHT};
+use windows::Win32::UI::Controls::{WB_ISDELIMITER, WB_LEFT, WB_RIGHT, WM_MOUSELEAVE};
 use windows::Win32::UI::Input::Ime::{
     CFS_RECT, COMPOSITIONFORM, IMECHARPOSITION, IMR_QUERYCHARPOSITION, ImmGetContext,
     ImmReleaseContext, ImmSetCompositionFontW, ImmSetCompositionWindow,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetCapture, GetKeyState, ReleaseCapture, SetCapture, SetFocus, VK_BACK, VK_CONTROL, VK_DELETE,
-    VK_END, VK_HOME, VK_INSERT, VK_LEFT, VK_MENU, VK_RIGHT, VK_SHIFT,
+    GetCapture, GetKeyState, ReleaseCapture, SetCapture, SetFocus, TME_LEAVE, TRACKMOUSEEVENT,
+    TrackMouseEvent, VK_BACK, VK_CONTROL, VK_DELETE, VK_END, VK_HOME, VK_INSERT, VK_LEFT, VK_MENU,
+    VK_RIGHT, VK_SHIFT,
 };
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::*;
@@ -265,6 +266,7 @@ pub struct Context {
     selection_end: usize,
     is_captured: bool,
     is_focused: bool,
+    is_hovered: bool,
     caret_visible: bool,
     format_rect: RECT,
     render_target: ID2D1HwndRenderTarget,
@@ -1078,6 +1080,7 @@ fn on_create(window: HWND, state: State) -> Result<Context> {
             selection_end: 0,
             is_captured: false,
             is_focused: false,
+            is_hovered: false,
             caret_visible: false,
             format_rect: RECT::default(),
             render_target,
@@ -1660,8 +1663,11 @@ fn paint_content_and_chrome(window: HWND, context: &mut Context) -> Result<()> {
     unsafe {
         // Filled variants skip the full border, keeping only the bottom accent.
         if let Appearance::Outline = context.state.appearance {
+            // Fluent Input outline :hover → colorNeutralStroke1Hover (focus wins).
             let border_color = if context.is_focused {
                 &tokens.color_neutral_stroke1_pressed
+            } else if context.is_hovered {
+                &tokens.color_neutral_stroke1_hover
             } else {
                 &tokens.color_neutral_stroke1
             };
@@ -1679,7 +1685,14 @@ fn paint_content_and_chrome(window: HWND, context: &mut Context) -> Result<()> {
             rt.DrawRoundedRectangle(&rounded, &border_brush, stroke, &context.state.qt.stroke_style);
         }
 
-        let accent_brush = rt.CreateSolidColorBrush(&tokens.color_neutral_stroke_accessible, None)?;
+        // Bottom accent; Fluent :hover → colorNeutralStrokeAccessibleHover (the
+        // focus brand underline is drawn over it below).
+        let accent_color = if context.is_hovered && !context.is_focused {
+            &tokens.color_neutral_stroke_accessible_hover
+        } else {
+            &tokens.color_neutral_stroke_accessible
+        };
+        let accent_brush = rt.CreateSolidColorBrush(accent_color, None)?;
         let accent_geometry =
             bottom_accent_geometry(&context.state.qt.d2d_factory, width, radius, height - stroke * 0.5)?;
         rt.DrawGeometry(&accent_geometry, &accent_brush, stroke, &context.state.qt.stroke_style);
@@ -1985,9 +1998,27 @@ extern "system" fn window_proc(
         WM_MOUSEMOVE => unsafe {
             let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
             let context = &mut *raw;
+            if !context.is_hovered {
+                context.is_hovered = true;
+                let mut tme = TRACKMOUSEEVENT {
+                    cbSize: size_of::<TRACKMOUSEEVENT>() as u32,
+                    dwFlags: TME_LEAVE,
+                    hwndTrack: window,
+                    dwHoverTime: 0,
+                };
+                _ = TrackMouseEvent(&mut tme);
+                _ = InvalidateRect(Some(window), None, false);
+            }
             let mouse_x = l_param.0 as i16 as i32;
             let mouse_y = (l_param.0 >> 16) as i16 as i32;
             _ = on_mouse_move(window, context, mouse_x, mouse_y);
+            LRESULT(0)
+        },
+        WM_MOUSELEAVE => unsafe {
+            let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
+            let context = &mut *raw;
+            context.is_hovered = false;
+            _ = InvalidateRect(Some(window), None, false);
             LRESULT(0)
         },
         WM_PAINT => unsafe {
