@@ -6,12 +6,14 @@ use crate::icon::Icon;
 use crate::{QT, get_scaling_factor};
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Direct2D::Common::{
-    D2D_RECT_F, D2D_SIZE_F, D2D_SIZE_U, D2D1_COLOR_F,
+    D2D_RECT_F, D2D_SIZE_F, D2D_SIZE_U, D2D1_COLOR_F, D2D1_FIGURE_BEGIN_HOLLOW,
+    D2D1_FIGURE_END_OPEN,
 };
 use windows::Win32::Graphics::Direct2D::{
-    D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_HWND_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_PROPERTIES,
-    D2D1_ROUNDED_RECT, D2D1_SVG_PAINT_TYPE_COLOR, ID2D1DeviceContext5, ID2D1HwndRenderTarget,
-    ID2D1SvgAttribute, ID2D1SvgDocument,
+    D2D1_ARC_SEGMENT, D2D1_ARC_SIZE_SMALL, D2D1_DRAW_TEXT_OPTIONS_NONE,
+    D2D1_HWND_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_PROPERTIES, D2D1_ROUNDED_RECT,
+    D2D1_SVG_PAINT_TYPE_COLOR, D2D1_SWEEP_DIRECTION_COUNTER_CLOCKWISE, ID2D1DeviceContext5,
+    ID2D1Factory1, ID2D1HwndRenderTarget, ID2D1PathGeometry1, ID2D1SvgAttribute, ID2D1SvgDocument,
 };
 use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_MEASURING_MODE_NATURAL,
@@ -38,7 +40,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::Shell::SHCreateMemStream;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::*;
-use windows_numerics::Matrix3x2;
+use windows_numerics::{Matrix3x2, Vector2};
 
 const FIELD_CLASS: PCWSTR = w!("QT_DROPDOWN");
 const POPUP_CLASS: PCWSTR = w!("QT_DROPDOWN_LISTBOX");
@@ -426,6 +428,62 @@ fn layout(window: HWND, context: &Context) -> Result<()> {
     Ok(())
 }
 
+/// Bottom edge plus the lower half of each rounded corner — the resting accent
+/// line that follows the field's rounded bottom (matches input's underline).
+/// All values in DIPs (the render target's DPI does the scaling).
+fn bottom_accent_geometry(
+    factory: &ID2D1Factory1,
+    width: f32,
+    r: f32,
+    cy: f32,
+) -> Result<ID2D1PathGeometry1> {
+    let left_cx = r;
+    let right_cx = width - r;
+    let corner_cy = cy - r;
+    let d = r * std::f32::consts::FRAC_1_SQRT_2;
+    unsafe {
+        let geometry = factory.CreatePathGeometry()?;
+        let sink = geometry.Open()?;
+        sink.BeginFigure(
+            Vector2 {
+                X: left_cx - d,
+                Y: corner_cy + d,
+            },
+            D2D1_FIGURE_BEGIN_HOLLOW,
+        );
+        sink.AddArc(&D2D1_ARC_SEGMENT {
+            point: Vector2 { X: left_cx, Y: cy },
+            size: D2D_SIZE_F {
+                width: r,
+                height: r,
+            },
+            rotationAngle: 0.0,
+            sweepDirection: D2D1_SWEEP_DIRECTION_COUNTER_CLOCKWISE,
+            arcSize: D2D1_ARC_SIZE_SMALL,
+        });
+        sink.AddLine(Vector2 {
+            X: right_cx,
+            Y: cy,
+        });
+        sink.AddArc(&D2D1_ARC_SEGMENT {
+            point: Vector2 {
+                X: right_cx + d,
+                Y: corner_cy + d,
+            },
+            size: D2D_SIZE_F {
+                width: r,
+                height: r,
+            },
+            rotationAngle: 0.0,
+            sweepDirection: D2D1_SWEEP_DIRECTION_COUNTER_CLOCKWISE,
+            arcSize: D2D1_ARC_SIZE_SMALL,
+        });
+        sink.EndFigure(D2D1_FIGURE_END_OPEN);
+        sink.Close()?;
+        Ok(geometry)
+    }
+}
+
 fn paint(window: HWND, context: &Context) -> Result<()> {
     let state = &context.state;
     let tokens = &state.qt.theme.tokens;
@@ -491,14 +549,13 @@ fn paint(window: HWND, context: &Context) -> Result<()> {
         let accent_brush = context
             .render_target
             .CreateSolidColorBrush(accent_color, None)?;
-        context.render_target.FillRectangle(
-            &D2D_RECT_F {
-                left: radius,
-                top: height - stroke,
-                right: width - radius,
-                bottom: height,
-            },
+        let accent_geometry =
+            bottom_accent_geometry(&state.qt.d2d_factory, width, radius, height - stroke * 0.5)?;
+        context.render_target.DrawGeometry(
+            &accent_geometry,
             &accent_brush,
+            stroke,
+            &state.qt.stroke_style,
         );
         if context.is_focused {
             let percentage = context.bottom_focus_border.GetValue()? as f32;
