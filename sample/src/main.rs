@@ -18,7 +18,7 @@ use quelthalas::component::button::IconPosition;
 use quelthalas::component::dialog::DialogResult;
 use quelthalas::component::menu::MenuInfo;
 use quelthalas::component::{
-    button, checkbox, dialog, dropdown, input, menu, progress_bar, radio, switch, text,
+    button, checkbox, dialog, dropdown, input, menu, progress_bar, radio, slider, switch, text,
 };
 use quelthalas::icon::Icon;
 use quelthalas::layout::Stack;
@@ -454,6 +454,24 @@ extern "system" fn window_process(
                     )
                     .unwrap_or_default();
 
+                // Slider: drag the thumb or click the rail; arrows step the value.
+                let slider_label = section(w!("Slider"));
+                let slider = qt
+                    .create_slider(
+                        window,
+                        0,
+                        0,
+                        slider::Props {
+                            min: 0.0,
+                            max: 100.0,
+                            value: 40.0,
+                            width: 200,
+                            background: Some(CANVAS),
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap_or_default();
+
                 // Text section: an intro line, then every preset labelled by name.
                 let text_intro = qt
                     .create_body1(
@@ -544,6 +562,12 @@ extern "system" fn window_process(
                             .gap(8.0)
                             .add(checkbox_label)
                             .add(checkbox),
+                    )
+                    .add_stack(
+                        Stack::vertical()
+                            .gap(8.0)
+                            .add(slider_label)
+                            .add(slider),
                     );
 
                 let right_column = Stack::vertical()
