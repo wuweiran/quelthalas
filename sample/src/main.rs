@@ -7,10 +7,11 @@ use windows::Win32::Foundation::{
 use windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F;
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, CreateSolidBrush, DeleteObject, EndPaint, FillRect, InvalidateRect, PAINTSTRUCT,
-    PtInRect, RDW_ALLCHILDREN, RDW_INVALIDATE, RDW_UPDATENOW, RedrawWindow,
+    PtInRect, RDW_ALLCHILDREN, RDW_INVALIDATE, RDW_UPDATENOW, RedrawWindow, ScreenToClient,
 };
 use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::UI::Input::KeyboardAndMouse::{VK_F10, VK_MENU};
 use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::*;
@@ -19,8 +20,8 @@ use quelthalas::component::button::IconPosition;
 use quelthalas::component::dialog::DialogResult;
 use quelthalas::component::menu::MenuInfo;
 use quelthalas::component::{
-    button, checkbox, dialog, dropdown, input, link, menu, progress_bar, radio, slider, spinner,
-    switch, tab_list, text,
+    button, checkbox, dialog, dropdown, input, link, menu, menu_bar, progress_bar, radio, slider,
+    spinner, switch, tab_list, text,
 };
 use quelthalas::icon::Icon;
 use quelthalas::layout::Stack;
@@ -42,11 +43,21 @@ struct AppState {
     // The tab strip child — WM_PAINT reads its height to split the window into the
     // chrome band (behind/around the strip) and the CANVAS page below it.
     tab_list: HWND,
+    // The menu bar child (above the tab strip). WM_PAINT reads its geometry too so
+    // the chrome band covers it; Alt/F10 forwards here to enter menu mode.
+    menu_bar: HWND,
 }
 
 // The TabList's on_change posts this to the app window (like SysTabControl32 →
 // TCN_SELCHANGE); the app owns the page swap.
 const WM_APP_TAB: u32 = WM_APP + 1;
+
+// Menu-bar command ids (arrive as WM_COMMAND wParam). The menu component posts
+// these to the app window when a dropdown item is chosen. Only actions the sample
+// can honestly perform are enabled; the rest are shown disabled.
+const CMD_VIEW_THEME_LIGHT: u32 = 200;
+const CMD_VIEW_THEME_DARK: u32 = 201;
+const CMD_HELP_ABOUT: u32 = 300;
 
 /// Re-arrange the tab strip + the active page. The tab strip and Close button are
 /// members of every page's Stack, so arranging the active page's Stack lays out
@@ -633,6 +644,58 @@ extern "system" fn window_process(
                 // A tab strip organizes the controls into pages. Each page is a
                 // vertical Stack of sections; switching tabs hides the other pages'
                 // controls (the TabList reports the index; the app owns the swap).
+
+                // The menu bar (View / Help) — classic Win32 chrome above the tab
+                // strip. Each label opens a dropdown (reusing the flyout menu); picks
+                // post WM_COMMAND to this window (see below). Only actions the sample
+                // can truly perform are enabled; the rest are shown disabled so the
+                // menu is honest about what works. (No File menu — closing is already
+                // covered by the footer Close button, the window X, and Alt+F4.)
+                let menu_bar = qt
+                    .create_menu_bar(
+                        window,
+                        0,
+                        0,
+                        menu_bar::Props {
+                            items: vec![
+                                menu_bar::MenuBarItem {
+                                    text: w!("View"),
+                                    menu_list: vec![MenuInfo::SubMenu {
+                                        text: w!("Theme"),
+                                        // Theme switching isn't implemented yet, so both
+                                        // options are disabled — the submenu still shows
+                                        // off nested menus + disabled items.
+                                        menu_list: vec![
+                                            MenuInfo::MenuItem {
+                                                text: w!("Light"),
+                                                command_id: CMD_VIEW_THEME_LIGHT,
+                                                disabled: true,
+                                                secondary_text: None,
+                                            },
+                                            MenuInfo::MenuItem {
+                                                text: w!("Dark"),
+                                                command_id: CMD_VIEW_THEME_DARK,
+                                                disabled: true,
+                                                secondary_text: None,
+                                            },
+                                        ],
+                                    }],
+                                },
+                                menu_bar::MenuBarItem {
+                                    text: w!("Help"),
+                                    menu_list: vec![MenuInfo::MenuItem {
+                                        text: w!("About…"),
+                                        command_id: CMD_HELP_ABOUT,
+                                        disabled: false,
+                                        secondary_text: None,
+                                    }],
+                                },
+                            ],
+                            background: Some(WIN32_GRAY),
+                        },
+                    )
+                    .unwrap_or_default();
+
                 let tabs = qt
                     .create_tab_list(
                         window,
@@ -800,6 +863,7 @@ extern "system" fn window_process(
                         // must live here (not inside the padded inner stack) so it has
                         // the window's leftover height to expand into.
                         let stack = Stack::vertical()
+                            .add_fill(menu_bar)
                             .add_fill(tabs)
                             .add_stack(
                                 Stack::vertical()
@@ -821,6 +885,7 @@ extern "system" fn window_process(
                     active: 0,
                     menu_target: menu_hint,
                     tab_list: tabs,
+                    menu_bar,
                 });
                 // Show page 0, hide the rest, and do the initial arrange.
                 show_page(&mut state, window, 0);
@@ -883,9 +948,9 @@ extern "system" fn window_process(
             WM_PAINT => {
                 let mut ps = PAINTSTRUCT::default();
                 let hdc = BeginPaint(window, &mut ps);
-                // Two-tone: a chrome band (#f0f0f0) behind/around the tab strip, and
-                // the CANVAS page (#fafafa) below it — the selected tab's CANVAS card
-                // flares down into the matching page, so it reads as one surface.
+                // Two-tone: a chrome band (#f0f0f0) behind the menu bar + tab strip,
+                // and the CANVAS page (#fafafa) below it — the selected tab's CANVAS
+                // card flares down into the matching page, so it reads as one surface.
                 let mut client = RECT::default();
                 _ = GetClientRect(window, &mut client);
                 let band = {
@@ -893,9 +958,20 @@ extern "system" fn window_process(
                     if raw.is_null() {
                         0
                     } else {
-                        let mut tr = RECT::default();
-                        _ = GetClientRect((*raw).tab_list, &mut tr);
-                        tr.bottom
+                        // The tab strip sits below the menu bar now, so its bottom in
+                        // window-client coords (GetWindowRect → ScreenToClient) is the
+                        // band edge and covers the menu bar above it automatically.
+                        let mut wr = RECT::default();
+                        if GetWindowRect((*raw).tab_list, &mut wr).is_ok() {
+                            let mut bl = POINT {
+                                x: wr.left,
+                                y: wr.bottom,
+                            };
+                            _ = ScreenToClient(window, &mut bl);
+                            bl.y
+                        } else {
+                            0
+                        }
                     }
                 };
                 let chrome = CreateSolidBrush(COLORREF(0xf0f0f0));
@@ -919,6 +995,47 @@ extern "system" fn window_process(
                 _ = DeleteObject(chrome.into());
                 _ = DeleteObject(page.into());
                 _ = EndPaint(window, &ps);
+                LRESULT(0)
+            }
+            WM_SYSKEYDOWN => {
+                // Alt / F10 at the app level → enter the menu bar's keyboard mode
+                // (mirrors classic Win32). Ignore auto-repeat (lParam bit 30).
+                let key = w_param.0 as u32;
+                let is_repeat = (l_param.0 >> 30) & 1 != 0;
+                if (key == VK_MENU.0 as u32 || key == VK_F10.0 as u32) && !is_repeat {
+                    let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *const AppState;
+                    if !raw.is_null() {
+                        _ = PostMessageW(
+                            Some((*raw).menu_bar),
+                            menu_bar::WM_ENTER_MENU_MODE,
+                            WPARAM(0),
+                            LPARAM(0),
+                        );
+                        return LRESULT(0);
+                    }
+                }
+                DefWindowProcW(window, message, w_param, l_param)
+            }
+            WM_COMMAND => {
+                // Menu-bar picks arrive here (the menu posts WM_COMMAND with the
+                // item's command_id in wParam). About shows a dialog; the theme items
+                // are disabled, so they never post here.
+                let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *const AppState;
+                if raw.is_null() {
+                    return DefWindowProcW(window, message, w_param, l_param);
+                }
+                let qt = &(*raw).qt;
+                match w_param.0 as u32 {
+                    CMD_HELP_ABOUT => {
+                        _ = qt.open_dialog(
+                            window,
+                            w!("About"),
+                            w!("Quel'Thalas — Fluent-styled Win32 controls."),
+                            &dialog::ModelType::Alert,
+                        );
+                    }
+                    _ => {}
+                }
                 LRESULT(0)
             }
             WM_CONTEXTMENU => {

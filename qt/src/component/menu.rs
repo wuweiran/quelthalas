@@ -35,6 +35,7 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::*;
 use windows_numerics::{Matrix3x2, Vector2};
 
+#[derive(Clone)]
 pub enum MenuInfo {
     MenuItem {
         text: PCWSTR,
@@ -138,8 +139,44 @@ pub struct Props {
     pub menu_list: Vec<MenuInfo>,
 }
 
+/// Why `track_menu` returned. Lets the in-crate menu bar drive hover / keyboard
+/// switching between top-level menus. Standalone popups only ever observe `Ended`.
+/// `pub(crate)` — an implementation detail of the menu-bar component.
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum TrackExit {
+    /// A command was posted (`WM_COMMAND`) or the menu was dismissed — the bar stops.
+    Ended,
+    /// The pointer moved onto / clicked the owner bar at this screen point. The bar
+    /// hit-tests it to decide: switch to a sibling label, or toggle the open one shut.
+    YieldMouse(POINT),
+    /// Left was pressed at the top level — the bar should open the previous label.
+    YieldKeyPrev,
+    /// Right was pressed on a non-submenu top item — the bar should open the next label.
+    YieldKeyNext,
+}
+
 impl QT {
+    /// Open a dropdown / context menu at screen point `(x, y)` and track it modally.
+    /// Chosen commands are posted to `parent_window` as `WM_COMMAND(command_id)`.
     pub fn open_menu(&self, parent_window: HWND, x: i32, y: i32, props: Props) -> Result<()> {
+        self.open_menu_ex(parent_window, x, y, props, None, None)
+            .map(|_| ())
+    }
+
+    /// Internal variant used by the in-crate menu bar. `owner_bar` (+ its open-label
+    /// screen rect) makes the tracking loop *yield back* to the bar on bar hover /
+    /// click / Left-Right, reporting *why* via [`TrackExit`] so the bar can
+    /// hover-switch. With `owner_bar = None` this is exactly [`open_menu`]. Kept
+    /// `pub(crate)` because `TrackExit` and the bar coupling are menu-bar internals.
+    pub(crate) fn open_menu_ex(
+        &self,
+        parent_window: HWND,
+        x: i32,
+        y: i32,
+        props: Props,
+        owner_bar: Option<HWND>,
+        owner_bar_open_rect: Option<RECT>,
+    ) -> Result<TrackExit> {
         unsafe {
             static REGISTER: Once = Once::new();
             REGISTER.call_once(|| {
@@ -159,9 +196,17 @@ impl QT {
             let menu = Rc::new(RefCell::new(convert_menu_info_list_to_menu(props.menu_list)));
             init_popup(self.clone(), parent_window, menu.clone(), x, y, 0, 0)?;
             init_tracking(parent_window)?;
-            track_menu(menu.clone(), 0, 0, parent_window).and(exit_tracking(parent_window))?;
+            let exit = track_menu(
+                menu.clone(),
+                0,
+                0,
+                parent_window,
+                owner_bar,
+                owner_bar_open_rect,
+            );
+            exit_tracking(parent_window)?;
+            exit
         }
-        Ok(())
     }
 }
 
@@ -235,6 +280,10 @@ struct Tracker {
     top_menu: Rc<RefCell<Menu>>,
     owning_window: HWND,
     point: POINT,
+    /// Set when a menu bar owns this dropdown — enables the yield-to-bar branches.
+    owner_bar: Option<HWND>,
+    /// Screen rect of the open bar label (suppresses re-yield while hovering it).
+    owner_bar_open_rect: Option<RECT>,
 }
 
 fn menu_from_point(root: Rc<RefCell<Menu>>, point: &POINT) -> Option<Rc<RefCell<Menu>>> {
@@ -667,7 +716,14 @@ fn execute_focused_item(
     }
 }
 
-fn track_menu(menu: Rc<RefCell<Menu>>, x: i32, y: i32, owning_window: HWND) -> Result<bool> {
+fn track_menu(
+    menu: Rc<RefCell<Menu>>,
+    x: i32,
+    y: i32,
+    owning_window: HWND,
+    owner_bar: Option<HWND>,
+    owner_bar_open_rect: Option<RECT>,
+) -> Result<TrackExit> {
     let window = {
         let menu = menu.borrow();
         if menu.window.is_none() {
@@ -683,10 +739,13 @@ fn track_menu(menu: Rc<RefCell<Menu>>, x: i32, y: i32, owning_window: HWND) -> R
             top_menu: menu.clone(),
             owning_window,
             point: POINT { x, y },
+            owner_bar,
+            owner_bar_open_rect,
         };
         let mut exit_menu = false;
         let mut enter_idle_sent = false;
         let mut execution_result = ExecutionResult::NoExecuted;
+        let mut track_exit = TrackExit::Ended;
         while !exit_menu {
             let mut msg = MSG::default();
             loop {
@@ -730,42 +789,69 @@ fn track_menu(menu: Rc<RefCell<Menu>>, x: i32, y: i32, owning_window: HWND) -> R
                 mt.point.y = (msg.lParam.0 >> 16) as i16 as i32;
                 _ = ClientToScreen(window, &mut mt.point);
 
-                let menu_from_point_result = menu_from_point(menu.clone(), &mt.point);
+                // Yield-to-bar (revived Wine menu-bar branch, inert without owner_bar):
+                // when the pointer is on the owning menu bar, hand control back so the
+                // bar can hover-switch. A move that stays within the already-open
+                // label does NOT yield (no flicker); a click always does (toggle/switch).
+                let bar_yield = mt.owner_bar.is_some_and(|bar| {
+                    let mut bar_rect = RECT::default();
+                    if GetWindowRect(bar, &mut bar_rect).is_err()
+                        || !PtInRect(&bar_rect, mt.point).as_bool()
+                    {
+                        return false;
+                    }
+                    match msg.message {
+                        WM_MOUSEMOVE => !mt
+                            .owner_bar_open_rect
+                            .is_some_and(|r| PtInRect(&r, mt.point).as_bool()),
+                        WM_LBUTTONDOWN | WM_LBUTTONDBLCLK => true,
+                        _ => false,
+                    }
+                });
 
-                match msg.message {
-                    WM_RBUTTONDBLCLK | WM_RBUTTONDOWN | WM_LBUTTONDBLCLK | WM_LBUTTONDOWN => {
-                        remove_message = match menu_from_point_result {
-                            None => false,
+                if bar_yield {
+                    track_exit = TrackExit::YieldMouse(mt.point);
+                    exit_menu = true;
+                    remove_message = true;
+                } else {
+                    let menu_from_point_result = menu_from_point(menu.clone(), &mt.point);
+
+                    match msg.message {
+                        WM_RBUTTONDBLCLK | WM_RBUTTONDOWN | WM_LBUTTONDBLCLK | WM_LBUTTONDOWN => {
+                            remove_message = match menu_from_point_result {
+                                None => false,
+                                Some(menu_from_point) => {
+                                    let mut menu_from_point_borrowed = menu_from_point.borrow_mut();
+                                    let raw =
+                                        GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
+                                    let context = &*raw;
+                                    menu_button_down(context, &mut mt, &mut menu_from_point_borrowed)?
+                                }
+                            };
+                            exit_menu = !remove_message;
+                        }
+                        WM_RBUTTONUP | WM_LBUTTONUP => match menu_from_point_result {
                             Some(menu_from_point) => {
                                 let mut menu_from_point_borrowed = menu_from_point.borrow_mut();
                                 let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
                                 let context = &*raw;
-                                menu_button_down(context, &mut mt, &mut menu_from_point_borrowed)?
+                                execution_result =
+                                    menu_button_up(context, &mut mt, &mut menu_from_point_borrowed)?;
+                                remove_message = execution_result != ExecutionResult::NoExecuted;
+                                exit_menu = remove_message;
                             }
-                        };
-                        exit_menu = !remove_message;
-                    }
-                    WM_RBUTTONUP | WM_LBUTTONUP => match menu_from_point_result {
-                        Some(menu_from_point) => {
-                            let mut menu_from_point_borrowed = menu_from_point.borrow_mut();
-                            let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
-                            let context = &*raw;
-                            execution_result =
-                                menu_button_up(context, &mut mt, &mut menu_from_point_borrowed)?;
-                            remove_message = execution_result != ExecutionResult::NoExecuted;
-                            exit_menu = remove_message;
+                            None => exit_menu = false,
+                        },
+                        WM_MOUSEMOVE => {
+                            if let Some(menu_from_point) = menu_from_point_result {
+                                let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
+                                let context = &*raw;
+                                exit_menu =
+                                    exit_menu | !menu_mouse_move(context, &mut mt, menu_from_point)?
+                            }
                         }
-                        None => exit_menu = false,
-                    },
-                    WM_MOUSEMOVE => {
-                        if let Some(menu_from_point) = menu_from_point_result {
-                            let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
-                            let context = &*raw;
-                            exit_menu =
-                                exit_menu | !menu_mouse_move(context, &mut mt, menu_from_point)?
-                        }
+                        _ => {}
                     }
-                    _ => {}
                 }
             } else if msg.message >= WM_KEYFIRST && msg.message <= WM_KEYLAST {
                 remove_message = true;
@@ -790,11 +876,37 @@ fn track_menu(menu: Rc<RefCell<Menu>>, x: i32, y: i32, owning_window: HWND) -> R
                             let mut menu = mt.current_menu.borrow_mut();
                             select_next(&mut menu)
                         }
-                        VK_LEFT => menu_key_left(&mut mt)?,
+                        VK_LEFT => {
+                            // At the bar's top level, Left walks to the previous bar
+                            // label instead of closing a (nonexistent) submenu.
+                            if mt.owner_bar.is_some()
+                                && Rc::ptr_eq(&mt.current_menu, &mt.top_menu)
+                            {
+                                track_exit = TrackExit::YieldKeyPrev;
+                                exit_menu = true;
+                            } else {
+                                menu_key_left(&mut mt)?
+                            }
+                        }
                         VK_RIGHT => {
-                            let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
-                            let context = &*raw;
-                            menu_key_right(context, &mut mt)?
+                            // At the bar's top level, Right opens the focused submenu if
+                            // there is one; otherwise it walks to the next bar label.
+                            let at_bar_top = mt.owner_bar.is_some()
+                                && Rc::ptr_eq(&mt.current_menu, &mt.top_menu);
+                            let focused_is_submenu = at_bar_top && {
+                                let m = mt.current_menu.borrow();
+                                m.focused_item_index.is_some_and(|i| {
+                                    matches!(m.items[i], MenuItem::SubMenu { .. })
+                                })
+                            };
+                            if at_bar_top && !focused_is_submenu {
+                                track_exit = TrackExit::YieldKeyNext;
+                                exit_menu = true;
+                            } else {
+                                let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
+                                let context = &*raw;
+                                menu_key_right(context, &mut mt)?
+                            }
                         }
                         VK_ESCAPE => exit_menu = menu_key_escape(&mut mt)?,
                         _ => {
@@ -835,7 +947,7 @@ fn track_menu(menu: Rc<RefCell<Menu>>, x: i32, y: i32, owning_window: HWND) -> R
                 select_item(&mut top_menu, None);
             }
         }
-        Ok(execution_result != ExecutionResult::ShownPopup)
+        Ok(track_exit)
     }
 }
 

@@ -5,6 +5,7 @@ pub mod dropdown;
 pub mod input;
 pub mod link;
 pub mod menu;
+pub mod menu_bar;
 pub mod progress_bar;
 pub mod radio;
 pub mod slider;
