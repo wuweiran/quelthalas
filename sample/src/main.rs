@@ -18,8 +18,8 @@ use quelthalas::component::button::IconPosition;
 use quelthalas::component::dialog::DialogResult;
 use quelthalas::component::menu::MenuInfo;
 use quelthalas::component::{
-    button, checkbox, dialog, dropdown, input, menu, progress_bar, radio, slider, spinner, switch,
-    text,
+    button, checkbox, dialog, dropdown, input, link, menu, progress_bar, radio, slider, spinner,
+    switch, text,
 };
 use quelthalas::icon::Icon;
 use quelthalas::layout::Stack;
@@ -487,6 +487,33 @@ extern "system" fn window_process(
                     )
                     .unwrap_or_default();
 
+                // Link: a Fluent-styled hyperlink; click / Enter / Space fires on_click.
+                let link_label = section(w!("Link"));
+                let link = qt
+                    .create_link(
+                        window,
+                        0,
+                        0,
+                        link::Props {
+                            text: w!("Open the Fluent UI docs"),
+                            mouse_event: MouseEvent {
+                                on_click: Box::new({
+                                    let qt = qt.clone();
+                                    move |_| {
+                                        _ = qt.open_dialog(
+                                            window,
+                                            w!("Link clicked"),
+                                            w!("You activated the link."),
+                                            &dialog::ModelType::Alert,
+                                        );
+                                    }
+                                }),
+                            },
+                            background: Some(CANVAS),
+                        },
+                    )
+                    .unwrap_or_default();
+
                 // Text section: an intro line, then every preset labelled by name.
                 let text_intro = qt
                     .create_body1(
@@ -589,6 +616,12 @@ extern "system" fn window_process(
                             .gap(8.0)
                             .add(spinner_label)
                             .add(spinner),
+                    )
+                    .add_stack(
+                        Stack::vertical()
+                            .gap(8.0)
+                            .add(link_label)
+                            .add(link),
                     );
 
                 let right_column = Stack::vertical()
