@@ -29,10 +29,11 @@ use windows::Win32::UI::Animation::{
     IUIAnimationTransitionLibrary2, IUIAnimationVariable2, UI_ANIMATION_IDLE_BEHAVIOR_DISABLE,
     UIAnimationManager2, UIAnimationTimer,
 };
+use windows::Win32::UI::Controls::WM_MOUSELEAVE;
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    ReleaseCapture, SetCapture, SetFocus, VIRTUAL_KEY, VK_DOWN, VK_END, VK_ESCAPE, VK_F4, VK_HOME,
-    VK_RETURN, VK_SPACE, VK_UP,
+    ReleaseCapture, SetCapture, SetFocus, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent, VIRTUAL_KEY,
+    VK_DOWN, VK_END, VK_ESCAPE, VK_F4, VK_HOME, VK_RETURN, VK_SPACE, VK_UP,
 };
 use windows::Win32::UI::Shell::SHCreateMemStream;
 use windows::Win32::UI::WindowsAndMessaging::*;
@@ -152,6 +153,7 @@ struct Context {
     bottom_focus_border: IUIAnimationVariable2,
     selected_index: Option<usize>,
     is_focused: bool,
+    is_hovered: bool,
 }
 
 impl QT {
@@ -324,6 +326,7 @@ fn on_create(window: HWND, state: State) -> Result<Context> {
             bottom_focus_border,
             selected_index,
             is_focused: false,
+            is_hovered: false,
         })
     }
 }
@@ -459,10 +462,13 @@ fn paint(window: HWND, context: &Context) -> Result<()> {
             .render_target
             .FillRoundedRectangle(&field_rect, &fill_brush);
 
-        // Outline border (Outline appearance): darker when focused.
+        // Outline border (Outline appearance): darker when focused, or on hover
+        // when not focused (Fluent Input :hover → colorNeutralStroke1Hover).
         if let input::Appearance::Outline = state.props.appearance {
             let border_color = if context.is_focused {
                 &tokens.color_neutral_stroke1_pressed
+            } else if context.is_hovered {
+                &tokens.color_neutral_stroke1_hover
             } else {
                 &tokens.color_neutral_stroke1
             };
@@ -475,11 +481,16 @@ fn paint(window: HWND, context: &Context) -> Result<()> {
             );
         }
 
-        // Resting bottom accent line, then the brand underline growing from the
-        // centre on focus — driven by the WAM variable, exactly like input.
+        // Resting bottom accent line (darkens on hover, per Fluent), then the brand
+        // underline growing from the centre on focus — driven by the WAM variable.
+        let accent_color = if context.is_hovered && !context.is_focused {
+            &tokens.color_neutral_stroke_accessible_hover
+        } else {
+            &tokens.color_neutral_stroke_accessible
+        };
         let accent_brush = context
             .render_target
-            .CreateSolidColorBrush(&tokens.color_neutral_stroke_accessible, None)?;
+            .CreateSolidColorBrush(accent_color, None)?;
         context.render_target.FillRectangle(
             &D2D_RECT_F {
                 left: radius,
@@ -641,6 +652,28 @@ extern "system" fn field_proc(
                     Err(_) => (*raw).bottom_focus_border.clone(),
                 };
             _ = RedrawWindow(Some(window), None, None, RDW_INVALIDATE);
+            LRESULT(0)
+        },
+        WM_MOUSEMOVE => unsafe {
+            let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
+            let context = &mut *raw;
+            if !context.is_hovered {
+                context.is_hovered = true;
+                let mut tme = TRACKMOUSEEVENT {
+                    cbSize: size_of::<TRACKMOUSEEVENT>() as u32,
+                    dwFlags: TME_LEAVE,
+                    hwndTrack: window,
+                    dwHoverTime: 0,
+                };
+                _ = TrackMouseEvent(&mut tme);
+                _ = InvalidateRect(Some(window), None, false);
+            }
+            LRESULT(0)
+        },
+        WM_MOUSELEAVE => unsafe {
+            let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
+            (*raw).is_hovered = false;
+            _ = InvalidateRect(Some(window), None, false);
             LRESULT(0)
         },
         WM_LBUTTONDOWN => unsafe {
