@@ -22,7 +22,9 @@ use windows::Win32::UI::Animation::{
 };
 use windows::Win32::UI::Controls::WM_MOUSELEAVE;
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
-use windows::Win32::UI::Input::KeyboardAndMouse::{TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent};
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    SetFocus, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent,
+};
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::*;
 use windows_numerics::Vector2;
@@ -556,6 +558,9 @@ extern "system" fn window_proc(
         WM_LBUTTONDOWN => unsafe {
             let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
             let context = &mut *raw;
+            // Take focus like a native toggle so the previously-focused control
+            // (input/dropdown) loses focus.
+            _ = SetFocus(Some(window));
             context.pressed = true;
             _ = InvalidateRect(Some(window), None, false);
             LRESULT(0)

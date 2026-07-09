@@ -33,7 +33,9 @@ use windows::Win32::UI::Animation::{
 };
 use windows::Win32::UI::Controls::WM_MOUSELEAVE;
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
-use windows::Win32::UI::Input::KeyboardAndMouse::{TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent};
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    SetFocus, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent,
+};
 use windows::Win32::UI::Shell::SHCreateMemStream;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::*;
@@ -841,6 +843,9 @@ extern "system" fn window_proc(
         WM_LBUTTONDOWN => unsafe {
             let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
             let context = &*raw;
+            // Custom classes don't auto-focus on click; take focus like a native
+            // button so the previously-focused control (input/dropdown) loses it.
+            _ = SetFocus(Some(window));
             (*raw).mouse_clicking = true;
             let _ = change_color(context);
             LRESULT(0)
