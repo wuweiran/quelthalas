@@ -161,6 +161,12 @@ impl State {
     fn has_icon(&self) -> bool {
         self.icon.is_some()
     }
+
+    /// An icon with no text — Fluent renders these as a compact square (side =
+    /// the button height, e.g. 32×32 medium) instead of the 96px min-width pill.
+    fn is_icon_only(&self) -> bool {
+        self.has_icon() && unsafe { self.text.is_null() || self.text.as_wide().is_empty() }
+    }
 }
 
 struct Context {
@@ -212,6 +218,13 @@ impl QT {
                 mouse_event: props.mouse_event,
             });
             let scaling_factor = get_scaling_factor(parent_window);
+            // Icon-only → square (width = height); text → min-width pill. layout()
+            // re-measures on WM_CREATE, but this avoids an initial wrong-width flash.
+            let initial_width = if boxed.as_ref().is_icon_only() {
+                boxed.as_ref().get_min_height()
+            } else {
+                boxed.as_ref().get_min_width()
+            };
             CreateWindowExW(
                 WINDOW_EX_STYLE::default(),
                 class_name,
@@ -219,7 +232,7 @@ impl QT {
                 WS_TABSTOP | WS_VISIBLE | WS_CHILD,
                 x,
                 y,
-                (boxed.as_ref().get_min_width() * scaling_factor) as i32,
+                (initial_width * scaling_factor) as i32,
                 (boxed.as_ref().get_min_height() * scaling_factor) as i32,
                 Some(parent_window),
                 None,
@@ -280,7 +293,11 @@ fn on_create(window: HWND, state: State) -> Result<Context> {
             &D2D1_HWND_RENDER_TARGET_PROPERTIES {
                 hwnd: window,
                 pixelSize: D2D_SIZE_U {
-                    width: state.get_min_width() as u32,
+                    width: if state.is_icon_only() {
+                        state.get_min_height() as u32
+                    } else {
+                        state.get_min_width() as u32
+                    },
                     height: state.get_min_height() as u32,
                 },
                 presentOptions: Default::default(),
@@ -386,18 +403,24 @@ fn layout(window: HWND, context: &Context) -> Result<()> {
             0f32
         };
         let horizontal_padding = state.get_horizontal_padding();
-        let scaled_width = ((state.get_min_width().max(
-            metrics.width
-                + 2f32 * tokens.stroke_width_thin
-                + 2f32 * horizontal_padding
-                + icon_and_space_width,
-        )) * scaling_factor)
-            .ceil() as i32;
         let scaled_height = ((state.get_line_height() * metrics.lineCount.max(1) as f32
             + state.get_spacing() * 2f32
             + tokens.stroke_width_thin * 2f32)
             * scaling_factor)
             .ceil() as i32;
+        // Icon-only buttons are a compact square (width = height); text buttons
+        // use the 96px min-width pill.
+        let scaled_width = if state.is_icon_only() {
+            scaled_height
+        } else {
+            ((state.get_min_width().max(
+                metrics.width
+                    + 2f32 * tokens.stroke_width_thin
+                    + 2f32 * horizontal_padding
+                    + icon_and_space_width,
+            )) * scaling_factor)
+                .ceil() as i32
+        };
 
         SetWindowPos(
             window,
@@ -590,7 +613,13 @@ fn paint(window: HWND, context: &Context) -> Result<()> {
                         M12: 0.0,
                         M21: 0.0,
                         M22: desired_size / viewport_size.height,
-                        M31: left,
+                        // Icon-only → centre it in the square; otherwise flush-left
+                        // with the text following.
+                        M31: if state.is_icon_only() {
+                            width / 2f32 - desired_size / 2f32
+                        } else {
+                            left
+                        },
                         M32: top / 2f32 + bottom / 2f32 - desired_size / 2f32,
                     },
                     IconPosition::After => Matrix3x2 {

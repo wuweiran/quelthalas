@@ -525,6 +525,7 @@ extern "system" fn window_process(
                         0,
                         button::Props {
                             icon: Some(Icon::slide_text_20_regular()),
+                            size: button::Size::Large,
                             ..Default::default()
                         },
                     )
