@@ -17,7 +17,7 @@ use quelthalas::component::button::IconPosition;
 use quelthalas::component::dialog::DialogResult;
 use quelthalas::component::menu::MenuInfo;
 use quelthalas::component::{
-    button, checkbox, dialog, input, menu, progress_bar, radio, switch, text,
+    button, checkbox, dialog, dropdown, input, menu, progress_bar, radio, switch, text,
 };
 use quelthalas::icon::Icon;
 use quelthalas::layout::Stack;
@@ -412,6 +412,34 @@ extern "system" fn window_process(
                     )
                     .unwrap_or_default();
 
+                // Dropdown: click the field to open a flat popup list; pick one.
+                // Ferret is disabled (greyed, unclickable, skipped by keyboard).
+                let dropdown_label = section(w!("Dropdown"));
+                let dropdown = qt
+                    .create_dropdown(
+                        window,
+                        0,
+                        0,
+                        dropdown::Props {
+                            options: vec![
+                                dropdown::Item::new(w!("Cat")),
+                                dropdown::Item::new(w!("Caterpillar")),
+                                dropdown::Item::new(w!("Corgi")),
+                                dropdown::Item::new(w!("Chupacabra")),
+                                dropdown::Item::new(w!("Dog")),
+                                dropdown::Item::disabled(w!("Ferret")),
+                                dropdown::Item::new(w!("Fish")),
+                                dropdown::Item::new(w!("Fox")),
+                                dropdown::Item::new(w!("Hamster")),
+                                dropdown::Item::new(w!("Snake")),
+                            ],
+                            placeholder: w!("Select an animal"),
+                            background: Some(CANVAS),
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap_or_default();
+
                 // Text section: an intro line, then every preset labelled by name.
                 let text_intro = qt
                     .create_body1(
@@ -540,6 +568,12 @@ extern "system" fn window_process(
                             .gap(8.0)
                             .add(switch_label)
                             .add(switch),
+                    )
+                    .add_stack(
+                        Stack::vertical()
+                            .gap(8.0)
+                            .add(dropdown_label)
+                            .add(dropdown),
                     );
 
                 let layout = Stack::vertical()

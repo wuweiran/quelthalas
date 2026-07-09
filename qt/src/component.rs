@@ -1,6 +1,7 @@
 pub mod button;
 pub mod checkbox;
 pub mod dialog;
+pub mod dropdown;
 pub mod input;
 pub mod menu;
 pub mod progress_bar;
