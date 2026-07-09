@@ -144,6 +144,58 @@ impl QT {
             )
         }
     }
+
+    /// Select the radio item with `command_id`, unchecking its siblings (the radios
+    /// sharing the same submenu list). Call this from your `WM_COMMAND` handler so
+    /// the checkmark follows the selection the next time the menu opens.
+    ///
+    /// The bar holds its menu content, so this mutates the stored `checked` flags
+    /// in place. Safe from `WM_COMMAND`: by then the modal dropdown has closed.
+    pub fn menu_bar_set_radio(&self, bar: HWND, command_id: u32) {
+        unsafe {
+            let raw = GetWindowLongPtrW(bar, GWLP_USERDATA) as *mut Context;
+            if raw.is_null() {
+                return;
+            }
+            for item in &mut (*raw).state.props.items {
+                if set_radio_in_list(&mut item.menu_list, command_id) {
+                    break;
+                }
+            }
+        }
+    }
+}
+
+/// Find the radio group (one `menu_list` level) containing `command_id` and set
+/// each radio's `checked` to whether it *is* `command_id`. Recurses into submenus.
+/// Returns true once handled so the caller can stop.
+fn set_radio_in_list(list: &mut [menu::MenuInfo], command_id: u32) -> bool {
+    // Is the target radio directly in this list? If so, this list is the group.
+    let is_group = list.iter().any(|i| {
+        matches!(i, menu::MenuInfo::MenuItemRadio { command_id: id, .. } if *id == command_id)
+    });
+    if is_group {
+        for i in list.iter_mut() {
+            if let menu::MenuInfo::MenuItemRadio {
+                command_id: id,
+                checked,
+                ..
+            } = i
+            {
+                *checked = *id == command_id;
+            }
+        }
+        return true;
+    }
+    // Otherwise descend into submenus.
+    for i in list.iter_mut() {
+        if let menu::MenuInfo::SubMenu { menu_list, .. } = i {
+            if set_radio_in_list(menu_list, command_id) {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 fn measure_text_width(qt: &QT, format: &IDWriteTextFormat, text: PCWSTR) -> f32 {

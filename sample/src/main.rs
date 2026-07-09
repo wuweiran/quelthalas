@@ -662,20 +662,22 @@ extern "system" fn window_process(
                                     text: w!("View"),
                                     menu_list: vec![MenuInfo::SubMenu {
                                         text: w!("Theme"),
-                                        // Theme switching isn't implemented yet, so both
-                                        // options are disabled — the submenu still shows
-                                        // off nested menus + disabled items.
+                                        // A working radio group: pick one, the checkmark
+                                        // follows. (The palette swap itself is a
+                                        // follow-up; the selection is live today.)
                                         menu_list: vec![
-                                            MenuInfo::MenuItem {
+                                            MenuInfo::MenuItemRadio {
                                                 text: w!("Light"),
                                                 command_id: CMD_VIEW_THEME_LIGHT,
-                                                disabled: true,
+                                                checked: true,
+                                                disabled: false,
                                                 secondary_text: None,
                                             },
-                                            MenuInfo::MenuItem {
+                                            MenuInfo::MenuItemRadio {
                                                 text: w!("Dark"),
                                                 command_id: CMD_VIEW_THEME_DARK,
-                                                disabled: true,
+                                                checked: false,
+                                                disabled: false,
                                                 secondary_text: None,
                                             },
                                         ],
@@ -1018,14 +1020,20 @@ extern "system" fn window_process(
             }
             WM_COMMAND => {
                 // Menu-bar picks arrive here (the menu posts WM_COMMAND with the
-                // item's command_id in wParam). About shows a dialog; the theme items
-                // are disabled, so they never post here.
+                // item's command_id in wParam). About shows a dialog; the Theme radios
+                // move the checkmark to the picked option.
                 let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *const AppState;
                 if raw.is_null() {
                     return DefWindowProcW(window, message, w_param, l_param);
                 }
                 let qt = &(*raw).qt;
-                match w_param.0 as u32 {
+                let id = w_param.0 as u32;
+                match id {
+                    CMD_VIEW_THEME_LIGHT | CMD_VIEW_THEME_DARK => {
+                        // Move the radio selection; the checkmark follows next open.
+                        // (Actually recoloring the app is a follow-up.)
+                        qt.menu_bar_set_radio((*raw).menu_bar, id);
+                    }
                     CMD_HELP_ABOUT => {
                         _ = qt.open_dialog(
                             window,

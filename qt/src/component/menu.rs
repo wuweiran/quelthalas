@@ -43,6 +43,16 @@ pub enum MenuInfo {
         disabled: bool,
         secondary_text: Option<PCWSTR>,
     },
+    /// A radio-select item: shows a leading checkmark when `checked`, and behaves
+    /// like a normal item on click (posts `WM_COMMAND(command_id)`). The caller owns
+    /// the selection — set `checked` per item and update it when a pick arrives.
+    MenuItemRadio {
+        text: PCWSTR,
+        command_id: u32,
+        checked: bool,
+        disabled: bool,
+        secondary_text: Option<PCWSTR>,
+    },
     SubMenu {
         menu_list: Vec<MenuInfo>,
         text: PCWSTR,
@@ -55,6 +65,14 @@ enum MenuItem {
         text: PCWSTR,
         id: u32,
         rect: RECT,
+        disabled: bool,
+        secondary_text: Option<PCWSTR>,
+    },
+    MenuItemRadio {
+        text: PCWSTR,
+        id: u32,
+        rect: RECT,
+        checked: bool,
         disabled: bool,
         secondary_text: Option<PCWSTR>,
     },
@@ -90,6 +108,8 @@ pub struct Context {
     secondary_text_brush: ID2D1SolidColorBrush,
     sub_menu_indicator_svg: ID2D1SvgDocument,
     sub_menu_indicator_focused_svg: ID2D1SvgDocument,
+    /// Leading checkmark for a checked `MenuItemRadio`.
+    checkmark_svg: ID2D1SvgDocument,
     fade_elapsed_ms: Cell<u32>,
 }
 
@@ -106,6 +126,20 @@ fn convert_menu_info_list_to_menu(menu_info_list: Vec<MenuInfo>) -> Menu {
                 text,
                 id: command_id,
                 rect: RECT::default(),
+                disabled,
+                secondary_text,
+            },
+            MenuInfo::MenuItemRadio {
+                text,
+                command_id,
+                checked,
+                disabled,
+                secondary_text,
+            } => MenuItem::MenuItemRadio {
+                text,
+                id: command_id,
+                rect: RECT::default(),
+                checked,
                 disabled,
                 secondary_text,
             },
@@ -371,6 +405,9 @@ fn find_item_by_coordinates(menu: &Menu, point: &mut POINT) -> HitTest {
                     MenuItem::MenuItem {
                         rect: item_rect, ..
                     }
+                    | MenuItem::MenuItemRadio {
+                        rect: item_rect, ..
+                    }
                     | MenuItem::SubMenu {
                         rect: item_rect, ..
                     }
@@ -590,6 +627,12 @@ fn menu_key_escape(mt: &mut Tracker) -> Result<bool> {
 const MENU_MARGIN: i32 = 4;
 const MENU_BORDER_WIDTH: i32 = 1;
 const MENU_LIST_GAP: i32 = 2;
+/// Checkmark glyph display size (px) for radio items — matches the dropdown's
+/// check column (Fluent Option checkIcon, fontSizeBase400). The 20px source SVG is
+/// scaled down to this.
+const CHECK_SIZE: i32 = 16;
+/// Left gutter reserved before a radio item's label (checkmark + a small gap).
+const RADIO_GUTTER: i32 = CHECK_SIZE + 6;
 
 // Fade-in animation: alpha eases 0 -> 255 over tokens.duration_normal using the
 // tokens.curve_decelerate_mid easing curve. (A bare fade wants a shorter duration
@@ -692,6 +735,21 @@ fn execute_focused_item(
         let item = &menu.items[focused_item_index];
         match item {
             MenuItem::MenuItem { id, disabled, .. } => unsafe {
+                if *disabled {
+                    Ok(ExecutionResult::NoExecuted)
+                } else {
+                    PostMessageW(
+                        Some(mt.owning_window),
+                        WM_COMMAND,
+                        WPARAM(*id as usize),
+                        LPARAM(0),
+                    )?;
+                    Ok(ExecutionResult::Executed)
+                }
+            },
+            MenuItem::MenuItemRadio { id, disabled, .. } => unsafe {
+                // Radios activate exactly like a normal item; the app updates the
+                // checkmark on the next open.
                 if *disabled {
                     Ok(ExecutionResult::NoExecuted)
                 } else {
@@ -1009,6 +1067,41 @@ fn calc_menu_item_size(
                     + 2 * tokens.spacing_vertical_s_nudge as i32)
                     .max(32);
             }
+            MenuItem::MenuItemRadio {
+                rect,
+                text,
+                secondary_text,
+                ..
+            } => {
+                // Same as MenuItem, plus a left gutter for the checkmark column.
+                SetRect(rect, org_x, org_y, org_x, org_y);
+                let direct_write_factory = &qt.dwrite_factory;
+                let text_layout = direct_write_factory.CreateTextLayout(
+                    text.as_wide(),
+                    text_format,
+                    290f32,
+                    500f32,
+                )?;
+                let mut metrics = DWRITE_TEXT_METRICS::default();
+                text_layout.GetMetrics(&mut metrics)?;
+                let mut content_width = metrics.width.ceil() as i32 + RADIO_GUTTER;
+                if let Some(secondary) = secondary_text {
+                    let secondary_layout = direct_write_factory.CreateTextLayout(
+                        secondary.as_wide(),
+                        text_format,
+                        290f32,
+                        500f32,
+                    )?;
+                    let mut secondary_metrics = DWRITE_TEXT_METRICS::default();
+                    secondary_layout.GetMetrics(&mut secondary_metrics)?;
+                    content_width += secondary_metrics.width.ceil() as i32
+                        + 6 * tokens.spacing_vertical_s_nudge as i32;
+                }
+                rect.right += content_width + 2 * tokens.spacing_vertical_s_nudge as i32;
+                rect.bottom += (metrics.height.ceil() as i32
+                    + 2 * tokens.spacing_vertical_s_nudge as i32)
+                    .max(32);
+            }
             MenuItem::SubMenu { rect, text, .. } => {
                 SetRect(rect, org_x, org_y, org_x, org_y);
                 let direct_write_factory = &qt.dwrite_factory;
@@ -1070,11 +1163,13 @@ fn calc_popup_menu_size(qt: &QT, menu: &mut Menu, max_height: i32) -> Result<(i3
             calc_menu_item_size(qt, item, org_x, org_y, &text_format)?;
             let desired_width = match item {
                 MenuItem::MenuItem { rect, .. }
+                | MenuItem::MenuItemRadio { rect, .. }
                 | MenuItem::SubMenu { rect, .. }
                 | MenuItem::MenuDivider { rect } => rect.right,
             };
             let desired_height = match item {
                 MenuItem::MenuItem { rect, .. }
+                | MenuItem::MenuItemRadio { rect, .. }
                 | MenuItem::SubMenu { rect, .. }
                 | MenuItem::MenuDivider { rect } => rect.bottom,
             };
@@ -1090,6 +1185,7 @@ fn calc_popup_menu_size(qt: &QT, menu: &mut Menu, max_height: i32) -> Result<(i3
             let item = &mut menu.items[start];
             match item {
                 MenuItem::MenuItem { rect, .. }
+                | MenuItem::MenuItemRadio { rect, .. }
                 | MenuItem::SubMenu { rect, .. }
                 | MenuItem::MenuDivider { rect } => rect.right = menu.menu_list_rect.right,
             }
@@ -1204,6 +1300,9 @@ fn draw_menu_item(
         MenuItem::MenuItem {
             rect: item_rect, ..
         }
+        | MenuItem::MenuItemRadio {
+            rect: item_rect, ..
+        }
         | MenuItem::SubMenu {
             rect: item_rect, ..
         }
@@ -1211,7 +1310,8 @@ fn draw_menu_item(
     };
     if focused {
         let show_focused = match menu_item {
-            MenuItem::MenuItem { disabled, .. } => !*disabled,
+            MenuItem::MenuItem { disabled, .. }
+            | MenuItem::MenuItemRadio { disabled, .. } => !*disabled,
             MenuItem::SubMenu { .. } => true,
             MenuItem::MenuDivider { .. } => false,
         };
@@ -1279,6 +1379,71 @@ fn draw_menu_item(
                         D2D1_DRAW_TEXT_OPTIONS_NONE,
                         DWRITE_MEASURING_MODE_NATURAL,
                     );
+                }
+            }
+            MenuItem::MenuItemRadio {
+                text,
+                checked,
+                disabled,
+                secondary_text,
+                ..
+            } => {
+                // Label indented past the checkmark gutter; otherwise identical to
+                // MenuItem. The gutter holds a checkmark when this radio is selected.
+                let text_rect = D2D_RECT_F {
+                    left: rect.left as f32 + tokens.spacing_vertical_s_nudge + RADIO_GUTTER as f32,
+                    top: rect.top as f32 + tokens.spacing_vertical_s_nudge,
+                    right: rect.right as f32 - tokens.spacing_vertical_s_nudge,
+                    bottom: rect.bottom as f32 - tokens.spacing_vertical_s_nudge,
+                };
+                let text_brush = if *disabled {
+                    &context.text_disabled_brush
+                } else if focused {
+                    &context.text_focused_brush
+                } else {
+                    &context.text_brush
+                };
+                context.render_target.DrawText(
+                    text.as_wide(),
+                    &context.text_format,
+                    &text_rect,
+                    text_brush,
+                    D2D1_DRAW_TEXT_OPTIONS_NONE,
+                    DWRITE_MEASURING_MODE_NATURAL,
+                );
+                if let Some(secondary) = secondary_text {
+                    let secondary_brush = if *disabled {
+                        &context.text_disabled_brush
+                    } else {
+                        &context.secondary_text_brush
+                    };
+                    context.render_target.DrawText(
+                        secondary.as_wide(),
+                        &context.secondary_text_format,
+                        &text_rect,
+                        secondary_brush,
+                        D2D1_DRAW_TEXT_OPTIONS_NONE,
+                        DWRITE_MEASURING_MODE_NATURAL,
+                    );
+                }
+                if *checked {
+                    // Checkmark in the gutter, vertically centered — 20px source SVG
+                    // scaled to CHECK_SIZE, exactly like the dropdown's check column.
+                    let check_x = rect.left as f32 + tokens.spacing_vertical_s_nudge;
+                    let check_y =
+                        rect.top as f32 + ((rect.bottom - rect.top - CHECK_SIZE) as f32 / 2.0);
+                    let scale = CHECK_SIZE as f32 / 20.0;
+                    let device_context5 = context.render_target.cast::<ID2D1DeviceContext5>()?;
+                    device_context5.SetTransform(&Matrix3x2 {
+                        M11: scale,
+                        M12: 0.0,
+                        M21: 0.0,
+                        M22: scale,
+                        M31: check_x,
+                        M32: check_y,
+                    });
+                    device_context5.DrawSvgDocument(&context.checkmark_svg);
+                    device_context5.SetTransform(&Matrix3x2::identity());
                 }
             }
             MenuItem::SubMenu { text, .. } => {
@@ -1453,6 +1618,26 @@ fn on_create(window: HWND, params: CreateParams, x: i32, y: i32) -> Result<Conte
                     },
                 )?,
             };
+        // Leading checkmark for checked radio items — same glyph the dropdown uses
+        // (checkmark_20_filled, drawn at CHECK_SIZE). Baked #212121 = foreground1,
+        // reads on both the white and hover-gray item backgrounds.
+        let checkmark_icon = Icon::checkmark_20_filled();
+        let checkmark_svg = match SHCreateMemStream(Some(checkmark_icon.svg.as_bytes())) {
+            None => device_context5.CreateSvgDocument(
+                None,
+                D2D_SIZE_F {
+                    width: checkmark_icon.size as f32,
+                    height: checkmark_icon.size as f32,
+                },
+            )?,
+            Some(svg_stream) => device_context5.CreateSvgDocument(
+                &svg_stream,
+                D2D_SIZE_F {
+                    width: checkmark_icon.size as f32,
+                    height: checkmark_icon.size as f32,
+                },
+            )?,
+        };
         Ok(Context {
             qt: params.qt,
             menu: params.menu,
@@ -1466,6 +1651,7 @@ fn on_create(window: HWND, params: CreateParams, x: i32, y: i32) -> Result<Conte
             secondary_text_brush,
             sub_menu_indicator_svg,
             sub_menu_indicator_focused_svg,
+            checkmark_svg,
             fade_elapsed_ms: Cell::new(0),
         })
     }
