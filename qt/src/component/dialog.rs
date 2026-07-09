@@ -232,11 +232,20 @@ fn layout(window: HWND, context: &Context) -> Result<()> {
         let mut content_metrics = DWRITE_TEXT_METRICS::default();
         content_text_layout.GetMetrics(&mut content_metrics)?;
 
-        let scaled_width = (((surface_padding * 2f32 + title_metrics.width)
+        // Width fits the title/content text (capped at 600), but must also be
+        // wide enough for the two buttons + their gaps, or they'd overflow the
+        // left edge when the text is short (button widths are already device px).
+        let text_width = (((surface_padding * 2f32 + title_metrics.width)
             .max(surface_padding * 2f32 + content_metrics.width)
             .min(600f32))
             * scaling_factor)
             .ceil() as i32;
+        // Buttons sit at [scaled_width - (cancel+ok+32*s) .. scaled_width - 24*s];
+        // the left edge lands at surface_padding (24) when width = cancel+ok+56*s.
+        let buttons_min_width = cancel_button_width
+            + ok_button_width
+            + ((surface_padding + gap + surface_padding) * scaling_factor).ceil() as i32;
+        let scaled_width = text_width.max(buttons_min_width);
         let buttons_top =
             surface_padding + title_metrics.height + gap + content_metrics.height + gap;
         let scaled_height = ((buttons_top + surface_padding) * scaling_factor).ceil() as i32
