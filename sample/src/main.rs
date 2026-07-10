@@ -1008,6 +1008,7 @@ fn main() -> Result<()> {
             style: Default::default(),
             lpfnWndProc: Some(window_process),
             lpszClassName: class_name,
+            hCursor: LoadCursorW(None, IDC_ARROW).unwrap_or_default(),
             ..Default::default()
         };
         RegisterClassExW(&wc);
