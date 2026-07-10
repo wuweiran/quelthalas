@@ -7,7 +7,7 @@ use windows::Win32::Graphics::DirectWrite::{
 use windows::core::PCWSTR;
 use windows::core::Result;
 use windows::core::w;
-pub(crate) struct Tokens {
+pub struct Tokens {
     pub color_neutral_background1: D2D1_COLOR_F,
     pub color_neutral_background1_hover: D2D1_COLOR_F,
     pub color_neutral_background1_pressed: D2D1_COLOR_F,
@@ -64,8 +64,11 @@ pub(crate) struct Tokens {
     pub spacing_horizontal_s_nudge: f32,
     pub spacing_horizontal_s: f32,
     pub spacing_horizontal_m: f32,
+    pub spacing_horizontal_xxl: f32,
+    pub spacing_horizontal_xxxl: f32,
     pub spacing_vertical_s_nudge: f32,
     pub spacing_vertical_s: f32,
+    pub spacing_vertical_xxl: f32,
     pub border_radius_none: f32,
     pub border_radius_small: f32,
     pub border_radius_medium: f32,
@@ -153,8 +156,11 @@ impl Tokens {
             spacing_horizontal_s_nudge: 6f32,
             spacing_horizontal_s: 8f32,
             spacing_horizontal_m: 12f32,
+            spacing_horizontal_xxl: 24f32,
+            spacing_horizontal_xxxl: 32f32,
             spacing_vertical_s_nudge: 6f32,
             spacing_vertical_s: 8f32,
+            spacing_vertical_xxl: 24f32,
             border_radius_none: 0f32,
             border_radius_small: 2f32,
             border_radius_medium: 4f32,
@@ -223,8 +229,11 @@ impl Tokens {
             spacing_horizontal_s_nudge: 6f32,
             spacing_horizontal_s: 8f32,
             spacing_horizontal_m: 12f32,
+            spacing_horizontal_xxl: 24f32,
+            spacing_horizontal_xxxl: 32f32,
             spacing_vertical_s_nudge: 6f32,
             spacing_vertical_s: 8f32,
+            spacing_vertical_xxl: 24f32,
             border_radius_none: 0f32,
             border_radius_small: 2f32,
             border_radius_medium: 4f32,
@@ -303,17 +312,17 @@ impl TypographyStyles {
     }
 }
 
-pub(crate) struct Theme {
+pub struct Theme {
     pub tokens: Tokens,
-    pub typography_styles: TypographyStyles,
+    pub(crate) typography_styles: TypographyStyles,
 }
 
 impl Theme {
-    pub(crate) fn web_light() -> Self {
+    pub fn web_light() -> Self {
         Self::from(Tokens::web_light())
     }
 
-    pub(crate) fn web_dark() -> Self {
+    pub fn web_dark() -> Self {
         Self::from(Tokens::web_dark())
     }
 

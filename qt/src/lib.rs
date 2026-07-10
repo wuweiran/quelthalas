@@ -16,7 +16,8 @@ use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::WindowsAndMessaging::USER_DEFAULT_SCREEN_DPI;
 use windows::core::{Interface, Result};
 
-use crate::theme::Theme;
+pub use crate::theme::Theme;
+pub use crate::theme::Tokens;
 
 pub struct MouseEvent {
     pub on_click: Box<dyn Fn(&HWND)>,
@@ -39,19 +40,16 @@ pub struct QT {
     pub(crate) stroke_style: ID2D1StrokeStyle,
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, Default)]
-pub enum Appearance {
-    #[default]
-    WebLight,
-    WebDark,
-}
-
 impl QT {
-    pub fn new() -> Result<Self> {
-        Self::new_with(Appearance::WebLight)
+    pub fn theme(&self) -> &Theme {
+        &self.theme
     }
 
-    pub fn new_with(appearance: Appearance) -> Result<Self> {
+    pub fn new() -> Result<Self> {
+        Self::new_with(Theme::web_light())
+    }
+
+    pub fn new_with(theme: Theme) -> Result<Self> {
         let d2d_factory = unsafe {
             D2D1CreateFactory::<ID2D1Factory1>(
                 D2D1_FACTORY_TYPE_SINGLE_THREADED,
@@ -67,10 +65,6 @@ impl QT {
             d2d_factory
                 .CreateStrokeStyle(&D2D1_STROKE_STYLE_PROPERTIES1::default(), None)?
                 .cast::<ID2D1StrokeStyle>()?
-        };
-        let theme = match appearance {
-            Appearance::WebLight => Theme::web_light(),
-            Appearance::WebDark => Theme::web_dark(),
         };
         Ok(QT {
             theme: Rc::new(theme),

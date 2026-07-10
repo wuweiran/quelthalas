@@ -25,7 +25,22 @@ use quelthalas::component::{
 };
 use quelthalas::icon::Icon;
 use quelthalas::layout::Stack;
-use quelthalas::{Appearance, MouseEvent, QT};
+use quelthalas::{MouseEvent, QT, Theme};
+
+#[derive(Copy, Clone, PartialEq, Eq)]
+enum AppTheme {
+    WebLight,
+    WebDark,
+}
+
+impl AppTheme {
+    fn theme(self) -> Theme {
+        match self {
+            AppTheme::WebLight => Theme::web_light(),
+            AppTheme::WebDark => Theme::web_dark(),
+        }
+    }
+}
 
 /// One tab's page: a laid-out Stack + the flat list of its controls (so we can
 /// show/hide the whole page at once). `controls` excludes the always-visible
@@ -46,9 +61,7 @@ struct AppState {
     // The menu bar child (above the tab strip). WM_PAINT reads its geometry too so
     // the chrome band covers it; Alt/F10 forwards here to enter menu mode.
     menu_bar: HWND,
-    // The active theme + its sample-side surface palette. WM_PAINT reads the
-    // palette; the theme toggle rebuilds everything with the other appearance.
-    appearance: Appearance,
+    theme: AppTheme,
     palette: Palette,
 }
 
@@ -107,10 +120,10 @@ unsafe extern "system" fn collect_child(hwnd: HWND, lparam: LPARAM) -> BOOL {
 /// Rebuild the whole UI under `window` with `target` theme, preserving the active
 /// tab. Every control clones the theme at creation, so a theme change means
 /// destroy-all + recreate (see the plan): we can't re-theme frozen controls.
-unsafe fn retheme(window: HWND, target: Appearance) {
+unsafe fn retheme(window: HWND, target: AppTheme) {
     unsafe {
         let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut AppState;
-        if raw.is_null() || (*raw).appearance == target {
+        if raw.is_null() || (*raw).theme == target {
             return;
         }
         let active = (*raw).active;
@@ -131,7 +144,7 @@ unsafe fn retheme(window: HWND, target: Appearance) {
         SetWindowLongPtrW(window, GWLP_USERDATA, 0);
 
         // 3. Rebuild with a fresh QT carrying the new theme.
-        let Ok(qt) = QT::new_with(target) else {
+        let Ok(qt) = QT::new_with(target.theme()) else {
             return;
         };
         let mut state = Box::new(build_ui(qt, window, target, active));
@@ -217,10 +230,10 @@ impl Palette {
             page_ref: COLORREF(0x1f1f1f),
         }
     }
-    fn for_appearance(appearance: Appearance) -> Self {
-        match appearance {
-            Appearance::WebLight => Palette::light(),
-            Appearance::WebDark => Palette::dark(),
+    fn for_theme(theme: AppTheme) -> Self {
+        match theme {
+            AppTheme::WebLight => Palette::light(),
+            AppTheme::WebDark => Palette::dark(),
         }
     }
 }
@@ -229,8 +242,8 @@ impl Palette {
 /// fresh `AppState`. Called at startup and again on a theme toggle (the whole UI
 /// is recreated because each control clones the theme at creation). `active` is
 /// the tab to select, so a toggle keeps the current page.
-fn build_ui(qt: QT, window: HWND, appearance: Appearance, active: usize) -> AppState {
-    let palette = Palette::for_appearance(appearance);
+fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
+    let palette = Palette::for_theme(theme);
     unsafe {
                 let icon = Icon::calendar_month_20_regular();
 
@@ -744,14 +757,14 @@ fn build_ui(qt: QT, window: HWND, appearance: Appearance, active: usize) -> AppS
                                             MenuInfo::MenuItemRadio {
                                                 text: w!("Web Light"),
                                                 command_id: CMD_VIEW_THEME_LIGHT,
-                                                checked: appearance == Appearance::WebLight,
+                                                checked: theme == AppTheme::WebLight,
                                                 disabled: false,
                                                 secondary_text: None,
                                             },
                                             MenuInfo::MenuItemRadio {
                                                 text: w!("Web Dark"),
                                                 command_id: CMD_VIEW_THEME_DARK,
-                                                checked: appearance == Appearance::WebDark,
+                                                checked: theme == AppTheme::WebDark,
                                                 disabled: false,
                                                 secondary_text: None,
                                             },
@@ -825,18 +838,24 @@ fn build_ui(qt: QT, window: HWND, appearance: Appearance, active: usize) -> AppS
                     .unwrap_or_default();
 
                 // --- Page 0: Basic Input ---
+                let gap_s = qt.theme().tokens.spacing_vertical_s;
+                let gap_m = qt.theme().tokens.spacing_horizontal_m;
+                let gap_section = qt.theme().tokens.spacing_vertical_xxl;
+                let pad_page = qt.theme().tokens.spacing_horizontal_xxl;
+                let gap_gutter = qt.theme().tokens.spacing_horizontal_xxxl;
+
                 // Two columns (this page only): the other tabs stay single-column.
                 // Left: buttons, checkbox, radio, slider, switch, link. Right: the
                 // selection controls (dropdown, combobox), with room to grow.
                 let basic_left = Stack::vertical()
-                    .gap(24.0)
+                    .gap(gap_section)
                     .add_stack(
                         Stack::vertical()
-                            .gap(8.0)
+                            .gap(gap_s)
                             .add(buttons_label)
                             .add_stack(
                                 Stack::horizontal()
-                                    .gap(8.0)
+                                    .gap(gap_s)
                                     .add(rounded)
                                     .add(circular)
                                     .add(square)
@@ -844,16 +863,16 @@ fn build_ui(qt: QT, window: HWND, appearance: Appearance, active: usize) -> AppS
                             )
                             .add_stack(
                                 Stack::vertical()
-                                    .gap(8.0)
+                                    .gap(gap_s)
                                     .add(small_icon)
                                     .add(icon_after)
                                     .add(large_icon),
                             ),
                     )
-                    .add_stack(Stack::vertical().gap(8.0).add(checkbox_label).add(checkbox))
+                    .add_stack(Stack::vertical().gap(gap_s).add(checkbox_label).add(checkbox))
                     .add_stack(
                         Stack::vertical()
-                            .gap(8.0)
+                            .gap(gap_s)
                             .add(radio_label)
                             .add_stack(
                                 Stack::horizontal()
@@ -863,29 +882,29 @@ fn build_ui(qt: QT, window: HWND, appearance: Appearance, active: usize) -> AppS
                                     .add(radio_orange),
                             ),
                     )
-                    .add_stack(Stack::vertical().gap(8.0).add(slider_label).add(slider))
-                    .add_stack(Stack::vertical().gap(8.0).add(switch_label).add(switch))
-                    .add_stack(Stack::vertical().gap(8.0).add(link_label).add(link));
+                    .add_stack(Stack::vertical().gap(gap_s).add(slider_label).add(slider))
+                    .add_stack(Stack::vertical().gap(gap_s).add(switch_label).add(switch))
+                    .add_stack(Stack::vertical().gap(gap_s).add(link_label).add(link));
                 let basic_right = Stack::vertical()
-                    .gap(24.0)
-                    .add_stack(Stack::vertical().gap(8.0).add(dropdown_label).add(dropdown))
-                    .add_stack(Stack::vertical().gap(8.0).add(combobox_label).add(combobox));
+                    .gap(gap_section)
+                    .add_stack(Stack::vertical().gap(gap_s).add(dropdown_label).add(dropdown))
+                    .add_stack(Stack::vertical().gap(gap_s).add(combobox_label).add(combobox));
                 let basic_input = Stack::horizontal()
-                    .gap(48.0)
+                    .gap(gap_gutter)
                     .add_stack(basic_left)
                     .add_stack(basic_right);
 
                 // --- Page 1: Text ---
                 // input, text
                 let text_page = Stack::vertical()
-                    .gap(24.0)
+                    .gap(gap_section)
                     .add_stack(
                         Stack::vertical()
-                            .gap(8.0)
+                            .gap(gap_s)
                             .add(inputs_label)
                             .add_stack(
                                 Stack::horizontal()
-                                    .gap(12.0)
+                                    .gap(gap_m)
                                     .add(input_default)
                                     .add(input_filled)
                                     .add(input_filled_darker),
@@ -894,7 +913,7 @@ fn build_ui(qt: QT, window: HWND, appearance: Appearance, active: usize) -> AppS
                     )
                     .add_stack(
                         Stack::vertical()
-                            .gap(8.0)
+                            .gap(gap_s)
                             .add(text_label)
                             .add(text_intro)
                             .add(p_caption1)
@@ -912,18 +931,18 @@ fn build_ui(qt: QT, window: HWND, appearance: Appearance, active: usize) -> AppS
                 // --- Page 2: Status & info ---
                 // progress_bar, spinner, tooltip
                 let status_info = Stack::vertical()
-                    .gap(24.0)
+                    .gap(gap_section)
                     .add_stack(
                         Stack::vertical()
-                            .gap(8.0)
+                            .gap(gap_s)
                             .add(progress_label)
                             .add(progress_medium)
                             .add(progress_large),
                     )
-                    .add_stack(Stack::vertical().gap(8.0).add(spinner_label).add(spinner))
+                    .add_stack(Stack::vertical().gap(gap_s).add(spinner_label).add(spinner))
                     .add_stack(
                         Stack::vertical()
-                            .gap(8.0)
+                            .gap(gap_s)
                             .add(tooltip_label)
                             .add(tooltip_button),
                     );
@@ -931,10 +950,10 @@ fn build_ui(qt: QT, window: HWND, appearance: Appearance, active: usize) -> AppS
                 // --- Page 3: Other ---
                 // menu, dialog, tab_list
                 let other = Stack::vertical()
-                    .gap(24.0)
-                    .add_stack(Stack::vertical().gap(8.0).add(menu_label).add(menu_hint))
-                    .add_stack(Stack::vertical().gap(8.0).add(dialog_label).add(open_dialog))
-                    .add_stack(Stack::vertical().gap(8.0).add(tablist_label).add(demo_tabs));
+                    .gap(gap_section)
+                    .add_stack(Stack::vertical().gap(gap_s).add(menu_label).add(menu_hint))
+                    .add_stack(Stack::vertical().gap(gap_s).add(dialog_label).add(open_dialog))
+                    .add_stack(Stack::vertical().gap(gap_s).add(tablist_label).add(demo_tabs));
 
                 // Each page's own controls (for show/hide) — the strip + Close are
                 // always visible, so they're not in these lists.
@@ -953,13 +972,13 @@ fn build_ui(qt: QT, window: HWND, appearance: Appearance, active: usize) -> AppS
                             .add_fill(tabs)
                             .add_stack(
                                 Stack::vertical()
-                                    .padding(24.0)
-                                    .gap(24.0)
+                                    .padding(pad_page)
+                                    .gap(gap_section)
                                     .add_stack(content),
                             )
                             .spring()
                             .add_stack(
-                                Stack::horizontal().padding(24.0).spring().add(close),
+                                Stack::horizontal().padding(pad_page).spring().add(close),
                             );
                         Page { stack, controls }
                     })
@@ -971,7 +990,7 @@ fn build_ui(qt: QT, window: HWND, appearance: Appearance, active: usize) -> AppS
             menu_target: menu_hint,
             tab_list: tabs,
             menu_bar,
-            appearance,
+            theme,
             palette,
         }
     }
@@ -1031,10 +1050,10 @@ extern "system" fn window_process(
     unsafe {
         match message {
             WM_CREATE => {
-                let Ok(qt) = QT::new_with(Appearance::WebLight) else {
+                let Ok(qt) = QT::new_with(Theme::web_light()) else {
                     return LRESULT(-1);
                 };
-                let mut state = Box::new(build_ui(qt, window, Appearance::WebLight, 0));
+                let mut state = Box::new(build_ui(qt, window, AppTheme::WebLight, 0));
                 // Show the initial page, hide the rest, and do the initial arrange.
                 show_page(&mut state, window, 0);
                 SetWindowLongPtrW(window, GWLP_USERDATA, Box::into_raw(state) as _);
@@ -1178,8 +1197,8 @@ extern "system" fn window_process(
                 }
                 let id = w_param.0 as u32;
                 match id {
-                    CMD_VIEW_THEME_LIGHT => retheme(window, Appearance::WebLight),
-                    CMD_VIEW_THEME_DARK => retheme(window, Appearance::WebDark),
+                    CMD_VIEW_THEME_LIGHT => retheme(window, AppTheme::WebLight),
+                    CMD_VIEW_THEME_DARK => retheme(window, AppTheme::WebDark),
                     CMD_HELP_ABOUT => {
                         let qt = &(*raw).qt;
                         _ = qt.open_dialog(
