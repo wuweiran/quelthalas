@@ -20,8 +20,8 @@ use quelthalas::component::button::IconPosition;
 use quelthalas::component::dialog::DialogResult;
 use quelthalas::component::menu::MenuInfo;
 use quelthalas::component::{
-    button, checkbox, dialog, dropdown, input, link, menu, menu_bar, progress_bar, radio, slider,
-    spinner, switch, tab_list, text,
+    button, checkbox, combobox, dialog, dropdown, input, link, menu, menu_bar, option, progress_bar,
+    radio, slider, spinner, switch, tab_list, text,
 };
 use quelthalas::icon::Icon;
 use quelthalas::layout::Stack;
@@ -559,6 +559,16 @@ fn build_ui(qt: QT, window: HWND, appearance: Appearance, active: usize) -> AppS
 
                 // Dropdown: click the field to open a flat popup list; pick one.
                 // Ferret is disabled (greyed, unclickable, skipped by keyboard).
+                // One list, shared by the dropdown (pick-only) and the combobox
+                // (type-to-filter) so they demo the same data two ways.
+                let animals = vec![
+                    option::Item::new(w!("Cat")),
+                    option::Item::new(w!("Dog")),
+                    option::Item::disabled(w!("Ferret")),
+                    option::Item::new(w!("Fish")),
+                    option::Item::new(w!("Hamster")),
+                    option::Item::new(w!("Snake")),
+                ];
                 let dropdown_label = section(w!("Dropdown"));
                 let dropdown = qt
                     .create_dropdown(
@@ -566,19 +576,25 @@ fn build_ui(qt: QT, window: HWND, appearance: Appearance, active: usize) -> AppS
                         0,
                         0,
                         dropdown::Props {
-                            options: vec![
-                                dropdown::Item::new(w!("Cat")),
-                                dropdown::Item::new(w!("Caterpillar")),
-                                dropdown::Item::new(w!("Corgi")),
-                                dropdown::Item::new(w!("Chupacabra")),
-                                dropdown::Item::new(w!("Dog")),
-                                dropdown::Item::disabled(w!("Ferret")),
-                                dropdown::Item::new(w!("Fish")),
-                                dropdown::Item::new(w!("Fox")),
-                                dropdown::Item::new(w!("Hamster")),
-                                dropdown::Item::new(w!("Snake")),
-                            ],
+                            options: animals.clone(),
                             placeholder: w!("Select an animal"),
+                            background: Some(palette.canvas),
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap_or_default();
+
+                // Combobox: editable field — type to filter suggestions, and it
+                // keeps what you type (Win32 CBS_DROPDOWN).
+                let combobox_label = section(w!("Combobox"));
+                let combobox = qt
+                    .create_combobox(
+                        window,
+                        0,
+                        0,
+                        combobox::Props {
+                            options: animals.clone(),
+                            placeholder: w!("Type or pick an animal"),
                             background: Some(palette.canvas),
                             ..Default::default()
                         },
@@ -809,8 +825,10 @@ fn build_ui(qt: QT, window: HWND, appearance: Appearance, active: usize) -> AppS
                     .unwrap_or_default();
 
                 // --- Page 0: Basic Input ---
-                // button, checkbox, dropdown, link, radio, slider, switch
-                let basic_input = Stack::vertical()
+                // Two columns (this page only): the other tabs stay single-column.
+                // Left: buttons, checkbox, radio, slider, switch, link. Right: the
+                // selection controls (dropdown, combobox), with room to grow.
+                let basic_left = Stack::vertical()
                     .gap(24.0)
                     .add_stack(
                         Stack::vertical()
@@ -825,7 +843,7 @@ fn build_ui(qt: QT, window: HWND, appearance: Appearance, active: usize) -> AppS
                                     .add(primary),
                             )
                             .add_stack(
-                                Stack::horizontal()
+                                Stack::vertical()
                                     .gap(8.0)
                                     .add(small_icon)
                                     .add(icon_after)
@@ -845,10 +863,17 @@ fn build_ui(qt: QT, window: HWND, appearance: Appearance, active: usize) -> AppS
                                     .add(radio_orange),
                             ),
                     )
-                    .add_stack(Stack::vertical().gap(8.0).add(dropdown_label).add(dropdown))
                     .add_stack(Stack::vertical().gap(8.0).add(slider_label).add(slider))
                     .add_stack(Stack::vertical().gap(8.0).add(switch_label).add(switch))
                     .add_stack(Stack::vertical().gap(8.0).add(link_label).add(link));
+                let basic_right = Stack::vertical()
+                    .gap(24.0)
+                    .add_stack(Stack::vertical().gap(8.0).add(dropdown_label).add(dropdown))
+                    .add_stack(Stack::vertical().gap(8.0).add(combobox_label).add(combobox));
+                let basic_input = Stack::horizontal()
+                    .gap(48.0)
+                    .add_stack(basic_left)
+                    .add_stack(basic_right);
 
                 // --- Page 1: Text ---
                 // input, text

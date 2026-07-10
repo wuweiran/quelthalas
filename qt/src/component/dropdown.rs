@@ -63,28 +63,7 @@ impl Default for MouseEvent {
     }
 }
 
-/// One option in the list. `disabled` options are greyed, unclickable, and
-/// skipped by keyboard navigation (Fluent's `<Option disabled>`).
-#[derive(Copy, Clone)]
-pub struct Item {
-    pub text: PCWSTR,
-    pub disabled: bool,
-}
-
-impl Item {
-    pub fn new(text: PCWSTR) -> Self {
-        Item {
-            text,
-            disabled: false,
-        }
-    }
-    pub fn disabled(text: PCWSTR) -> Self {
-        Item {
-            text,
-            disabled: true,
-        }
-    }
-}
+use crate::component::option::Item;
 
 pub struct Props {
     /// Options shown in the list. The caller keeps the strings alive (same
