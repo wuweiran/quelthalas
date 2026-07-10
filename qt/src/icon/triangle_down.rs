@@ -1,0 +1,17 @@
+use crate::icon::Icon;
+use windows_core::s;
+
+impl Icon {
+    pub fn triangle_down_20_filled() -> Icon {
+        Icon {
+            // PLACEHOLDER — replace the <svg>…</svg> below with the contents of
+            // https://raw.githubusercontent.com/microsoft/fluentui-system-icons/main/assets/Triangle%20Down/SVG/ic_fluent_triangle_down_20_filled.svg
+            svg: s!(
+                r##"<svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+<path d="M11.3195 17.2145C10.7522 18.2619 9.24903 18.2619 8.68166 17.2145L2.1822 5.21594C1.64081 4.21649 2.36446 3.0015 3.50113 3.0015H16.5C17.6367 3.0015 18.3604 4.21649 17.819 5.21594L11.3195 17.2145Z" fill="#212121"/>
+</svg>"##
+            ),
+            size: 20,
+        }
+    }
+}

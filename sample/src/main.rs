@@ -20,7 +20,7 @@ use quelthalas::component::dialog::DialogResult;
 use quelthalas::component::menu::MenuInfo;
 use quelthalas::component::{
     button, checkbox, combobox, dialog, dropdown, input, link, menu, menu_bar, option, progress_bar,
-    radio, slider, spin_button, spinner, switch, tab_list, text,
+    radio, slider, spin_button, spinner, switch, tab_list, text, textarea,
 };
 use quelthalas::icon::Icon;
 use quelthalas::layout::Stack;
@@ -624,6 +624,22 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
                     )
                     .unwrap_or_default();
 
+                let textarea_label = section(w!("Textarea"));
+                let textarea = qt
+                    .create_textarea(
+                        window,
+                        0,
+                        0,
+                        textarea::Props {
+                            width: 280,
+                            height: 96,
+                            placeholder: Some(w!("Type here\u{2026}")),
+                            background: Some(palette.canvas),
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap_or_default();
+
                 // Slider: drag the thumb or click the rail; arrows step the value.
                 let slider_label = section(w!("Slider"));
                 let slider = qt
@@ -911,8 +927,8 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
                     .add_stack(basic_right);
 
                 // --- Page 1: Text ---
-                // input, text
-                let text_page = Stack::vertical()
+                // input, text | textarea
+                let text_left = Stack::vertical()
                     .gap(gap_section)
                     .add_stack(
                         Stack::vertical()
@@ -943,6 +959,18 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
                             .add(p_title2)
                             .add(p_title1),
                     );
+                let text_right = Stack::vertical()
+                    .gap(gap_section)
+                    .add_stack(
+                        Stack::vertical()
+                            .gap(gap_s)
+                            .add(textarea_label)
+                            .add(textarea),
+                    );
+                let text_page = Stack::horizontal()
+                    .gap(gap_gutter)
+                    .add_stack(text_left)
+                    .add_stack(text_right);
 
                 // --- Page 2: Status & info ---
                 // progress_bar, spinner, tooltip

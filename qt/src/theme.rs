@@ -13,6 +13,7 @@ pub struct Tokens {
     pub color_neutral_background1_pressed: D2D1_COLOR_F,
     pub color_neutral_background3: D2D1_COLOR_F,
     pub color_neutral_background6: D2D1_COLOR_F,
+    pub color_neutral_background_alpha: D2D1_COLOR_F,
     pub color_brand_background: D2D1_COLOR_F,
     pub color_brand_background_hover: D2D1_COLOR_F,
     pub color_brand_stroke2_contrast: D2D1_COLOR_F,
@@ -64,9 +65,11 @@ pub struct Tokens {
     pub line_height_base600: f32,
     pub line_height_base700: f32,
     pub line_height_base800: f32,
+    pub spacing_horizontal_xxs: f32,
     pub spacing_horizontal_xs: f32,
     pub spacing_horizontal_s_nudge: f32,
     pub spacing_horizontal_s: f32,
+    pub spacing_horizontal_m_nudge: f32,
     pub spacing_horizontal_m: f32,
     pub spacing_horizontal_xxl: f32,
     pub spacing_horizontal_xxxl: f32,
@@ -101,6 +104,17 @@ macro_rules! rgb {
     }};
 }
 
+macro_rules! rgba {
+    ($r:expr, $g:expr, $b:expr, $a:expr) => {{
+        D2D1_COLOR_F {
+            r: $r as f32 / 255.0,
+            g: $g as f32 / 255.0,
+            b: $b as f32 / 255.0,
+            a: $a,
+        }
+    }};
+}
+
 impl Tokens {
     fn web_light() -> Self {
         Tokens {
@@ -109,6 +123,7 @@ impl Tokens {
             color_neutral_background1_pressed: rgb!("#e0e0e0"),
             color_neutral_background3: rgb!("#f5f5f5"),
             color_neutral_background6: rgb!("#e6e6e6"),
+            color_neutral_background_alpha: rgba!(255, 255, 255, 0.5),
             color_brand_background: rgb!("#0f6cbd"),
             color_brand_background_hover: rgb!("#115ea3"),
             color_brand_stroke2_contrast: rgb!("#b4d6fa"),
@@ -160,9 +175,11 @@ impl Tokens {
             line_height_base600: 32f32,
             line_height_base700: 36f32,
             line_height_base800: 40f32,
+            spacing_horizontal_xxs: 2f32,
             spacing_horizontal_xs: 4f32,
             spacing_horizontal_s_nudge: 6f32,
             spacing_horizontal_s: 8f32,
+            spacing_horizontal_m_nudge: 10f32,
             spacing_horizontal_m: 12f32,
             spacing_horizontal_xxl: 24f32,
             spacing_horizontal_xxxl: 32f32,
@@ -186,6 +203,7 @@ impl Tokens {
             color_neutral_background1_pressed: rgb!("#1f1f1f"),
             color_neutral_background3: rgb!("#141414"),
             color_neutral_background6: rgb!("#333333"),
+            color_neutral_background_alpha: rgba!(26, 26, 26, 0.5),
             color_brand_background: rgb!("#115ea3"),
             color_brand_background_hover: rgb!("#0f6cbd"),
             color_brand_stroke2_contrast: rgb!("#0f6cbd"),
@@ -237,9 +255,11 @@ impl Tokens {
             line_height_base600: 32f32,
             line_height_base700: 36f32,
             line_height_base800: 40f32,
+            spacing_horizontal_xxs: 2f32,
             spacing_horizontal_xs: 4f32,
             spacing_horizontal_s_nudge: 6f32,
             spacing_horizontal_s: 8f32,
+            spacing_horizontal_m_nudge: 10f32,
             spacing_horizontal_m: 12f32,
             spacing_horizontal_xxl: 24f32,
             spacing_horizontal_xxxl: 32f32,
