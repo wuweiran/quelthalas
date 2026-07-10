@@ -815,7 +815,6 @@ fn track_menu(
         };
         let mut exit_menu = false;
         let mut enter_idle_sent = false;
-        let mut execution_result = ExecutionResult::NoExecuted;
         let mut track_exit = TrackExit::Ended;
         while !exit_menu {
             let mut msg = MSG::default();
@@ -906,7 +905,7 @@ fn track_menu(
                                 let mut menu_from_point_borrowed = menu_from_point.borrow_mut();
                                 let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
                                 let context = &*raw;
-                                execution_result =
+                                let execution_result =
                                     menu_button_up(context, &mut mt, &mut menu_from_point_borrowed)?;
                                 remove_message = execution_result != ExecutionResult::NoExecuted;
                                 exit_menu = remove_message;
@@ -1051,7 +1050,7 @@ fn calc_menu_item_size(
                 secondary_text,
                 ..
             } => {
-                SetRect(rect, org_x, org_y, org_x, org_y);
+                let _ = SetRect(rect, org_x, org_y, org_x, org_y);
                 let direct_write_factory = &qt.dwrite_factory;
                 let text_layout = direct_write_factory.CreateTextLayout(
                     text.as_wide(),
@@ -1087,7 +1086,7 @@ fn calc_menu_item_size(
                 ..
             } => {
                 // Same as MenuItem, plus a left gutter for the checkmark column.
-                SetRect(rect, org_x, org_y, org_x, org_y);
+                let _ = SetRect(rect, org_x, org_y, org_x, org_y);
                 let direct_write_factory = &qt.dwrite_factory;
                 let text_layout = direct_write_factory.CreateTextLayout(
                     text.as_wide(),
@@ -1116,7 +1115,7 @@ fn calc_menu_item_size(
                     .max(32);
             }
             MenuItem::SubMenu { rect, text, .. } => {
-                SetRect(rect, org_x, org_y, org_x, org_y);
+                let _ = SetRect(rect, org_x, org_y, org_x, org_y);
                 let direct_write_factory = &qt.dwrite_factory;
                 let text_layout = direct_write_factory.CreateTextLayout(
                     text.as_wide(),
@@ -1133,7 +1132,7 @@ fn calc_menu_item_size(
                     .max(32);
             }
             MenuItem::MenuDivider { rect } => {
-                SetRect(rect, org_x, org_y, org_x, org_y);
+                let _ = SetRect(rect, org_x, org_y, org_x, org_y);
                 rect.bottom += 4 + tokens.stroke_width_thin as i32;
             }
         }
@@ -1162,7 +1161,7 @@ fn get_text_format(qt: &QT) -> Result<IDWriteTextFormat> {
 
 fn calc_popup_menu_size(qt: &QT, menu: &mut Menu, max_height: i32) -> Result<(i32, i32)> {
     unsafe {
-        SetRectEmpty(&mut menu.menu_list_rect);
+        let _ = SetRectEmpty(&mut menu.menu_list_rect);
     }
     let mut start = 0;
     let text_format = get_text_format(qt)?;
@@ -1208,7 +1207,7 @@ fn calc_popup_menu_size(qt: &QT, menu: &mut Menu, max_height: i32) -> Result<(i3
     }
 
     unsafe {
-        OffsetRect(
+        let _ = OffsetRect(
             &mut menu.menu_list_rect,
             MENU_BORDER_WIDTH + MENU_MARGIN,
             MENU_BORDER_WIDTH + MENU_MARGIN,
@@ -1243,7 +1242,7 @@ fn show_popup(
         ..Default::default()
     };
     unsafe {
-        GetMonitorInfoW(monitor, &mut info);
+        let _ = GetMonitorInfoW(monitor, &mut info);
     }
     let max_height = info.rcWork.bottom - info.rcWork.top;
     let (width, height) = calc_popup_menu_size(qt, menu, max_height)?;
@@ -1512,7 +1511,7 @@ fn draw_menu_item(
     Ok(())
 }
 
-fn draw_scroll_arrows(window: HWND, context: &Context) -> Result<()> {
+fn draw_scroll_arrows(_window: HWND, _context: &Context) -> Result<()> {
     // TODO
     Ok(())
 }

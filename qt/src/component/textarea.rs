@@ -1030,12 +1030,6 @@ fn paint(window: HWND, context: &Context) -> Result<()> {
     Ok(())
 }
 
-impl State {
-    fn props_background(&self) -> Option<D2D1_COLOR_F> {
-        self.background
-    }
-}
-
 fn on_paint(window: HWND, context: &Context) -> Result<()> {
     unsafe {
         context.render_target.BeginDraw();
