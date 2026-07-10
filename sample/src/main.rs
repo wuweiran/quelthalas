@@ -20,7 +20,7 @@ use quelthalas::component::dialog::DialogResult;
 use quelthalas::component::menu::MenuInfo;
 use quelthalas::component::{
     button, checkbox, combobox, dialog, dropdown, input, link, menu, menu_bar, option, progress_bar,
-    radio, slider, spinner, switch, tab_list, text,
+    radio, slider, spin_button, spinner, switch, tab_list, text,
 };
 use quelthalas::icon::Icon;
 use quelthalas::layout::Stack;
@@ -569,10 +569,6 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
                     )
                     .unwrap_or_default();
 
-                // Dropdown: click the field to open a flat popup list; pick one.
-                // Ferret is disabled (greyed, unclickable, skipped by keyboard).
-                // One list, shared by the dropdown (pick-only) and the combobox
-                // (type-to-filter) so they demo the same data two ways.
                 let animals = vec![
                     option::Item::new(w!("Cat")),
                     option::Item::new(w!("Dog")),
@@ -596,8 +592,6 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
                     )
                     .unwrap_or_default();
 
-                // Combobox: editable field — type to filter suggestions, and it
-                // keeps what you type (Win32 CBS_DROPDOWN).
                 let combobox_label = section(w!("Combobox"));
                 let combobox = qt
                     .create_combobox(
@@ -607,6 +601,23 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
                         combobox::Props {
                             options: animals.clone(),
                             placeholder: w!("Type or pick an animal"),
+                            background: Some(palette.canvas),
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap_or_default();
+
+                let spin_button_label = section(w!("Spin button"));
+                let spin_button = qt
+                    .create_spin_button(
+                        window,
+                        0,
+                        0,
+                        spin_button::Props {
+                            value: 10.0,
+                            min: 0.0,
+                            max: 20.0,
+                            step: 1.0,
                             background: Some(palette.canvas),
                             ..Default::default()
                         },
@@ -887,7 +898,13 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
                 let basic_right = Stack::vertical()
                     .gap(gap_section)
                     .add_stack(Stack::vertical().gap(gap_s).add(dropdown_label).add(dropdown))
-                    .add_stack(Stack::vertical().gap(gap_s).add(combobox_label).add(combobox));
+                    .add_stack(Stack::vertical().gap(gap_s).add(combobox_label).add(combobox))
+                    .add_stack(
+                        Stack::vertical()
+                            .gap(gap_s)
+                            .add(spin_button_label)
+                            .add(spin_button),
+                    );
                 let basic_input = Stack::horizontal()
                     .gap(gap_gutter)
                     .add_stack(basic_left)

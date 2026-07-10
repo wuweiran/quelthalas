@@ -11,6 +11,7 @@ pub mod option;
 pub mod progress_bar;
 pub mod radio;
 pub mod slider;
+pub mod spin_button;
 pub mod spinner;
 pub mod switch;
 pub mod tab_list;
