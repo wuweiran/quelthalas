@@ -2,8 +2,22 @@
 name = "quelthalas"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.85"
+authors = ["M1Knight Technology"]
+description = "Fluent UI 2-styled reimplementations of classic Win32 controls, drawn with Direct2D/DirectWrite."
+license = "MIT"
+repository = "https://github.com/wuweiran/quelthalas"
+readme = "README.md"
+keywords = ["windows", "win32", "fluent", "ui", "direct2d"]
+categories = ["gui", "os::windows-apis"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[package.metadata.docs.rs]
+# This crate is Windows-only; docs.rs builds on Linux by default, so pin the
+# target to an MSVC toolchain or the docs build fails.
+targets = ["x86_64-pc-windows-msvc"]
+default-target = "x86_64-pc-windows-msvc"
 
 [dependencies.windows]
 version = "0.62.2"
