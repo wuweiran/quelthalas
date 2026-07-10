@@ -11,7 +11,6 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::UI::Input::KeyboardAndMouse::{VK_F10, VK_MENU};
 use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::*;
@@ -1169,12 +1168,12 @@ extern "system" fn window_process(
                 _ = EndPaint(window, &ps);
                 LRESULT(0)
             }
-            WM_SYSKEYDOWN => {
-                // Alt / F10 at the app level → enter the menu bar's keyboard mode
-                // (mirrors classic Win32). Ignore auto-repeat (lParam bit 30).
-                let key = w_param.0 as u32;
-                let is_repeat = (l_param.0 >> 30) & 1 != 0;
-                if (key == VK_MENU.0 as u32 || key == VK_F10.0 as u32) && !is_repeat {
+            WM_SYSCOMMAND => {
+                // A clean Alt tap / F10 arrives as SC_KEYMENU with no mnemonic char
+                // in lParam. Windows never sends this for Alt+Tab (Alt held + another
+                // key), so it's the correct trigger — no lingering menu. Forward it
+                // to the bar to enter keyboard menu mode.
+                if (w_param.0 & 0xfff0) == SC_KEYMENU as usize && l_param.0 == 0 {
                     let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *const AppState;
                     if !raw.is_null() {
                         _ = PostMessageW(

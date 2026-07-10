@@ -29,7 +29,8 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::UI::Controls::WM_MOUSELEAVE;
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    SetFocus, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent, VIRTUAL_KEY, VK_F10, VK_MENU,
+    SetFocus, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent, VIRTUAL_KEY, VK_DOWN, VK_ESCAPE, VK_F10,
+    VK_LEFT, VK_MENU, VK_RETURN, VK_RIGHT, VK_SPACE,
 };
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::*;
@@ -39,8 +40,9 @@ const MENU_BAR_HEIGHT: f32 = 28.0;
 /// Vertical inset of a label's highlight from the strip edges (DIPs).
 const HIGHLIGHT_INSET_Y: f32 = 2.0;
 
-/// Post this to a menu bar window to enter keyboard menu mode on the first label
-/// (mirrors Alt/F10). The sample forwards the app's Alt press here.
+/// Post this to a menu bar window to enter keyboard menu mode: highlight the first
+/// label + take focus, without opening a dropdown (classic Win32 Alt/F10). The
+/// sample forwards the app's clean-Alt (`SC_KEYMENU`) here.
 pub const WM_ENTER_MENU_MODE: u32 = WM_APP + 1;
 
 /// One top-level bar entry: a label plus the dropdown it opens.
@@ -95,6 +97,8 @@ struct Context {
     hovered: Option<usize>,
     /// The label whose dropdown is currently open (drawn "pressed"), if any.
     open_index: Option<usize>,
+    /// Keyboard menu mode: the highlighted label (Alt/F10 + arrows), not yet open.
+    active: Option<usize>,
     /// Per-label left edge + width (DIPs), computed in `layout`.
     item_x: Vec<f32>,
     item_w: Vec<f32>,
@@ -253,6 +257,7 @@ fn on_create(window: HWND, state: State) -> Result<Context> {
             render_target,
             hovered: None,
             open_index: None,
+            active: None,
             item_x: Vec::new(),
             item_w: Vec::new(),
         })
@@ -374,10 +379,11 @@ fn paint(window: HWND, context: &Context) -> Result<()> {
             let tx = context.item_x[i];
             let tw = context.item_w[i];
 
-            // Highlight: open label → "pressed" fill; hovered label → hover fill.
+            // Highlight: open label → "pressed" fill; hovered or keyboard-active
+            // label → hover fill.
             let fill = if context.open_index == Some(i) {
                 Some(tokens.color_neutral_background1_pressed)
-            } else if context.hovered == Some(i) {
+            } else if context.hovered == Some(i) || context.active == Some(i) {
                 Some(tokens.color_neutral_background1_hover)
             } else {
                 None
@@ -563,8 +569,10 @@ extern "system" fn window_proc(
             }
             let x = l_param.0 as i16 as i32;
             let hit = hit_test(context, x, get_scaling_factor(window));
-            if context.hovered != hit {
+            if context.hovered != hit || context.active.is_some() {
                 context.hovered = hit;
+                // Mouse takes over from any keyboard highlight.
+                context.active = None;
                 let mut tme = TRACKMOUSEEVENT {
                     cbSize: size_of::<TRACKMOUSEEVENT>() as u32,
                     dwFlags: TME_LEAVE,
@@ -587,6 +595,7 @@ extern "system" fn window_proc(
             let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
             let context = &mut *raw;
             _ = SetFocus(Some(window));
+            context.active = None;
             if let Some(idx) = hit_test(context, l_param.0 as i16 as i32, get_scaling_factor(window))
             {
                 // Enters the modal switch loop (the dropdown takes capture inside).
@@ -595,22 +604,79 @@ extern "system" fn window_proc(
             LRESULT(0)
         },
         WM_ENTER_MENU_MODE => unsafe {
+            // Classic Win32: highlight the first label + take focus, WITHOUT opening
+            // a dropdown. Down/Enter/Space opens it; Left/Right walk; Esc exits.
             let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
             if !raw.is_null() && !(*raw).state.props.items.is_empty() {
                 _ = SetFocus(Some(window));
-                run_menu_mode(window, 0);
+                (*raw).active = Some(0);
+                _ = InvalidateRect(Some(window), None, false);
+            }
+            LRESULT(0)
+        },
+        WM_GETDLGCODE => LRESULT((DLGC_WANTARROWS | DLGC_WANTALLKEYS) as isize),
+        WM_KEYDOWN => unsafe {
+            let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
+            let context = &mut *raw;
+            let n = context.state.props.items.len();
+            // Only steer when in keyboard menu mode (a label is highlighted).
+            let Some(active) = context.active else {
+                return DefWindowProcW(window, message, w_param, l_param);
+            };
+            if n == 0 {
+                return LRESULT(0);
+            }
+            match VIRTUAL_KEY(w_param.0 as u16) {
+                VK_LEFT => {
+                    context.active = Some((active + n - 1) % n);
+                    _ = InvalidateRect(Some(window), None, false);
+                }
+                VK_RIGHT => {
+                    context.active = Some((active + 1) % n);
+                    _ = InvalidateRect(Some(window), None, false);
+                }
+                VK_DOWN | VK_RETURN | VK_SPACE => {
+                    // Open the highlighted label's dropdown (enters the modal loop).
+                    context.active = None;
+                    run_menu_mode(window, active);
+                    // Back from the loop → leave menu mode, focus the app window.
+                    if let Ok(parent) = GetParent(window) {
+                        _ = SetFocus(Some(parent));
+                    }
+                }
+                VK_ESCAPE => {
+                    context.active = None;
+                    _ = InvalidateRect(Some(window), None, false);
+                    if let Ok(parent) = GetParent(window) {
+                        _ = SetFocus(Some(parent));
+                    }
+                }
+                _ => return DefWindowProcW(window, message, w_param, l_param),
             }
             LRESULT(0)
         },
         WM_SYSKEYDOWN => unsafe {
-            // Alt or F10 (when the bar has focus) enters keyboard menu mode.
+            // Alt/F10 while already in menu mode toggles it back off.
+            let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
             match VIRTUAL_KEY(w_param.0 as u16) {
-                VK_MENU | VK_F10 => {
-                    run_menu_mode(window, 0);
+                VK_MENU | VK_F10 if !raw.is_null() && (*raw).active.is_some() => {
+                    (*raw).active = None;
+                    _ = InvalidateRect(Some(window), None, false);
+                    if let Ok(parent) = GetParent(window) {
+                        _ = SetFocus(Some(parent));
+                    }
                     LRESULT(0)
                 }
                 _ => DefWindowProcW(window, message, w_param, l_param),
             }
+        },
+        WM_KILLFOCUS => unsafe {
+            // Lost focus (Alt+Tab, click elsewhere) → drop the keyboard highlight.
+            let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
+            if !raw.is_null() && (*raw).active.take().is_some() {
+                _ = InvalidateRect(Some(window), None, false);
+            }
+            LRESULT(0)
         },
         WM_DPICHANGED_BEFOREPARENT => unsafe {
             let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
