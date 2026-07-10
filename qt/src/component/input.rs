@@ -1806,6 +1806,9 @@ extern "system" fn window_proc(
                 set_rect_np(window, &mut context)?;
                 if let Some(default_text) = context.state.default_value {
                     replace_selection(window, &mut context, false, default_text.as_wide(), false)?;
+                    // set the caret at the start and the view shows the beginning.
+                    context.x_offset = 0;
+                    set_selection(window, &mut context, Some(0), Some(0))?;
                 }
                 Ok(context)
             }) {
