@@ -20,7 +20,7 @@ use quelthalas::component::dialog::DialogResult;
 use quelthalas::component::menu::MenuInfo;
 use quelthalas::component::{
     button, checkbox, combobox, dialog, dropdown, input, link, list_box, menu, menu_bar, option,
-    progress_bar, radio, slider, spin_button, spinner, switch, tab_list, text, textarea,
+    progress_bar, radio, slider, spin_button, spinner, switch, tab_list, text, textarea, tree_view,
 };
 use quelthalas::icon::Icon;
 use quelthalas::layout::Stack;
@@ -650,6 +650,45 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
                     )
                     .unwrap_or_default();
 
+                let tree_view_label = section(w!("Tree view"));
+                let tree_view = qt
+                    .create_tree_view(
+                        window,
+                        0,
+                        0,
+                        tree_view::Props {
+                            roots: vec![
+                                tree_view::Node::branch(w!("Documents")),
+                                tree_view::Node::branch(w!("Pictures")),
+                                tree_view::Node::branch(w!("Music")),
+                                tree_view::Node::leaf(w!("readme.txt")),
+                            ],
+                            // Lazy children: synthesize from the node's path so the
+                            // TVN_ITEMEXPANDING-style callback is exercised. Depth < 2
+                            // folders get subfolders; deeper levels get leaf files.
+                            on_expand: Box::new(|path| {
+                                if path.len() < 2 {
+                                    vec![
+                                        tree_view::Node::branch(w!("Subfolder A")),
+                                        tree_view::Node::branch(w!("Subfolder B")),
+                                        tree_view::Node::leaf(w!("notes.txt")),
+                                    ]
+                                } else {
+                                    vec![
+                                        tree_view::Node::leaf(w!("file1.dat")),
+                                        tree_view::Node::leaf(w!("file2.dat")),
+                                        tree_view::Node::leaf(w!("file3.dat")),
+                                    ]
+                                }
+                            }),
+                            width: 240,
+                            height: 160,
+                            background: Some(palette.canvas),
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap_or_default();
+
                 let textarea_label = section(w!("Textarea"));
                 let textarea = qt
                     .create_textarea(
@@ -954,14 +993,20 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
                     .add_stack(basic_right);
 
                 // --- Collections ---
-                // list_box
-                let collections = Stack::vertical()
-                    .gap(gap_section)
+                // list_box | tree_view
+                let collections = Stack::horizontal()
+                    .gap(gap_gutter)
                     .add_stack(
                         Stack::vertical()
                             .gap(gap_s)
                             .add(list_box_label)
                             .add(list_box),
+                    )
+                    .add_stack(
+                        Stack::vertical()
+                            .gap(gap_s)
+                            .add(tree_view_label)
+                            .add(tree_view),
                     );
 
                 // --- Text ---
