@@ -275,8 +275,10 @@ fn layout(window: HWND, context: &Context) -> Result<()> {
         }
         let window_width = rect.right - rect.left;
         let window_height = rect.bottom - rect.top;
-        let parent_window = GetAncestor(window, GA_PARENT);
-        GetWindowRect(parent_window, &mut rect)?;
+        // Center over the owner window (the app), falling back to the screen. For an
+        // owned top-level window GA_PARENT returns the desktop, so use GW_OWNER.
+        let owner = GetWindow(window, GW_OWNER).unwrap_or_else(|_| GetDesktopWindow());
+        GetWindowRect(owner, &mut rect)?;
         SetWindowPos(
             window,
             None,
@@ -284,7 +286,7 @@ fn layout(window: HWND, context: &Context) -> Result<()> {
             rect.top / 2 + rect.bottom / 2 - window_height / 2,
             window_width,
             window_height,
-            SWP_NOZORDER | SWP_NOMOVE,
+            SWP_NOZORDER,
         )?;
         context.render_target.Resize(&D2D_SIZE_U {
             width: scaled_width as u32,
