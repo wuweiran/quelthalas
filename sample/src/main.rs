@@ -1052,8 +1052,6 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
                                     .add(radio_orange),
                             ),
                     )
-                    .add_stack(Stack::vertical().gap(gap_s).add(slider_label).add(slider))
-                    .add_stack(Stack::vertical().gap(gap_s).add(switch_label).add(switch))
                     .add_stack(Stack::vertical().gap(gap_s).add(link_label).add(link));
                 let basic_right = Stack::vertical()
                     .gap(gap_section)
@@ -1064,7 +1062,9 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
                             .gap(gap_s)
                             .add(spin_button_label)
                             .add(spin_button),
-                    );
+                    )
+                    .add_stack(Stack::vertical().gap(gap_s).add(slider_label).add(slider))
+                    .add_stack(Stack::vertical().gap(gap_s).add(switch_label).add(switch));
                 let basic_input = Stack::horizontal()
                     .gap(gap_gutter)
                     .add_stack(basic_left)
