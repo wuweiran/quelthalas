@@ -21,7 +21,7 @@ use quelthalas::component::menu::MenuInfo;
 use quelthalas::component::{
     button, checkbox, combobox, dialog, divider, dropdown, input, link, list_box, menu, menu_bar,
     option, progress_bar, radio, slider, spin_button, spinner, split_button, switch, tab_list,
-    task_dialog, text, textarea, tree_view,
+    task_dialog, text, textarea, toolbar, tree_view,
 };
 use quelthalas::icon::Icon;
 use quelthalas::layout::Stack;
@@ -78,6 +78,15 @@ const CMD_HELP_ABOUT: u32 = 300;
 // SplitButton dropdown items.
 const CMD_ITEM_A: u32 = 400;
 const CMD_ITEM_B: u32 = 401;
+// Toolbar (rich-text editor) command ids.
+const CMD_TB_FONT: u32 = 500;
+const CMD_TB_BOLD: u32 = 501;
+const CMD_TB_ITALIC: u32 = 502;
+const CMD_TB_UNDERLINE: u32 = 503;
+const CMD_TB_FONT_INCREASE: u32 = 504;
+const CMD_TB_FONT_DECREASE: u32 = 505;
+const CMD_TB_BULLET_LIST: u32 = 506;
+const CMD_TB_NUMBER_LIST: u32 = 507;
 
 /// Re-arrange the tab strip + the active page. The tab strip and Close button are
 /// members of every page's Stack, so arranging the active page's Stack lays out
@@ -885,7 +894,68 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
                     divider::Appearance::Strong,
                 );
 
-                // Slider: drag the thumb or click the rail; arrows step the value.
+                // Toolbar: a rich-text editor strip of icon-only buttons in three
+                // groups, at a fixed width so trailing groups collapse into the
+                // "More" (⋯) overflow flyout.
+                let toolbar_label = section(w!("Toolbar"));
+                let toolbar = qt
+                    .create_toolbar(
+                        window,
+                        0,
+                        0,
+                        toolbar::Props {
+                            width: 260,
+                            items: vec![
+                                toolbar::ToolbarItem::Button {
+                                    id: CMD_TB_FONT,
+                                    icon: Some(Icon::text_font_24_regular()),
+                                    text: Some(w!("Font")),
+                                },
+                                toolbar::ToolbarItem::Divider,
+                                toolbar::ToolbarItem::Button {
+                                    id: CMD_TB_BOLD,
+                                    icon: Some(Icon::text_bold_24_regular()),
+                                    text: Some(w!("Bold")),
+                                },
+                                toolbar::ToolbarItem::Button {
+                                    id: CMD_TB_ITALIC,
+                                    icon: Some(Icon::text_italic_24_regular()),
+                                    text: Some(w!("Italic")),
+                                },
+                                toolbar::ToolbarItem::Button {
+                                    id: CMD_TB_UNDERLINE,
+                                    icon: Some(Icon::text_underline_24_regular()),
+                                    text: Some(w!("Underline")),
+                                },
+                                toolbar::ToolbarItem::Divider,
+                                toolbar::ToolbarItem::Button {
+                                    id: CMD_TB_FONT_INCREASE,
+                                    icon: Some(Icon::font_increase_24_regular()),
+                                    text: Some(w!("Increase font size")),
+                                },
+                                toolbar::ToolbarItem::Button {
+                                    id: CMD_TB_FONT_DECREASE,
+                                    icon: Some(Icon::font_decrease_24_regular()),
+                                    text: Some(w!("Decrease font size")),
+                                },
+                                toolbar::ToolbarItem::Divider,
+                                toolbar::ToolbarItem::Button {
+                                    id: CMD_TB_BULLET_LIST,
+                                    icon: Some(Icon::text_bullet_list_24_regular()),
+                                    text: Some(w!("Bulleted list")),
+                                },
+                                toolbar::ToolbarItem::Button {
+                                    id: CMD_TB_NUMBER_LIST,
+                                    icon: Some(Icon::text_number_list_24_regular()),
+                                    text: Some(w!("Numbered list")),
+                                },
+                            ],
+                            background: Some(palette.canvas),
+                        },
+                    )
+                    .unwrap_or_default();
+
+
                 let slider_label = section(w!("Slider"));
                 let slider = qt
                     .create_slider(
@@ -1068,6 +1138,8 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
                                 w!("Collections"),
                                 w!("Text"),
                                 w!("Status & info"),
+                                w!("Menus & toolbars"),
+                                w!("Dialogs & flyouts"),
                                 w!("Other"),
                             ],
                             selected_index: active,
@@ -1265,11 +1337,23 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
                             .add(tooltip_button),
                     );
 
-                // --- Other ---
-                // menu, dialog, tab_list
-                let other = Stack::vertical()
+                // --- Menus & toolbars ---
+                // menu (context-menu hint), tab_list, toolbar
+                let menus_toolbars = Stack::vertical()
                     .gap(gap_section)
                     .add_stack(Stack::vertical().gap(gap_s).add(menu_label).add(menu_hint))
+                    .add_stack(Stack::vertical().gap(gap_s).add(tablist_label).add(demo_tabs))
+                    .add_stack(
+                        Stack::vertical()
+                            .gap(gap_s)
+                            .add(toolbar_label)
+                            .add(toolbar),
+                    );
+
+                // --- Dialogs & flyouts ---
+                // dialog, task_dialog
+                let dialogs_flyouts = Stack::vertical()
+                    .gap(gap_section)
                     .add_stack(
                         Stack::vertical()
                             .gap(gap_s)
@@ -1281,8 +1365,12 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
                             .gap(gap_s)
                             .add(task_dialog_label)
                             .add(open_task_dialog),
-                    )
-                    .add_stack(Stack::vertical().gap(gap_s).add(tablist_label).add(demo_tabs))
+                    );
+
+                // --- Other ---
+                // divider
+                let other = Stack::vertical()
+                    .gap(gap_section)
                     .add_stack(
                         Stack::vertical()
                             .gap(gap_s)
@@ -1297,7 +1385,15 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
 
                 // Each page's own controls (for show/hide) — the strip + Close are
                 // always visible, so they're not in these lists.
-                let page_contents = [basic_input, collections, text_page, status_info, other];
+                let page_contents = [
+                    basic_input,
+                    collections,
+                    text_page,
+                    status_info,
+                    menus_toolbars,
+                    dialogs_flyouts,
+                    other,
+                ];
                 let pages: Vec<Page> = page_contents
                     .into_iter()
                     .map(|content| {
@@ -1561,6 +1657,18 @@ extern "system" fn window_process(
                             window,
                             w!("Split button"),
                             content,
+                            &dialog::ModelType::Alert,
+                            dialog::Actions::Ok,
+                        );
+                    }
+                    // Only the Font button demonstrates the action (opens a dialog);
+                    // the other formatting buttons are inert in this demo.
+                    CMD_TB_FONT => {
+                        let qt = &(*raw).qt;
+                        _ = qt.open_dialog(
+                            window,
+                            w!("Toolbar"),
+                            w!("Font"),
                             &dialog::ModelType::Alert,
                             dialog::Actions::Ok,
                         );

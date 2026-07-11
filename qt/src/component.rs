@@ -22,5 +22,6 @@ pub mod tab_list;
 pub mod task_dialog;
 pub mod text;
 pub mod textarea;
+pub mod toolbar;
 pub mod tooltip;
 pub mod tree_view;
