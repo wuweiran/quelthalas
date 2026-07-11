@@ -27,8 +27,7 @@ quelthalas/
     └── src/main.rs
 ```
 
-The library exposes 21 components plus a shared `scroll` helper (a WinUI 3-style
-scrollbar) that self-painting controls embed. See
+The library exposes 25 components. See
 [`qt/README.md`](qt/README.md#components) for the full list.
 
 ## Requirements

@@ -13,7 +13,7 @@ dependencies = [
 
 [[package]]
 name = "quelthalas"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "windows",
  "windows-core",
@@ -32,7 +32,7 @@ dependencies = [
 
 [[package]]
 name = "sample"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "quelthalas",
  "windows",

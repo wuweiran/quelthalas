@@ -8,10 +8,11 @@ look.
 
 ## Components
 
-`button`, `checkbox`, `combobox`, `dialog`, `dropdown`, `input`, `link`, `menu`,
-`menu_bar`, `option`, `progress_bar`, `radio`, `slider`, `spin_button`, `spinner`,
-`switch`, `tab_list`, `text`, `textarea`, `tooltip`, plus a shared `scroll` helper
-(a WinUI 3-style scrollbar) that self-painting controls embed.
+`button`, `checkbox`, `combobox`, `dialog`, `divider`, `dropdown`, `input`,
+`link`, `list_box`, `menu`, `menu_bar`, `option`, `progress_bar`, `radio`,
+`slider`, `spin_button`, `spinner`, `split_button`, `switch`, `tab_list`,
+`task_dialog`, `text`, `textarea`, `tooltip`, `tree_view`, plus a shared `scroll`
+helper (a WinUI 3-style scrollbar) that self-painting controls embed.
 
 ## Platform
 
