@@ -5,6 +5,24 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-07-11
+
+### Fixed
+
+- **Edit context menu**: the Cut / Copy / Paste / Select All labels are now
+  correctly localized. They live in a user32 MENU resource (not a string table),
+  so the previous `LoadStringW` lookups always fell back to English; they're now
+  read from that menu and match the current Windows UI language.
+- **Localization**: strip the whole Alt-mnemonic from system labels, including the
+  parenthesized CJK form (`剪切(&T)` → `剪切`), instead of only the `&`.
+- **SplitButton**: clicking the chevron while its dropdown is open now closes the
+  menu instead of immediately re-opening it.
+
+### Changed
+
+- Resolve system labels (edit-menu commands and dialog buttons) into caller-owned
+  buffers per use, removing the previous per-call leak.
+
 ## [0.2.0] - 2026-07-11
 
 ### Added
@@ -50,5 +68,6 @@ input, link, menu, menu_bar, option, progress_bar, radio, slider, spin_button,
 spinner, switch, tab_list, text, textarea, and tooltip, plus a shared `scroll`
 helper.
 
+[0.2.1]: https://github.com/wuweiran/quelthalas/releases/tag/v0.2.1
 [0.2.0]: https://github.com/wuweiran/quelthalas/releases/tag/v0.2.0
 [0.1.0]: https://github.com/wuweiran/quelthalas/releases/tag/v0.1.0
