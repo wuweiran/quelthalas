@@ -80,6 +80,42 @@ pub(crate) fn get_scaling_factor(window: HWND) -> f32 {
     unsafe { GetDpiForWindow(window) as f32 / USER_DEFAULT_SCREEN_DPI as f32 }
 }
 
+pub(crate) fn system_string(
+    id: u32,
+    fallback: windows::core::PCWSTR,
+) -> windows::core::PCWSTR {
+    use windows::Win32::Foundation::HINSTANCE;
+    use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows::Win32::UI::WindowsAndMessaging::LoadStringW;
+    use windows::core::{PCWSTR, PWSTR, w};
+    unsafe {
+        let mut buf = [0u16; 128];
+        let module = GetModuleHandleW(w!("user32.dll")).unwrap_or_default();
+        let len = LoadStringW(
+            Some(HINSTANCE(module.0)),
+            id,
+            PWSTR(buf.as_mut_ptr()),
+            buf.len() as i32,
+        );
+        let text: Vec<u16> = if len > 0 {
+            buf[..len as usize]
+                .iter()
+                .copied()
+                .filter(|&c| c != '&' as u16)
+                .chain(std::iter::once(0))
+                .collect()
+        } else {
+            fallback
+                .as_wide()
+                .iter()
+                .copied()
+                .chain(std::iter::once(0))
+                .collect()
+        };
+        PCWSTR::from_raw(Box::leak(text.into_boxed_slice()).as_ptr())
+    }
+}
+
 pub mod component;
 pub mod icon;
 pub mod layout;

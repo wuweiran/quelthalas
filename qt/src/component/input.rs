@@ -35,7 +35,6 @@ use windows::Win32::System::DataExchange::{
     CloseClipboard, EmptyClipboard, GetClipboardData, IsClipboardFormatAvailable, OpenClipboard,
     SetClipboardData,
 };
-use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock};
 use windows::Win32::System::Ole::CF_UNICODETEXT;
 use windows::Win32::System::SystemServices::MK_SHIFT;
@@ -87,33 +86,6 @@ const IDS_CUT: u32 = 769;
 const IDS_COPY: u32 = 770;
 const IDS_PASTE: u32 = 771;
 const IDS_SELECT_ALL: u32 = 773;
-
-/// Load a localized string from user32's string table, falling back to `fallback`
-/// (and stripping the `&` accelerator marker). Buffer is leaked into a boxed slice
-/// so the returned `PCWSTR` stays valid for the menu's lifetime.
-fn system_string(id: u32, fallback: PCWSTR) -> PCWSTR {
-    unsafe {
-        let mut buf = [0u16; 128];
-        let module = GetModuleHandleW(w!("user32.dll")).unwrap_or_default();
-        let len = LoadStringW(
-            Some(HINSTANCE(module.0)),
-            id,
-            PWSTR(buf.as_mut_ptr()),
-            buf.len() as i32,
-        );
-        let text: Vec<u16> = if len > 0 {
-            buf[..len as usize]
-                .iter()
-                .copied()
-                .filter(|&c| c != '&' as u16)
-                .chain(std::iter::once(0))
-                .collect()
-        } else {
-            fallback.as_wide().iter().copied().chain(std::iter::once(0)).collect()
-        };
-        PCWSTR::from_raw(Box::leak(text.into_boxed_slice()).as_ptr())
-    }
-}
 
 #[derive(Copy, Clone)]
 pub enum Size {
@@ -1892,25 +1864,25 @@ extern "system" fn window_proc(
 
             let menu_list = vec![
                 MenuInfo::MenuItem {
-                    text: system_string(IDS_CUT, w!("Cut")),
+                    text: crate::system_string(IDS_CUT, w!("Cut")),
                     command_id: CMD_CUT,
                     disabled: !can_copy,
                     secondary_text: Some(w!("Ctrl+X")),
                 },
                 MenuInfo::MenuItem {
-                    text: system_string(IDS_COPY, w!("Copy")),
+                    text: crate::system_string(IDS_COPY, w!("Copy")),
                     command_id: CMD_COPY,
                     disabled: !can_copy,
                     secondary_text: Some(w!("Ctrl+C")),
                 },
                 MenuInfo::MenuItem {
-                    text: system_string(IDS_PASTE, w!("Paste")),
+                    text: crate::system_string(IDS_PASTE, w!("Paste")),
                     command_id: CMD_PASTE,
                     disabled: !can_paste,
                     secondary_text: Some(w!("Ctrl+V")),
                 },
                 MenuInfo::MenuItem {
-                    text: system_string(IDS_SELECT_ALL, w!("Select All")),
+                    text: crate::system_string(IDS_SELECT_ALL, w!("Select All")),
                     command_id: CMD_SELECT_ALL,
                     disabled: !has_text,
                     secondary_text: Some(w!("Ctrl+A")),

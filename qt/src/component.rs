@@ -19,6 +19,7 @@ pub mod spinner;
 pub mod split_button;
 pub mod switch;
 pub mod tab_list;
+pub mod task_dialog;
 pub mod text;
 pub mod textarea;
 pub mod tooltip;

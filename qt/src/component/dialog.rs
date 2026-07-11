@@ -32,10 +32,24 @@ pub enum ModelType {
     Alert,
 }
 
+// user32 string-table ids for the standard buttons (same ids MB_GetString uses).
+const IDS_OK: u32 = 800;
+const IDS_CANCEL: u32 = 801;
+
+/// Which action buttons a dialog shows.
+#[derive(Copy, Clone)]
+pub enum Actions {
+    /// A primary "OK" and a secondary "Cancel".
+    OkCancel,
+    /// A single primary "OK" that just dismisses the dialog.
+    Ok,
+}
+
 struct State {
     qt: QT,
     title: PCWSTR,
     content: PCWSTR,
+    actions: Actions,
 }
 
 struct Context {
@@ -45,7 +59,7 @@ struct Context {
     content_text_format: IDWriteTextFormat,
     render_target: ID2D1HwndRenderTarget,
     ok_button: HWND,
-    cancel_button: HWND,
+    cancel_button: Option<HWND>,
 }
 impl QT {
     pub fn open_dialog(
@@ -54,6 +68,7 @@ impl QT {
         title: PCWSTR,
         content: PCWSTR,
         modal_type: &ModelType,
+        actions: Actions,
     ) -> Result<DialogResult> {
         let class_name: PCWSTR = w!("QT_DIALOG");
         unsafe {
@@ -75,6 +90,7 @@ impl QT {
                 qt: self.clone(),
                 title,
                 content,
+                actions,
             });
             let window_style = match modal_type {
                 ModelType::Modal => WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
@@ -153,12 +169,13 @@ fn on_create(window: HWND, state: State) -> Result<Context> {
             },
         )?;
 
+        // OkCancel adds a "Cancel"; both use "OK" as the primary.
         let ok_button = qt.create_button(
             window,
             0,
             0,
             button::Props {
-                text: w!("OK"),
+                text: crate::system_string(IDS_OK, w!("OK")),
                 appearance: button::Appearance::Primary,
                 mouse_event: MouseEvent {
                     on_click: Box::new(move |_| {
@@ -170,22 +187,25 @@ fn on_create(window: HWND, state: State) -> Result<Context> {
                 ..Default::default()
             },
         )?;
-        let cancel_button = qt.create_button(
-            window,
-            0,
-            0,
-            button::Props {
-                text: w!("Cancel"),
-                mouse_event: MouseEvent {
-                    on_click: Box::new(move |_| {
-                        let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
-                        (*raw).result = DialogResult::Cancel;
-                        _ = PostMessageW(Some(window), WM_USER, WPARAM(0), LPARAM(0));
-                    }),
+        let cancel_button = match state.actions {
+            Actions::OkCancel => Some(qt.create_button(
+                window,
+                0,
+                0,
+                button::Props {
+                    text: crate::system_string(IDS_CANCEL, w!("Cancel")),
+                    mouse_event: MouseEvent {
+                        on_click: Box::new(move |_| {
+                            let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
+                            (*raw).result = DialogResult::Cancel;
+                            _ = PostMessageW(Some(window), WM_USER, WPARAM(0), LPARAM(0));
+                        }),
+                    },
+                    ..Default::default()
                 },
-                ..Default::default()
-            },
-        )?;
+            )?),
+            Actions::Ok => None,
+        };
         Ok(Context {
             state,
             title_text_format,
@@ -203,9 +223,17 @@ fn layout(window: HWND, context: &Context) -> Result<()> {
 
     unsafe {
         let mut button_rect = RECT::default();
-        GetClientRect(context.cancel_button, &mut button_rect)?;
-        let cancel_button_width = button_rect.right - button_rect.left;
-        let cancel_button_height = button_rect.bottom - button_rect.top;
+        // The secondary (Cancel) button is only present in OkCancel mode.
+        let (cancel_button_width, cancel_button_height) = match context.cancel_button {
+            Some(cancel) => {
+                GetClientRect(cancel, &mut button_rect)?;
+                (
+                    button_rect.right - button_rect.left,
+                    button_rect.bottom - button_rect.top,
+                )
+            }
+            None => (0, 0),
+        };
         GetClientRect(context.ok_button, &mut button_rect)?;
         let ok_button_width = button_rect.right - button_rect.left;
         let ok_button_height = button_rect.bottom - button_rect.top;
@@ -240,11 +268,17 @@ fn layout(window: HWND, context: &Context) -> Result<()> {
             .min(600f32))
             * scaling_factor)
             .ceil() as i32;
-        // Buttons sit at [scaled_width - (cancel+ok+32*s) .. scaled_width - 24*s];
-        // the left edge lands at surface_padding (24) when width = cancel+ok+56*s.
+        // Buttons sit right-aligned to the 24px padding; when a Cancel button is
+        // present they're separated by `gap` and Cancel takes the rightmost slot.
+        // In Close mode cancel_button_width is 0 and there's no inter-button gap.
+        let inter_button_gap = if context.cancel_button.is_some() {
+            gap
+        } else {
+            0f32
+        };
         let buttons_min_width = cancel_button_width
             + ok_button_width
-            + ((surface_padding + gap + surface_padding) * scaling_factor).ceil() as i32;
+            + ((surface_padding * 2f32 + inter_button_gap) * scaling_factor).ceil() as i32;
         let scaled_width = text_width.max(buttons_min_width);
         let buttons_top =
             surface_padding + title_metrics.height + gap + content_metrics.height + gap;
@@ -292,18 +326,26 @@ fn layout(window: HWND, context: &Context) -> Result<()> {
             width: scaled_width as u32,
             height: scaled_height as u32,
         })?;
-        MoveWindow(
-            context.cancel_button,
-            scaled_width - (cancel_button_width + (24f32 * scaling_factor) as i32),
-            (buttons_top * scaling_factor) as i32,
-            cancel_button_width,
-            cancel_button_height,
-            false,
-        )?;
+        // Right-align the button row to the 24px padding. Cancel (when present)
+        // takes the rightmost slot; the primary button sits to its left. In Close
+        // mode there's no Cancel, so the primary button takes the rightmost slot.
+        let ok_right_offset = match context.cancel_button {
+            Some(cancel) => {
+                MoveWindow(
+                    cancel,
+                    scaled_width - (cancel_button_width + (24f32 * scaling_factor) as i32),
+                    (buttons_top * scaling_factor) as i32,
+                    cancel_button_width,
+                    cancel_button_height,
+                    false,
+                )?;
+                cancel_button_width + ok_button_width + (32f32 * scaling_factor) as i32
+            }
+            None => ok_button_width + (24f32 * scaling_factor) as i32,
+        };
         MoveWindow(
             context.ok_button,
-            scaled_width
-                - (cancel_button_width + ok_button_width + (32f32 * scaling_factor) as i32),
+            scaled_width - ok_right_offset,
             (buttons_top * scaling_factor) as i32,
             ok_button_width,
             ok_button_height,

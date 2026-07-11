@@ -20,8 +20,8 @@ use quelthalas::component::dialog::DialogResult;
 use quelthalas::component::menu::MenuInfo;
 use quelthalas::component::{
     button, checkbox, combobox, dialog, divider, dropdown, input, link, list_box, menu, menu_bar,
-    option, progress_bar, radio, slider, spin_button, spinner, split_button, switch, tab_list, text,
-    textarea, tree_view,
+    option, progress_bar, radio, slider, spin_button, spinner, split_button, switch, tab_list,
+    task_dialog, text, textarea, tree_view,
 };
 use quelthalas::icon::Icon;
 use quelthalas::layout::Stack;
@@ -430,7 +430,73 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
                                             w!("Dialog title"),
                                             w!("Lorem ipsum dolor sit amet consectetur adipisicing elit. Quisquam exercitationem cumque repellendus eaque est dolor eius expedita nulla ullam? Tenetur reprehenderit aut voluptatum impedit voluptates in natus iure cumque eaque?"),
                                             &dialog::ModelType::Alert,
+                                            dialog::Actions::OkCancel,
                                         );
+                                    }
+                                }),
+                            },
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap_or_default();
+                let open_task_dialog = qt
+                    .create_button(
+                        window,
+                        0,
+                        0,
+                        button::Props {
+                            text: w!("Open task dialog"),
+                            mouse_event: MouseEvent {
+                                on_click: Box::new({
+                                    let qt = qt.clone();
+                                    move |_| {
+                                        let result = qt.open_task_dialog(
+                                            window,
+                                            task_dialog::Props {
+                                                title: w!("Unsaved changes"),
+                                                instruction: w!("Do you want to save your changes?"),
+                                                content: w!("Your changes will be lost if you don't save them."),
+                                                intent: task_dialog::Intent::Warning,
+                                                buttons: vec![
+                                                    task_dialog::Button::Yes,
+                                                    task_dialog::Button::No,
+                                                ],
+                                                command_links: vec![
+                                                    task_dialog::CommandLink {
+                                                        id: 100,
+                                                        text: w!("Save and continue"),
+                                                        note: Some(w!("Keep your work and proceed.")),
+                                                    },
+                                                    task_dialog::CommandLink {
+                                                        id: 101,
+                                                        text: w!("Discard changes"),
+                                                        note: Some(w!("Permanently lose your edits.")),
+                                                    },
+                                                ],
+                                                verification: Some(w!("Don't ask again")),
+                                                verification_checked: false,
+                                            },
+                                        );
+                                        if let Ok(r) = result {
+                                            let msg = match r.button {
+                                                100 => w!("Save and continue (checked: see title)"),
+                                                101 => w!("Discard changes"),
+                                                6 => w!("Yes"),
+                                                7 => w!("No"),
+                                                _ => w!("Closed"),
+                                            };
+                                            _ = qt.open_dialog(
+                                                window,
+                                                if r.verified {
+                                                    w!("Result (verified)")
+                                                } else {
+                                                    w!("Result")
+                                                },
+                                                msg,
+                                                &dialog::ModelType::Alert,
+                                                dialog::Actions::Ok,
+                                            );
+                                        }
                                     }
                                 }),
                             },
@@ -473,6 +539,7 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
                 let inputs_label = section(w!("Inputs"));
                 let progress_label = section(w!("Progress bar"));
                 let dialog_label = section(w!("Dialog"));
+                let task_dialog_label = section(w!("Task dialog"));
                 let menu_label = section(w!("Menu"));
                 let text_label = section(w!("Text"));
 
@@ -1203,7 +1270,18 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
                 let other = Stack::vertical()
                     .gap(gap_section)
                     .add_stack(Stack::vertical().gap(gap_s).add(menu_label).add(menu_hint))
-                    .add_stack(Stack::vertical().gap(gap_s).add(dialog_label).add(open_dialog))
+                    .add_stack(
+                        Stack::vertical()
+                            .gap(gap_s)
+                            .add(dialog_label)
+                            .add(open_dialog),
+                    )
+                    .add_stack(
+                        Stack::vertical()
+                            .gap(gap_s)
+                            .add(task_dialog_label)
+                            .add(open_task_dialog),
+                    )
                     .add_stack(Stack::vertical().gap(gap_s).add(tablist_label).add(demo_tabs))
                     .add_stack(
                         Stack::vertical()
@@ -1356,7 +1434,8 @@ extern "system" fn window_process(
                     window,
                     w!("Close"),
                     w!("Are you sure you want to close this window?"),
-                    &dialog::ModelType::Alert
+                    &dialog::ModelType::Alert,
+                    dialog::Actions::OkCancel,
                 ) {
                     Ok(result) => {
                         if let DialogResult::OK = result {
@@ -1469,6 +1548,7 @@ extern "system" fn window_process(
                             w!("About"),
                             w!("Quel'Thalas — Fluent-styled Win32 controls."),
                             &dialog::ModelType::Alert,
+                            dialog::Actions::Ok,
                         );
                     }
                     CMD_ITEM_A | CMD_ITEM_B => {
@@ -1482,6 +1562,7 @@ extern "system" fn window_process(
                             w!("Split button"),
                             content,
                             &dialog::ModelType::Alert,
+                            dialog::Actions::Ok,
                         );
                     }
                     _ => {}
