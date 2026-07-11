@@ -80,12 +80,11 @@ const CMD_COPY: u32 = 2;
 const CMD_PASTE: u32 = 3;
 const CMD_SELECT_ALL: u32 = 4;
 
-// user32.dll string-table ids for the edit context menu (undocumented; verify per
-// OS with Resource Hacker). MUI resolves these to the current UI language.
-const IDS_CUT: u32 = 769;
-const IDS_COPY: u32 = 770;
-const IDS_PASTE: u32 = 771;
-const IDS_SELECT_ALL: u32 = 773;
+// user32 Edit-menu command ids (MENU resource #1), localized via `edit_menu_label`.
+const IDS_CUT: u32 = 768;
+const IDS_COPY: u32 = 769;
+const IDS_PASTE: u32 = 770;
+const IDS_SELECT_ALL: u32 = 177;
 
 #[derive(Copy, Clone)]
 pub enum Size {
@@ -1862,27 +1861,33 @@ extern "system" fn window_proc(
                 }
             }
 
+            // Owned label buffers, kept alive across the blocking `open_menu` call
+            // (the menu reads them live via `PCWSTR`, never copies them).
+            let cut = crate::edit_menu_label(IDS_CUT, "Cut");
+            let copy = crate::edit_menu_label(IDS_COPY, "Copy");
+            let paste = crate::edit_menu_label(IDS_PASTE, "Paste");
+            let select_all = crate::edit_menu_label(IDS_SELECT_ALL, "Select All");
             let menu_list = vec![
                 MenuInfo::MenuItem {
-                    text: crate::system_string(IDS_CUT, w!("Cut")),
+                    text: PCWSTR::from_raw(cut.as_ptr()),
                     command_id: CMD_CUT,
                     disabled: !can_copy,
                     secondary_text: Some(w!("Ctrl+X")),
                 },
                 MenuInfo::MenuItem {
-                    text: crate::system_string(IDS_COPY, w!("Copy")),
+                    text: PCWSTR::from_raw(copy.as_ptr()),
                     command_id: CMD_COPY,
                     disabled: !can_copy,
                     secondary_text: Some(w!("Ctrl+C")),
                 },
                 MenuInfo::MenuItem {
-                    text: crate::system_string(IDS_PASTE, w!("Paste")),
+                    text: PCWSTR::from_raw(paste.as_ptr()),
                     command_id: CMD_PASTE,
                     disabled: !can_paste,
                     secondary_text: Some(w!("Ctrl+V")),
                 },
                 MenuInfo::MenuItem {
-                    text: crate::system_string(IDS_SELECT_ALL, w!("Select All")),
+                    text: PCWSTR::from_raw(select_all.as_ptr()),
                     command_id: CMD_SELECT_ALL,
                     disabled: !has_text,
                     secondary_text: Some(w!("Ctrl+A")),

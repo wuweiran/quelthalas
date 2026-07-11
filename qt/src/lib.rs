@@ -80,40 +80,76 @@ pub(crate) fn get_scaling_factor(window: HWND) -> f32 {
     unsafe { GetDpiForWindow(window) as f32 / USER_DEFAULT_SCREEN_DPI as f32 }
 }
 
-pub(crate) fn system_string(
-    id: u32,
-    fallback: windows::core::PCWSTR,
-) -> windows::core::PCWSTR {
+/// Strip the Alt-mnemonic from a Win32 label. We draw our own menus, so the `&`
+/// marker must go; on CJK it's a trailing `(&X)` group (`剪切(&T)`), which we drop
+/// whole so no stray `(T)` remains.
+fn strip_mnemonic(label: &[u16]) -> Vec<u16> {
+    const AMP: u16 = b'&' as u16;
+    const LPAREN: u16 = b'(' as u16;
+    const RPAREN: u16 = b')' as u16;
+    let mut out = Vec::with_capacity(label.len() + 1);
+    let mut i = 0;
+    while i < label.len() {
+        let c = label[i];
+        if c == LPAREN
+            && label.get(i + 1) == Some(&AMP)
+            && label.get(i + 3) == Some(&RPAREN)
+        {
+            i += 4;
+            continue;
+        }
+        if c == AMP {
+            i += 1;
+            continue;
+        }
+        out.push(c);
+        i += 1;
+    }
+    out.push(0);
+    out
+}
+
+/// A localized Edit-control menu label by command id (Cut = 768, Copy = 769,
+/// Paste = 770, Select All = 177). These live in a MENU resource (user32 menu #1),
+/// not a string table. Returns an owned NUL-terminated buffer; the caller keeps it
+/// alive while the menu is on screen.
+pub(crate) fn edit_menu_label(command_id: u32, fallback: &str) -> Vec<u16> {
+    use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows::Win32::UI::WindowsAndMessaging::{DestroyMenu, GetMenuStringW, LoadMenuW, MF_BYCOMMAND};
+    use windows::core::{PCWSTR, w};
+
+    let owned = |s: &str| s.encode_utf16().chain(std::iter::once(0)).collect::<Vec<u16>>();
+    let menu = unsafe { GetModuleHandleW(w!("user32.dll")) }
+        .ok()
+        .and_then(|m| unsafe { LoadMenuW(Some(m.into()), PCWSTR(1 as *const u16)) }.ok());
+    let Some(menu) = menu else {
+        return owned(fallback);
+    };
+    let mut buf = [0u16; 128];
+    let len = unsafe { GetMenuStringW(menu, command_id, Some(&mut buf), MF_BYCOMMAND) };
+    let label = if len > 0 { strip_mnemonic(&buf[..len as usize]) } else { owned(fallback) };
+    let _ = unsafe { DestroyMenu(menu) };
+    label
+}
+
+/// A localized string from user32's string table by id (e.g. the standard dialog
+/// buttons: OK = 800, Cancel = 801, Yes = 805, …). Returns an owned NUL-terminated
+/// buffer; the caller owns it and controls its lifetime.
+pub(crate) fn system_string(id: u32, fallback: &str) -> Vec<u16> {
     use windows::Win32::Foundation::HINSTANCE;
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows::Win32::UI::WindowsAndMessaging::LoadStringW;
-    use windows::core::{PCWSTR, PWSTR, w};
-    unsafe {
-        let mut buf = [0u16; 128];
-        let module = GetModuleHandleW(w!("user32.dll")).unwrap_or_default();
-        let len = LoadStringW(
-            Some(HINSTANCE(module.0)),
-            id,
-            PWSTR(buf.as_mut_ptr()),
-            buf.len() as i32,
-        );
-        let text: Vec<u16> = if len > 0 {
-            buf[..len as usize]
-                .iter()
-                .copied()
-                .filter(|&c| c != '&' as u16)
-                .chain(std::iter::once(0))
-                .collect()
-        } else {
-            fallback
-                .as_wide()
-                .iter()
-                .copied()
-                .chain(std::iter::once(0))
-                .collect()
-        };
-        PCWSTR::from_raw(Box::leak(text.into_boxed_slice()).as_ptr())
-    }
+    use windows::core::{PWSTR, w};
+
+    let owned = |s: &str| s.encode_utf16().chain(std::iter::once(0)).collect::<Vec<u16>>();
+    let Ok(module) = (unsafe { GetModuleHandleW(w!("user32.dll")) }) else {
+        return owned(fallback);
+    };
+    let mut buf = [0u16; 128];
+    let len = unsafe {
+        LoadStringW(Some(HINSTANCE(module.0)), id, PWSTR(buf.as_mut_ptr()), buf.len() as i32)
+    };
+    if len > 0 { strip_mnemonic(&buf[..len as usize]) } else { owned(fallback) }
 }
 
 pub mod component;

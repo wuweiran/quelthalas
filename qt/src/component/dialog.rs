@@ -60,6 +60,9 @@ struct Context {
     render_target: ID2D1HwndRenderTarget,
     ok_button: HWND,
     cancel_button: Option<HWND>,
+    // Owned button-label buffers the child buttons' `PCWSTR`s point into; kept
+    // alive for the dialog's lifetime (the buttons read them live, never copy).
+    _button_labels: Vec<Vec<u16>>,
 }
 impl QT {
     pub fn open_dialog(
@@ -169,13 +172,17 @@ fn on_create(window: HWND, state: State) -> Result<Context> {
             },
         )?;
 
+        // Owned label buffers; moved into Context below to outlive the buttons.
+        let ok_label = crate::system_string(IDS_OK, "OK");
+        let cancel_label = crate::system_string(IDS_CANCEL, "Cancel");
+
         // OkCancel adds a "Cancel"; both use "OK" as the primary.
         let ok_button = qt.create_button(
             window,
             0,
             0,
             button::Props {
-                text: crate::system_string(IDS_OK, w!("OK")),
+                text: PCWSTR::from_raw(ok_label.as_ptr()),
                 appearance: button::Appearance::Primary,
                 mouse_event: MouseEvent {
                     on_click: Box::new(move |_| {
@@ -193,7 +200,7 @@ fn on_create(window: HWND, state: State) -> Result<Context> {
                 0,
                 0,
                 button::Props {
-                    text: crate::system_string(IDS_CANCEL, w!("Cancel")),
+                    text: PCWSTR::from_raw(cancel_label.as_ptr()),
                     mouse_event: MouseEvent {
                         on_click: Box::new(move |_| {
                             let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
@@ -214,6 +221,7 @@ fn on_create(window: HWND, state: State) -> Result<Context> {
             result: DialogResult::Close,
             ok_button,
             cancel_button,
+            _button_labels: vec![ok_label, cancel_label],
         })
     }
 }

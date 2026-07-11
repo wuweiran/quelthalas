@@ -83,15 +83,15 @@ impl Button {
             Button::Close => 8,  // IDCLOSE
         }
     }
-    fn label(self) -> PCWSTR {
+    fn label(self) -> Vec<u16> {
         // Localized via user32's string table (same ids MB_GetString uses).
         match self {
-            Button::Ok => crate::system_string(800, w!("OK")),
-            Button::Cancel => crate::system_string(801, w!("Cancel")),
-            Button::Yes => crate::system_string(805, w!("Yes")),
-            Button::No => crate::system_string(806, w!("No")),
-            Button::Retry => crate::system_string(803, w!("Retry")),
-            Button::Close => crate::system_string(807, w!("Close")),
+            Button::Ok => crate::system_string(800, "OK"),
+            Button::Cancel => crate::system_string(801, "Cancel"),
+            Button::Yes => crate::system_string(805, "Yes"),
+            Button::No => crate::system_string(806, "No"),
+            Button::Retry => crate::system_string(803, "Retry"),
+            Button::Close => crate::system_string(807, "Close"),
         }
     }
 }
@@ -150,6 +150,9 @@ struct Context {
     icon_svg: Option<ID2D1SvgDocument>,
     chevron_svg: Option<ID2D1SvgDocument>,
     buttons: Vec<(HWND, i32)>, // (hwnd, result id)
+    // Owned button-label buffers the child buttons' `PCWSTR`s point into; kept
+    // alive for the dialog's lifetime (the buttons read them live, never copy).
+    _button_labels: Vec<Vec<u16>>,
     checkbox: Option<HWND>,
     result: Cell<i32>,
     verified: Cell<bool>,
@@ -323,6 +326,7 @@ fn on_create(window: HWND, state: State) -> Result<Context> {
             state.props.buttons.clone()
         };
         let mut buttons = Vec::new();
+        let mut button_labels = Vec::new();
         for (i, b) in button_specs.iter().enumerate() {
             let id = b.id();
             let appearance = if i == 0 {
@@ -330,12 +334,14 @@ fn on_create(window: HWND, state: State) -> Result<Context> {
             } else {
                 button::Appearance::Secondary
             };
+            // Owned label buffer, kept in Context so it outlives the button.
+            let label = b.label();
             let hwnd = qt.create_button(
                 window,
                 0,
                 0,
                 button::Props {
-                    text: b.label(),
+                    text: PCWSTR::from_raw(label.as_ptr()),
                     appearance,
                     mouse_event: MouseEvent {
                         on_click: Box::new(move |_| {
@@ -348,6 +354,7 @@ fn on_create(window: HWND, state: State) -> Result<Context> {
                 },
             )?;
             buttons.push((hwnd, id));
+            button_labels.push(label);
         }
 
         let checkbox = match state.props.verification {
@@ -383,6 +390,7 @@ fn on_create(window: HWND, state: State) -> Result<Context> {
             icon_svg,
             chevron_svg,
             buttons,
+            _button_labels: button_labels,
             checkbox,
             result: Cell::new(2), // IDCANCEL default
             verified: Cell::new(false),
