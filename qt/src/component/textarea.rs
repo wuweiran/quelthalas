@@ -26,7 +26,8 @@ use windows::Win32::Graphics::DirectWrite::{
 };
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, COLOR_HIGHLIGHT, COLOR_HIGHLIGHTTEXT, CreateRoundRectRgn, EndPaint, GetSysColor,
-    InvalidateRect, PAINTSTRUCT, RDW_INVALIDATE, RedrawWindow, SYS_COLOR_INDEX, SetWindowRgn,
+    InvalidateRect, PAINTSTRUCT, RDW_INVALIDATE, RedrawWindow, SYS_COLOR_INDEX, ScreenToClient,
+    SetWindowRgn,
 };
 use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
 use windows::Win32::System::DataExchange::{
@@ -1141,6 +1142,25 @@ extern "system" fn window_proc(
                 };
             _ = RedrawWindow(Some(window), None, None, RDW_INVALIDATE);
             LRESULT(0)
+        },
+        WM_SETCURSOR => unsafe {
+            // Arrow cursor over the scrollbar region; the class default (I-beam)
+            // everywhere else. Only when there's actually a scrollbar.
+            let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *const Context;
+            if !raw.is_null() && (*raw).scroll.visible() {
+                let mut pt = POINT::default();
+                _ = GetCursorPos(&mut pt);
+                _ = ScreenToClient(window, &mut pt);
+                let scaling_factor = get_scaling_factor(window);
+                let x = pt.x as f32 / scaling_factor;
+                let y = pt.y as f32 / scaling_factor;
+                let t = (*raw).track_rect();
+                if x >= t.left && x <= t.right && y >= t.top && y <= t.bottom {
+                    SetCursor(LoadCursorW(None, IDC_ARROW).ok());
+                    return LRESULT(1);
+                }
+            }
+            DefWindowProcW(window, message, w_param, l_param)
         },
         WM_MOUSEMOVE => unsafe {
             let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
