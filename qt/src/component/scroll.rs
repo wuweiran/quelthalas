@@ -84,6 +84,12 @@ pub struct VScroll {
     expanded: bool,
     hovered_part: ScrollPart,
     pressed_part: ScrollPart,
+    /// Track hold-to-repeat paging: direction (-1 up / +1 down), the target y
+    /// (the held cursor position in the track), and the track it was pressed in.
+    track_paging: bool,
+    page_dir: f32,
+    page_target_y: f32,
+    page_track: D2D_RECT_F,
     /// Arrow glyph SVGs, lazily created on first paint from the render target.
     up_svg: RefCell<Option<ID2D1SvgDocument>>,
     down_svg: RefCell<Option<ID2D1SvgDocument>>,
@@ -102,6 +108,15 @@ impl VScroll {
             expanded: false,
             hovered_part: ScrollPart::None,
             pressed_part: ScrollPart::None,
+            track_paging: false,
+            page_dir: 0.0,
+            page_target_y: 0.0,
+            page_track: D2D_RECT_F {
+                left: 0.0,
+                top: 0.0,
+                right: 0.0,
+                bottom: 0.0,
+            },
             up_svg: RefCell::new(None),
             down_svg: RefCell::new(None),
         }
@@ -406,17 +421,20 @@ impl VScroll {
                 ScrollHit::Down
             }
             ScrollPart::None => {
-                // Track click → page toward it.
-                let page = self.viewport_height * 0.9;
-                let thumb_mid = self
-                    .thumb_rect(track)
-                    .map(|t| (t.top + t.bottom) / 2.0)
-                    .unwrap_or(y);
-                if y < thumb_mid {
-                    self.scroll_by(-page);
-                } else {
-                    self.scroll_by(page);
-                }
+                // Track press → page toward the pointer once, then keep paging
+                // (hold-to-repeat) until the thumb reaches the pointer.
+                let dir = {
+                    let thumb_mid = self
+                        .thumb_rect(track)
+                        .map(|t| (t.top + t.bottom) / 2.0)
+                        .unwrap_or(y);
+                    if y < thumb_mid { -1.0 } else { 1.0 }
+                };
+                self.track_paging = true;
+                self.page_dir = dir;
+                self.page_target_y = y;
+                self.page_track = track;
+                self.page_step();
                 ScrollHit::Track
             }
         }
@@ -427,8 +445,31 @@ impl VScroll {
         self.scroll_by(dir * self.line_height)
     }
 
-    /// Called by the host's repeat timer while an arrow is held. Returns redraw.
+    /// One page step toward the held track position. Stops (clears `track_paging`)
+    /// once the thumb reaches the pointer or the end is hit. Returns redraw.
+    fn page_step(&mut self) -> bool {
+        // Stop if the thumb now covers the target pointer y.
+        if let Some(t) = self.thumb_rect(self.page_track) {
+            if self.page_target_y >= t.top && self.page_target_y <= t.bottom {
+                self.track_paging = false;
+                return false;
+            }
+        }
+        let page = self.viewport_height * 0.9;
+        let changed = self.scroll_by(self.page_dir * page);
+        if !changed {
+            // Hit the end — nothing more to page.
+            self.track_paging = false;
+        }
+        changed
+    }
+
+    /// Called by the host's repeat timer while an arrow or the track is held.
+    /// Returns redraw.
     pub fn repeat_step(&mut self) -> bool {
+        if self.track_paging {
+            return self.page_step();
+        }
         match self.pressed_part {
             ScrollPart::Up => self.step_line(-1.0),
             ScrollPart::Down => self.step_line(1.0),
@@ -467,9 +508,11 @@ impl VScroll {
 
     /// Release. Returns needs_redraw.
     pub fn on_l_button_up(&mut self) -> bool {
-        let was_active = self.dragging || self.pressed_part != ScrollPart::None;
+        let was_active =
+            self.dragging || self.pressed_part != ScrollPart::None || self.track_paging;
         self.dragging = false;
         self.pressed_part = ScrollPart::None;
+        self.track_paging = false;
         was_active
     }
 
@@ -477,8 +520,9 @@ impl VScroll {
         self.dragging
     }
 
-    pub fn is_pressing_arrow(&self) -> bool {
-        matches!(self.pressed_part, ScrollPart::Up | ScrollPart::Down)
+    /// True while an arrow or the track is held (host keeps the repeat timer alive).
+    pub fn is_repeating(&self) -> bool {
+        self.track_paging || matches!(self.pressed_part, ScrollPart::Up | ScrollPart::Down)
     }
 
     /// Clear hover state (host WM_MOUSELEAVE). Returns redraw.

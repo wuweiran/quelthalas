@@ -1109,7 +1109,7 @@ extern "system" fn window_proc(
         WM_TIMER if w_param.0 == REPEAT_TIMER_ID => unsafe {
             let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
             let context = &mut *raw;
-            if context.scroll.is_pressing_arrow() {
+            if context.scroll.is_repeating() {
                 SetTimer(Some(window), REPEAT_TIMER_ID, REPEAT_INTERVAL_MS, None);
                 if context.scroll.repeat_step() {
                     _ = InvalidateRect(Some(window), None, false);
@@ -1224,9 +1224,9 @@ extern "system" fn window_proc(
                 .on_l_button_down(px, py, context.track_rect())
             {
                 ScrollHit::Miss => (false, false),
-                ScrollHit::Thumb | ScrollHit::Track => (true, true),
-                ScrollHit::Up | ScrollHit::Down => {
-                    // Auto-repeat while the arrow is held (like SpinButton).
+                ScrollHit::Thumb => (true, true),
+                ScrollHit::Track | ScrollHit::Up | ScrollHit::Down => {
+                    // Auto-repeat while the arrow / track is held (like SpinButton).
                     SetTimer(Some(window), REPEAT_TIMER_ID, REPEAT_INITIAL_MS, None);
                     (true, true)
                 }
