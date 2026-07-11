@@ -422,7 +422,6 @@ struct Geometry {
     content_h: f32,
     link_rects: Vec<D2D_RECT_F>,
     buttons_top: f32,
-    total_height: f32,
 }
 
 fn geometry(context: &Context) -> Geometry {
@@ -467,7 +466,6 @@ fn geometry(context: &Context) -> Geometry {
         content_h,
         link_rects,
         buttons_top,
-        total_height: buttons_top,
     }
 }
 
@@ -545,7 +543,7 @@ fn layout(window: HWND, context: &Context) -> Result<()> {
     Ok(())
 }
 
-fn paint(window: HWND, context: &Context) -> Result<()> {
+fn paint(context: &Context) -> Result<()> {
     let state = &context.state;
     let tokens = &state.qt.theme.tokens;
     let g = geometry(context);
@@ -701,7 +699,7 @@ fn on_paint(window: HWND, context: &Context) -> Result<()> {
         context
             .render_target
             .Clear(Some(&context.state.qt.theme.tokens.color_neutral_background1));
-        let result = paint(window, context).and(context.render_target.EndDraw(None, None));
+        let result = paint(context).and(context.render_target.EndDraw(None, None));
         _ = EndPaint(window, &ps);
         result
     }
