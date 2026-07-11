@@ -1266,34 +1266,38 @@ fn show_popup(
     }
     let max_height = info.rcWork.bottom - info.rcWork.top;
     let (width, height) = calc_popup_menu_size(qt, menu, max_height)?;
+    // width/height are DIPs, but x/y, the work area and the anchors are device
+    // pixels — and the window is placed at device-pixel size. Do all positioning
+    // math in device pixels so right-align and the edge clamps stay correct at
+    // non-100% DPI.
+    let scaling_factor = get_scaling_factor(window);
+    let scaled_width = (width as f32 * scaling_factor) as i32;
+    let scaled_height = (height as f32 * scaling_factor) as i32;
     // Right-aligned: the passed x is the menu's right edge; grow leftward.
-    let mut x = if align_right { x - width } else { x };
-    if x + width > info.rcWork.right {
-        if x_anchor != 0 && x >= width - x_anchor {
-            x = x - width - x_anchor;
+    let mut x = if align_right { x - scaled_width } else { x };
+    if x + scaled_width > info.rcWork.right {
+        if x_anchor != 0 && x >= scaled_width - x_anchor {
+            x = x - scaled_width - x_anchor;
         }
-        if x + width > info.rcWork.right {
-            x = info.rcWork.right - width;
+        if x + scaled_width > info.rcWork.right {
+            x = info.rcWork.right - scaled_width;
         }
     }
     if x < info.rcWork.left {
         x = info.rcWork.left;
     }
     let mut y = y;
-    if y + height > info.rcWork.bottom {
-        if y_anchor != 0 && y >= height + y_anchor {
-            y -= height + y_anchor;
+    if y + scaled_height > info.rcWork.bottom {
+        if y_anchor != 0 && y >= scaled_height + y_anchor {
+            y -= scaled_height + y_anchor;
         }
-        if y + height > info.rcWork.bottom {
-            y = info.rcWork.bottom - height;
+        if y + scaled_height > info.rcWork.bottom {
+            y = info.rcWork.bottom - scaled_height;
         }
     }
     if y < info.rcWork.top {
         y = info.rcWork.top;
     }
-    let scaling_factor = get_scaling_factor(window);
-    let scaled_width = (width as f32 * scaling_factor) as i32;
-    let scaled_height = (height as f32 * scaling_factor) as i32;
     let corner_diameter = (qt.theme.tokens.border_radius_medium * 2f32 * scaling_factor) as i32;
     unsafe {
         // Start fully transparent (before it's shown, so there's no flash),
