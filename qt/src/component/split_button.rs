@@ -643,6 +643,15 @@ fn open_dropdown(window: HWND, context: &Context) {
     let menu_list = context.state.menu_list.clone();
     // Right-aligned: the menu's right edge lines up with the button's right edge.
     _ = qt.open_menu_right_aligned(parent, rc.right, rc.bottom, menu::Props { menu_list });
+    // The menu's tracking loop leaves the click that dismissed it in the queue. If
+    // that click was on this button, the now-uncaptured message would be retargeted
+    // to us and re-open the menu, so drain any pending mouse-button messages.
+    unsafe {
+        let mut msg = MSG::default();
+        while PeekMessageW(&mut msg, Some(window), WM_LBUTTONDOWN, WM_LBUTTONUP, PM_REMOVE)
+            .as_bool()
+        {}
+    }
 }
 
 fn fire_primary(window: &HWND, context: &Context) {
@@ -743,13 +752,20 @@ extern "system" fn window_proc(
             let context = &*raw;
             let scaling_factor = get_scaling_factor(window);
             let x = (l_param.0 as i16 as i32) as f32 / scaling_factor;
-            let zone = zone_at(window, context, x);
+            let released_zone = zone_at(window, context, x);
+            let pressed_zone = context.pressed_zone;
             (*raw).pressed_zone = Zone::None;
             _ = change_color(context);
-            // Fire on release (matches native), routed by the release zone.
-            match zone {
-                Zone::Menu => open_dropdown(window, context),
-                _ => fire_primary(&window, context),
+            // Only act on a full press+release in the same zone. This also stops the
+            // dropdown re-opening when a click *dismisses* the open menu: that click's
+            // button-down goes to the menu (which holds capture), so the split button
+            // sees only the stray button-up with no matching press.
+            if pressed_zone == released_zone {
+                match released_zone {
+                    Zone::Menu => open_dropdown(window, context),
+                    Zone::Action => fire_primary(&window, context),
+                    Zone::None => {}
+                }
             }
             LRESULT(0)
         },
