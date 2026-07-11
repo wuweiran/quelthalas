@@ -2,6 +2,7 @@ pub mod button;
 pub mod checkbox;
 pub mod combobox;
 pub mod dialog;
+pub mod divider;
 pub mod dropdown;
 pub mod input;
 pub mod link;

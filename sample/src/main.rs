@@ -19,8 +19,8 @@ use quelthalas::component::button::IconPosition;
 use quelthalas::component::dialog::DialogResult;
 use quelthalas::component::menu::MenuInfo;
 use quelthalas::component::{
-    button, checkbox, combobox, dialog, dropdown, input, link, list_box, menu, menu_bar, option,
-    progress_bar, radio, slider, spin_button, spinner, split_button, switch, tab_list, text,
+    button, checkbox, combobox, dialog, divider, dropdown, input, link, list_box, menu, menu_bar,
+    option, progress_bar, radio, slider, spin_button, spinner, split_button, switch, tab_list, text,
     textarea, tree_view,
 };
 use quelthalas::icon::Icon;
@@ -772,6 +772,52 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
                     )
                     .unwrap_or_default();
 
+                let divider_label = section(w!("Divider"));
+                let make_divider = |label: Option<PCWSTR>,
+                                    alignment: divider::Alignment,
+                                    appearance: divider::Appearance| {
+                    qt.create_divider(
+                        window,
+                        0,
+                        0,
+                        divider::Props {
+                            label,
+                            alignment,
+                            appearance,
+                            width: 280,
+                            background: Some(palette.canvas),
+                        },
+                    )
+                    .unwrap_or_default()
+                };
+                let divider_start = make_divider(
+                    Some(w!("Details")),
+                    divider::Alignment::Start,
+                    divider::Appearance::Default,
+                );
+                let divider_center = make_divider(
+                    Some(w!("Center")),
+                    divider::Alignment::Center,
+                    divider::Appearance::Default,
+                );
+                let divider_plain =
+                    make_divider(None, divider::Alignment::Center, divider::Appearance::Default);
+                let divider_subtle = make_divider(
+                    Some(w!("Subtle")),
+                    divider::Alignment::Start,
+                    divider::Appearance::Subtle,
+                );
+                let divider_brand = make_divider(
+                    Some(w!("Brand")),
+                    divider::Alignment::Start,
+                    divider::Appearance::Brand,
+                );
+                let divider_strong = make_divider(
+                    Some(w!("Strong")),
+                    divider::Alignment::Start,
+                    divider::Appearance::Strong,
+                );
+
                 // Slider: drag the thumb or click the rail; arrows step the value.
                 let slider_label = section(w!("Slider"));
                 let slider = qt
@@ -1158,7 +1204,18 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
                     .gap(gap_section)
                     .add_stack(Stack::vertical().gap(gap_s).add(menu_label).add(menu_hint))
                     .add_stack(Stack::vertical().gap(gap_s).add(dialog_label).add(open_dialog))
-                    .add_stack(Stack::vertical().gap(gap_s).add(tablist_label).add(demo_tabs));
+                    .add_stack(Stack::vertical().gap(gap_s).add(tablist_label).add(demo_tabs))
+                    .add_stack(
+                        Stack::vertical()
+                            .gap(gap_s)
+                            .add(divider_label)
+                            .add(divider_start)
+                            .add(divider_center)
+                            .add(divider_plain)
+                            .add(divider_subtle)
+                            .add(divider_brand)
+                            .add(divider_strong),
+                    );
 
                 // Each page's own controls (for show/hide) — the strip + Close are
                 // always visible, so they're not in these lists.
