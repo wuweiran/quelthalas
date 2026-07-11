@@ -15,6 +15,7 @@ pub mod scroll;
 pub mod slider;
 pub mod spin_button;
 pub mod spinner;
+pub mod split_button;
 pub mod switch;
 pub mod tab_list;
 pub mod text;

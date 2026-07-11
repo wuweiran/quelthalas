@@ -481,6 +481,7 @@ fn run_menu_mode(window: HWND, start: usize) {
                 menu::Props { menu_list },
                 Some(window),
                 Some(rect),
+                false,
             );
 
             match exit {

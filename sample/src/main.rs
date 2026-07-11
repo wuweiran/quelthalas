@@ -20,7 +20,8 @@ use quelthalas::component::dialog::DialogResult;
 use quelthalas::component::menu::MenuInfo;
 use quelthalas::component::{
     button, checkbox, combobox, dialog, dropdown, input, link, list_box, menu, menu_bar, option,
-    progress_bar, radio, slider, spin_button, spinner, switch, tab_list, text, textarea, tree_view,
+    progress_bar, radio, slider, spin_button, spinner, split_button, switch, tab_list, text,
+    textarea, tree_view,
 };
 use quelthalas::icon::Icon;
 use quelthalas::layout::Stack;
@@ -74,6 +75,9 @@ const WM_APP_TAB: u32 = WM_APP + 1;
 const CMD_VIEW_THEME_LIGHT: u32 = 200;
 const CMD_VIEW_THEME_DARK: u32 = 201;
 const CMD_HELP_ABOUT: u32 = 300;
+// SplitButton dropdown items.
+const CMD_ITEM_A: u32 = 400;
+const CMD_ITEM_B: u32 = 401;
 
 /// Re-arrange the tab strip + the active page. The tab strip and Close button are
 /// members of every page's Stack, so arranging the active page's Stack lays out
@@ -480,6 +484,69 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
                         text::PresetProps {
                             text: w!("Right-click here for a context menu."),
                             background: Some(palette.menu_area),
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap_or_default();
+
+                let split_button_label = section(w!("Split button"));
+                let split_menu = || {
+                    vec![
+                        menu::MenuInfo::MenuItem {
+                            text: w!("Item a"),
+                            command_id: CMD_ITEM_A,
+                            disabled: false,
+                            secondary_text: None,
+                        },
+                        menu::MenuInfo::MenuItem {
+                            text: w!("Item b"),
+                            command_id: CMD_ITEM_B,
+                            disabled: false,
+                            secondary_text: None,
+                        },
+                    ]
+                };
+                let split_secondary = qt
+                    .create_split_button(
+                        window,
+                        0,
+                        0,
+                        split_button::Props {
+                            text: w!("Default"),
+                            menu_list: split_menu(),
+                            mouse_event: MouseEvent {
+                                on_click: Box::new(move |_| {
+                                    _ = PostMessageW(
+                                        Some(window),
+                                        WM_COMMAND,
+                                        WPARAM(CMD_ITEM_A as usize),
+                                        LPARAM(0),
+                                    );
+                                }),
+                            },
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap_or_default();
+                let split_primary = qt
+                    .create_split_button(
+                        window,
+                        0,
+                        0,
+                        split_button::Props {
+                            text: w!("Primary"),
+                            appearance: button::Appearance::Primary,
+                            menu_list: split_menu(),
+                            mouse_event: MouseEvent {
+                                on_click: Box::new(move |_| {
+                                    _ = PostMessageW(
+                                        Some(window),
+                                        WM_COMMAND,
+                                        WPARAM(CMD_ITEM_A as usize),
+                                        LPARAM(0),
+                                    );
+                                }),
+                            },
                             ..Default::default()
                         },
                     )
@@ -961,6 +1028,17 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
                                     .add(large_icon),
                             ),
                     )
+                    .add_stack(
+                        Stack::vertical()
+                            .gap(gap_s)
+                            .add(split_button_label)
+                            .add_stack(
+                                Stack::horizontal()
+                                    .gap(gap_m)
+                                    .add(split_secondary)
+                                    .add(split_primary),
+                            ),
+                    )
                     .add_stack(Stack::vertical().gap(gap_s).add(checkbox_label).add(checkbox))
                     .add_stack(
                         Stack::vertical()
@@ -1333,6 +1411,19 @@ extern "system" fn window_process(
                             window,
                             w!("About"),
                             w!("Quel'Thalas — Fluent-styled Win32 controls."),
+                            &dialog::ModelType::Alert,
+                        );
+                    }
+                    CMD_ITEM_A | CMD_ITEM_B => {
+                        let qt = &(*raw).qt;
+                        let content = match id {
+                            CMD_ITEM_A => w!("Item a"),
+                            _ => w!("Item b"),
+                        };
+                        _ = qt.open_dialog(
+                            window,
+                            w!("Split button"),
+                            content,
                             &dialog::ModelType::Alert,
                         );
                     }

@@ -206,7 +206,21 @@ impl QT {
     /// Open a dropdown / context menu at screen point `(x, y)` and track it modally.
     /// Chosen commands are posted to `parent_window` as `WM_COMMAND(command_id)`.
     pub fn open_menu(&self, parent_window: HWND, x: i32, y: i32, props: Props) -> Result<()> {
-        self.open_menu_ex(parent_window, x, y, props, None, None)
+        self.open_menu_ex(parent_window, x, y, props, None, None, false)
+            .map(|_| ())
+    }
+
+    /// Like [`open_menu`], but `x` is the menu's **right** edge (right-aligned) —
+    /// the menu grows leftward from `x`. Used by the split button so the dropdown
+    /// lines up with the button's right edge.
+    pub fn open_menu_right_aligned(
+        &self,
+        parent_window: HWND,
+        x: i32,
+        y: i32,
+        props: Props,
+    ) -> Result<()> {
+        self.open_menu_ex(parent_window, x, y, props, None, None, true)
             .map(|_| ())
     }
 
@@ -223,6 +237,7 @@ impl QT {
         props: Props,
         owner_bar: Option<HWND>,
         owner_bar_open_rect: Option<RECT>,
+        align_right: bool,
     ) -> Result<TrackExit> {
         unsafe {
             static REGISTER: Once = Once::new();
@@ -241,7 +256,7 @@ impl QT {
                 return Err(Error::from(ERROR_INVALID_WINDOW_HANDLE));
             }
             let menu = Rc::new(RefCell::new(convert_menu_info_list_to_menu(props.menu_list)));
-            init_popup(self.clone(), parent_window, menu.clone(), x, y, 0, 0)?;
+            init_popup(self.clone(), parent_window, menu.clone(), x, y, 0, 0, align_right)?;
             init_tracking(parent_window)?;
             let exit = track_menu(
                 menu.clone(),
@@ -263,6 +278,7 @@ pub struct CreateParams {
     owning_window: HWND,
     x_anchor: i32,
     y_anchor: i32,
+    align_right: bool,
 }
 
 fn init_popup(
@@ -273,6 +289,7 @@ fn init_popup(
     y: i32,
     x_anchor: i32,
     y_anchor: i32,
+    align_right: bool,
 ) -> Result<()> {
     let boxed = Box::new(CreateParams {
         qt,
@@ -280,6 +297,7 @@ fn init_popup(
         owning_window,
         x_anchor,
         y_anchor,
+        align_right,
     });
     let window = unsafe {
         CreateWindowExW(
@@ -715,6 +733,7 @@ fn show_sub_popup(
                         rect.top,
                         rect.right,
                         rect.bottom,
+                        false,
                     )?;
                     return Ok(sub_menu.clone());
                 }
@@ -1233,6 +1252,7 @@ fn show_popup(
     y: i32,
     x_anchor: i32,
     y_anchor: i32,
+    align_right: bool,
 ) -> Result<()> {
     menu.focused_item_index = None;
     let pt = POINT { x, y };
@@ -1246,7 +1266,8 @@ fn show_popup(
     }
     let max_height = info.rcWork.bottom - info.rcWork.top;
     let (width, height) = calc_popup_menu_size(qt, menu, max_height)?;
-    let mut x = x;
+    // Right-aligned: the passed x is the menu's right edge; grow leftward.
+    let mut x = if align_right { x - width } else { x };
     if x + width > info.rcWork.right {
         if x_anchor != 0 && x >= width - x_anchor {
             x = x - width - x_anchor;
@@ -1548,6 +1569,7 @@ fn on_create(window: HWND, params: CreateParams, x: i32, y: i32) -> Result<Conte
             y,
             params.x_anchor,
             params.y_anchor,
+            params.align_right,
         )?;
     }
 
