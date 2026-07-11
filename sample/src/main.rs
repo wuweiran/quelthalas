@@ -19,8 +19,8 @@ use quelthalas::component::button::IconPosition;
 use quelthalas::component::dialog::DialogResult;
 use quelthalas::component::menu::MenuInfo;
 use quelthalas::component::{
-    button, checkbox, combobox, dialog, dropdown, input, link, menu, menu_bar, option, progress_bar,
-    radio, slider, spin_button, spinner, switch, tab_list, text, textarea,
+    button, checkbox, combobox, dialog, dropdown, input, link, list_box, menu, menu_bar, option,
+    progress_bar, radio, slider, spin_button, spinner, switch, tab_list, text, textarea,
 };
 use quelthalas::icon::Icon;
 use quelthalas::layout::Stack;
@@ -624,6 +624,32 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
                     )
                     .unwrap_or_default();
 
+                let list_box_label = section(w!("List box"));
+                let list_box = qt
+                    .create_list_box(
+                        window,
+                        0,
+                        0,
+                        list_box::Props {
+                            items: vec![
+                                option::Item::new(w!("Mercury")),
+                                option::Item::new(w!("Venus")),
+                                option::Item::new(w!("Earth")),
+                                option::Item::disabled(w!("Mars")),
+                                option::Item::new(w!("Jupiter")),
+                                option::Item::new(w!("Saturn")),
+                                option::Item::new(w!("Uranus")),
+                                option::Item::new(w!("Neptune")),
+                            ],
+                            width: 240,
+                            height: 160,
+                            selected: Some(2),
+                            background: Some(palette.canvas),
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap_or_default();
+
                 let textarea_label = section(w!("Textarea"));
                 let textarea = qt
                     .create_textarea(
@@ -820,6 +846,7 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
                         tab_list::Props {
                             tabs: vec![
                                 w!("Basic Input"),
+                                w!("Collections"),
                                 w!("Text"),
                                 w!("Status & info"),
                                 w!("Other"),
@@ -863,7 +890,7 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
                     )
                     .unwrap_or_default();
 
-                // --- Page 0: Basic Input ---
+                // --- Basic Input ---
                 let gap_s = qt.theme().tokens.spacing_vertical_s;
                 let gap_m = qt.theme().tokens.spacing_horizontal_m;
                 let gap_section = qt.theme().tokens.spacing_vertical_xxl;
@@ -926,7 +953,18 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
                     .add_stack(basic_left)
                     .add_stack(basic_right);
 
-                // --- Page 1: Text ---
+                // --- Collections ---
+                // list_box
+                let collections = Stack::vertical()
+                    .gap(gap_section)
+                    .add_stack(
+                        Stack::vertical()
+                            .gap(gap_s)
+                            .add(list_box_label)
+                            .add(list_box),
+                    );
+
+                // --- Text ---
                 // input, text | textarea
                 let text_left = Stack::vertical()
                     .gap(gap_section)
@@ -972,7 +1010,7 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
                     .add_stack(text_left)
                     .add_stack(text_right);
 
-                // --- Page 2: Status & info ---
+                // --- Status & info ---
                 // progress_bar, spinner, tooltip
                 let status_info = Stack::vertical()
                     .gap(gap_section)
@@ -991,7 +1029,7 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
                             .add(tooltip_button),
                     );
 
-                // --- Page 3: Other ---
+                // --- Other ---
                 // menu, dialog, tab_list
                 let other = Stack::vertical()
                     .gap(gap_section)
@@ -1001,7 +1039,7 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
 
                 // Each page's own controls (for show/hide) — the strip + Close are
                 // always visible, so they're not in these lists.
-                let page_contents = [basic_input, text_page, status_info, other];
+                let page_contents = [basic_input, collections, text_page, status_info, other];
                 let pages: Vec<Page> = page_contents
                     .into_iter()
                     .map(|content| {
