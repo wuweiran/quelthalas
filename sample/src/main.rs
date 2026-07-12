@@ -845,9 +845,9 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
                         0,
                         data_grid::Props {
                             columns: vec![
-                                data_grid::Column { header: w!("File"), width: 200 },
-                                data_grid::Column { header: w!("Author"), width: 140 },
-                                data_grid::Column { header: w!("Last updated"), width: 150 },
+                                data_grid::Column { header: w!("File"), width: 200, sortable: true },
+                                data_grid::Column { header: w!("Author"), width: 140, sortable: true },
+                                data_grid::Column { header: w!("Last updated"), width: 150, sortable: true },
                             ],
                             rows: vec![
                                 data_grid::Row {
@@ -859,7 +859,7 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
                                         data_grid::Cell::text(w!("Max Mustermann")),
                                         data_grid::Cell::new(
                                             Icon::calendar_month_20_regular(),
-                                            w!("7h ago"),
+                                            w!("2026-07-12 09:15"),
                                         ),
                                     ],
                                 },
@@ -872,7 +872,7 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
                                         data_grid::Cell::text(w!("Erika Mustermann")),
                                         data_grid::Cell::new(
                                             Icon::calendar_month_20_regular(),
-                                            w!("Yesterday"),
+                                            w!("2026-07-11 16:40"),
                                         ),
                                     ],
                                 },
@@ -885,7 +885,7 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
                                         data_grid::Cell::text(w!("John Doe")),
                                         data_grid::Cell::new(
                                             Icon::calendar_month_20_regular(),
-                                            w!("Yesterday"),
+                                            w!("2026-07-11 08:05"),
                                         ),
                                     ],
                                 },
@@ -898,7 +898,7 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
                                         data_grid::Cell::text(w!("Jane Doe")),
                                         data_grid::Cell::new(
                                             Icon::calendar_month_20_regular(),
-                                            w!("Tue at 9:30 AM"),
+                                            w!("2026-07-07 09:30"),
                                         ),
                                     ],
                                 },
@@ -911,7 +911,7 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
                                         data_grid::Cell::text(w!("Sam Rivera")),
                                         data_grid::Cell::new(
                                             Icon::calendar_month_20_regular(),
-                                            w!("Mon at 4:12 PM"),
+                                            w!("2026-07-06 16:12"),
                                         ),
                                     ],
                                 },
@@ -924,7 +924,7 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
                                         data_grid::Cell::text(w!("Alex Kim")),
                                         data_grid::Cell::new(
                                             Icon::calendar_month_20_regular(),
-                                            w!("Last week"),
+                                            w!("2026-07-03 11:20"),
                                         ),
                                     ],
                                 },

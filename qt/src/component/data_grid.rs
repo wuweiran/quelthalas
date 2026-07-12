@@ -21,7 +21,7 @@ use windows::Win32::Graphics::Direct2D::{
 };
 use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_MEASURING_MODE_NATURAL,
-    DWRITE_PARAGRAPH_ALIGNMENT_CENTER, IDWriteTextFormat,
+    DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_TEXT_METRICS, IDWriteTextFormat,
 };
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, CreateRoundRectRgn, EndPaint, InvalidateRect, PAINTSTRUCT, RDW_INVALIDATE,
@@ -61,10 +61,15 @@ const CHECK_GLYPH: f32 = 12.0;
 /// Leading icon draw size inside a cell (DIPs).
 const CELL_ICON: f32 = 20.0;
 
-/// One column: a header label and a fixed width (DIPs). (Resizable/sortable deferred.)
+/// Sort-direction arrow drawn in the header of the sorted column, at native size (DIPs).
+const SORT_ARROW: f32 = 12.0;
+
+/// One column: a header label and a fixed width (DIPs). (Column-resize deferred.)
 pub struct Column {
     pub header: PCWSTR,
     pub width: i32,
+    /// Clicking the header sorts by this column's cell text (Win32 `LVN_COLUMNCLICK`).
+    pub sortable: bool,
 }
 
 /// One cell: an optional leading 20px icon and text (either may be empty).
@@ -201,10 +206,19 @@ struct Context {
     checkmark_svg: ID2D1SvgDocument,
     /// The mixed-state inner square (Fluent `Square12Filled`), re-tinted per draw.
     square_svg: ID2D1SvgDocument,
+    /// Sort-direction arrows for the sorted column header.
+    arrow_up_svg: ID2D1SvgDocument,
+    arrow_down_svg: ID2D1SvgDocument,
     /// Per-cell icon SVGs (rows × columns), built once in `on_create`.
     icon_svgs: Vec<Vec<Option<ID2D1SvgDocument>>>,
-    /// Per-row selection flag (parallel to rows).
+    /// Per-row selection flag (parallel to rows, keyed by original row index).
     selected: Vec<bool>,
+    /// Current sort: `(column, ascending)`. `None` = original order.
+    sort: Option<(usize, bool)>,
+    /// Display order: `order[display_pos] = original_row_index`. Selection, focus,
+    /// and callbacks stay keyed by the original index, so sorting never renumbers
+    /// the caller's rows.
+    order: Vec<usize>,
     /// Keyboard focus row (drawn with a hover fill when not selected).
     focused: Option<usize>,
     /// Anchor for Shift-range selection.
@@ -289,7 +303,9 @@ impl Context {
         }
     }
 
-    /// Body row index at a client-DIP y, or None if in the header / past the end.
+    /// Body row's **original** index at a client-DIP y, or None if in the header /
+    /// past the end. Maps the display slot through `order` so sorting doesn't
+    /// renumber the caller's rows.
     fn row_at(&self, y: f32) -> Option<usize> {
         let body = self.body_rect();
         if y < body.top {
@@ -300,10 +316,15 @@ impl Context {
             return None;
         }
         let slot = self.state.row_slot();
-        let i = (rel / slot) as usize;
+        let pos = (rel / slot) as usize;
         // No inter-row gap now (rows abut, separated only by a 1px divider), so the
         // whole slot belongs to the row.
-        if i < self.state.rows.len() { Some(i) } else { None }
+        self.order.get(pos).copied()
+    }
+
+    /// Display slot (0-based, top→bottom) of an original row index.
+    fn display_pos(&self, original: usize) -> usize {
+        self.order.iter().position(|&o| o == original).unwrap_or(original)
     }
 
     fn selected_indices(&self) -> Vec<usize> {
@@ -476,6 +497,19 @@ fn on_create(window: HWND, state: State) -> Result<Context> {
             &tokens.color_compound_brand_foreground1,
         )
         .ok_or(Error::from(E_FAIL))?;
+        // Sort-direction arrows for the sorted column header (20px art, drawn at 12).
+        let arrow_up_svg = make_svg(
+            &dc5,
+            &Icon::arrow_up_20_regular(),
+            &tokens.color_neutral_foreground2,
+        )
+        .ok_or(Error::from(E_FAIL))?;
+        let arrow_down_svg = make_svg(
+            &dc5,
+            &Icon::arrow_down_20_regular(),
+            &tokens.color_neutral_foreground2,
+        )
+        .ok_or(Error::from(E_FAIL))?;
 
         // Per-cell icon SVGs (rows × columns), tinted foreground2.
         let icon_color = tokens.color_neutral_foreground2;
@@ -498,8 +532,12 @@ fn on_create(window: HWND, state: State) -> Result<Context> {
             render_target,
             checkmark_svg,
             square_svg,
+            arrow_up_svg,
+            arrow_down_svg,
             icon_svgs,
             selected: vec![false; n],
+            sort: None,
+            order: (0..n).collect(),
             focused: None,
             anchor: None,
             hovered_row: None,
@@ -560,7 +598,8 @@ fn update_metrics(context: &mut Context) {
 
 fn ensure_row_visible(context: &mut Context, i: usize) {
     let slot = context.state.row_slot();
-    context.scroll.ensure_visible(i as f32 * slot, i as f32 * slot + ROW_H);
+    let pos = context.display_pos(i) as f32;
+    context.scroll.ensure_visible(pos * slot, pos * slot + ROW_H);
 }
 
 fn fire_selection(window: HWND, context: &Context) {
@@ -600,10 +639,17 @@ fn toggle_row(window: HWND, context: &mut Context, i: usize) {
 
 fn select_range(window: HWND, context: &mut Context, to: usize) {
     let from = context.anchor.unwrap_or(to);
-    let (lo, hi) = if from <= to { (from, to) } else { (to, from) };
+    // The Shift-range spans the visible order, not the original indices, so a range
+    // over a sorted grid follows what the user sees.
+    let (lo, hi) = {
+        let (a, b) = (context.display_pos(from), context.display_pos(to));
+        if a <= b { (a, b) } else { (b, a) }
+    };
     context.selected.iter_mut().for_each(|b| *b = false);
-    for b in &mut context.selected[lo..=hi] {
-        *b = true;
+    for pos in lo..=hi {
+        if let Some(&orig) = context.order.get(pos) {
+            context.selected[orig] = true;
+        }
     }
     context.focused = Some(to);
     ensure_row_visible(context, to);
@@ -613,6 +659,56 @@ fn select_range(window: HWND, context: &mut Context, to: usize) {
 fn set_all(window: HWND, context: &mut Context, value: bool) {
     context.selected.iter_mut().for_each(|b| *b = value);
     fire_selection(window, context);
+}
+
+// --- sorting (Win32 ListView `LVN_COLUMNCLICK`) ---
+
+/// Case-insensitive UTF-16 comparison of a row's text in column `c` (empty when the
+/// cell is missing or has no text).
+fn cell_key(context: &Context, original: usize, c: usize) -> Vec<u16> {
+    context.state.rows[original]
+        .cells
+        .get(c)
+        .filter(|cell| !cell.text.is_null())
+        .map(|cell| {
+            unsafe { cell.text.as_wide() }
+                .iter()
+                .map(|&u| {
+                    if (b'A' as u16..=b'Z' as u16).contains(&u) {
+                        u + 32
+                    } else {
+                        u
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Rebuild `order` (display → original) from the current `sort`. Selection, focus,
+/// and anchor stay keyed by the original index, so they survive a resort untouched.
+fn resort(context: &mut Context) {
+    let n = context.state.rows.len();
+    let mut order: Vec<usize> = (0..n).collect();
+    if let Some((col, ascending)) = context.sort {
+        // Precompute keys once; stable sort keeps equal rows in original order.
+        let keys: Vec<Vec<u16>> = (0..n).map(|i| cell_key(context, i, col)).collect();
+        order.sort_by(|&a, &b| {
+            let ord = keys[a].cmp(&keys[b]);
+            if ascending { ord } else { ord.reverse() }
+        });
+    }
+    context.order = order;
+}
+
+/// Header click on a sortable column: ascending on first click, toggle direction on
+/// repeat clicks of the same column.
+fn toggle_sort(context: &mut Context, col: usize) {
+    context.sort = match context.sort {
+        Some((c, asc)) if c == col => Some((col, !asc)),
+        _ => Some((col, true)),
+    };
+    resort(context);
 }
 
 fn paint(window: HWND, context: &Context) -> Result<()> {
@@ -660,8 +756,9 @@ fn paint(window: HWND, context: &Context) -> Result<()> {
             D2D1_ANTIALIAS_MODE_ALIASED,
         );
 
-        for (i, row) in state.rows.iter().enumerate() {
-            let top = body.top + i as f32 * slot - offset;
+        for (pos, &i) in context.order.iter().enumerate() {
+            let row = &state.rows[i];
+            let top = body.top + pos as f32 * slot - offset;
             let bottom = top + ROW_H;
             if bottom < body.top || top > height {
                 continue;
@@ -796,11 +893,12 @@ fn paint(window: HWND, context: &Context) -> Result<()> {
         for (c, col) in state.columns.iter().enumerate() {
             let cl = context.col_left(c);
             let cr = cl + col.width as f32;
+            let text_left = cl + header_pad;
             context.render_target.DrawText(
                 col.header.as_wide(),
                 &context.header_format,
                 &D2D_RECT_F {
-                    left: cl + header_pad,
+                    left: text_left,
                     top: 0.0,
                     right: cr - header_pad,
                     bottom: HEADER_H,
@@ -809,6 +907,18 @@ fn paint(window: HWND, context: &Context) -> Result<()> {
                 D2D1_DRAW_TEXT_OPTIONS_NONE,
                 DWRITE_MEASURING_MODE_NATURAL,
             );
+            // Sort arrow sits immediately after the header text (not right-aligned).
+            if context.sort.map(|(sc, _)| sc) == Some(c) {
+                let ascending = context.sort.map(|(_, a)| a).unwrap_or(true);
+                let svg = if ascending {
+                    &context.arrow_up_svg
+                } else {
+                    &context.arrow_down_svg
+                };
+                let text_w = measure_text_width(&state.qt, &context.header_format, col.header);
+                let arrow_left = text_left + text_w + tokens.spacing_horizontal_xs;
+                draw_sort_arrow(context, svg, arrow_left)?;
+            }
         }
 
         // Divider under the header.
@@ -940,6 +1050,24 @@ fn draw_checkbox(
     Ok(())
 }
 
+/// Natural width (DIPs) of `text` laid out in `format`.
+fn measure_text_width(qt: &QT, format: &IDWriteTextFormat, text: PCWSTR) -> f32 {
+    unsafe {
+        let Ok(layout) = qt
+            .dwrite_factory
+            .CreateTextLayout(text.as_wide(), format, f32::MAX, f32::MAX)
+        else {
+            return 0.0;
+        };
+        let mut metrics = DWRITE_TEXT_METRICS::default();
+        if layout.GetMetrics(&mut metrics).is_ok() {
+            metrics.width.ceil()
+        } else {
+            0.0
+        }
+    }
+}
+
 /// Draw a cell's leading icon (20px, vertically centered) at `icon_left`.
 fn draw_cell_icon(
     context: &Context,
@@ -967,8 +1095,30 @@ fn draw_cell_icon(
     Ok(())
 }
 
-fn on_paint(window: HWND, context: &Context) -> Result<()> {
+/// Draw the sort-direction arrow
+fn draw_sort_arrow(context: &Context, svg: &ID2D1SvgDocument, arrow_left: f32) -> Result<()> {
     unsafe {
+        let dc5 = context.render_target.cast::<ID2D1DeviceContext5>()?;
+        let vp = svg.GetViewportSize();
+        let scale = SORT_ARROW / vp.width;
+        // Centered in the header band, nudged down a touch (optical alignment).
+        let arrow_top = (HEADER_H - SORT_ARROW 
+            + context.state.qt.theme.tokens.spacing_vertical_xxs) / 2.0;
+        dc5.SetTransform(&Matrix3x2 {
+            M11: scale,
+            M12: 0.0,
+            M21: 0.0,
+            M22: scale,
+            M31: arrow_left,
+            M32: arrow_top,
+        });
+        dc5.DrawSvgDocument(svg);
+        dc5.SetTransform(&Matrix3x2::identity());
+    }
+    Ok(())
+}
+
+fn on_paint(window: HWND, context: &Context) -> Result<()> {    unsafe {
         context.render_target.BeginDraw();
         let result = paint(window, context);
         match result {
@@ -1156,12 +1306,17 @@ extern "system" fn window_proc(
                 return LRESULT(0);
             }
 
-            // Header: only the select-all checkbox is interactive.
+            // Header: the select-all checkbox and sortable column headers are interactive.
             if py < HEADER_H {
                 if context.state.has_select_all() && over_checkbox_col(context, px) {
                     let value = !context.all_selected();
                     set_all(window, context, value);
                     _ = InvalidateRect(Some(window), None, false);
+                } else if let Some(c) = context.col_at_x(px) {
+                    if context.state.columns[c].sortable {
+                        toggle_sort(context, c);
+                        _ = InvalidateRect(Some(window), None, false);
+                    }
                 }
                 return LRESULT(0);
             }
@@ -1253,25 +1408,38 @@ extern "system" fn window_proc(
                 ensure_row_visible(context, i);
                 _ = InvalidateRect(Some(window), None, false);
             };
+            // Navigation follows the visible order; `focused` stays an original index.
+            let cur_pos = context.focused.map(|f| context.display_pos(f));
+            let at = |context: &Context, pos: usize| context.order[pos.min(n - 1)];
             match VIRTUAL_KEY(w_param.0 as u16) {
                 VK_UP => {
-                    let i = context.focused.map(|f| f.saturating_sub(1)).unwrap_or(0);
+                    let pos = cur_pos.map(|p| p.saturating_sub(1)).unwrap_or(0);
+                    let i = at(context, pos);
                     move_focus(context, i);
                 }
                 VK_DOWN => {
-                    let i = context.focused.map(|f| (f + 1).min(n - 1)).unwrap_or(0);
+                    let pos = cur_pos.map(|p| (p + 1).min(n - 1)).unwrap_or(0);
+                    let i = at(context, pos);
                     move_focus(context, i);
                 }
-                VK_HOME => move_focus(context, 0),
-                VK_END => move_focus(context, n - 1),
+                VK_HOME => {
+                    let i = at(context, 0);
+                    move_focus(context, i);
+                }
+                VK_END => {
+                    let i = at(context, n - 1);
+                    move_focus(context, i);
+                }
                 VK_PRIOR => {
                     let page = page_rows(context);
-                    let i = context.focused.unwrap_or(0).saturating_sub(page);
+                    let pos = cur_pos.unwrap_or(0).saturating_sub(page);
+                    let i = at(context, pos);
                     move_focus(context, i);
                 }
                 VK_NEXT => {
                     let page = page_rows(context);
-                    let i = (context.focused.unwrap_or(0) + page).min(n - 1);
+                    let pos = (cur_pos.unwrap_or(0) + page).min(n - 1);
+                    let i = at(context, pos);
                     move_focus(context, i);
                 }
                 VK_SPACE => {

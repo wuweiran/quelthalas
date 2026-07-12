@@ -1,5 +1,7 @@
 use windows::core::PCSTR;
 
+pub mod arrow_down;
+pub mod arrow_up;
 pub mod calendar_month;
 pub mod checkmark;
 pub mod checkmark_circle;
