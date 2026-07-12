@@ -1873,24 +1873,28 @@ extern "system" fn window_proc(
                     command_id: CMD_CUT,
                     disabled: !can_copy,
                     secondary_text: Some(w!("Ctrl+X")),
+                    icon: Some(crate::icon::Icon::cut_20_regular()),
                 },
                 MenuInfo::MenuItem {
                     text: PCWSTR::from_raw(copy.as_ptr()),
                     command_id: CMD_COPY,
                     disabled: !can_copy,
                     secondary_text: Some(w!("Ctrl+C")),
+                    icon: Some(crate::icon::Icon::copy_20_regular()),
                 },
                 MenuInfo::MenuItem {
                     text: PCWSTR::from_raw(paste.as_ptr()),
                     command_id: CMD_PASTE,
                     disabled: !can_paste,
                     secondary_text: Some(w!("Ctrl+V")),
+                    icon: Some(crate::icon::Icon::clipboard_paste_20_regular()),
                 },
                 MenuInfo::MenuItem {
                     text: PCWSTR::from_raw(select_all.as_ptr()),
                     command_id: CMD_SELECT_ALL,
                     disabled: !has_text,
                     secondary_text: Some(w!("Ctrl+A")),
+                    icon: Some(crate::icon::Icon::select_all_on_20_regular()),
                 },
             ];
             _ = qt.open_menu(window, x, y, crate::component::menu::Props { menu_list });

@@ -764,15 +764,17 @@ fn open_overflow(window: HWND, context: &Context) {
                 command_id: id,
                 disabled: false,
                 secondary_text: None,
+                icon: item.icon(),
             });
         } else if let Some(id) = item.id() {
-            // Icon-only overflow item: fall back to a blank-ish label so it's still
-            // pickable (Fluent shows the icon; our menu is text-first for now).
+            // Icon-only overflow item: no label text, just the icon (the strip
+            // buttons are icon-only, so the flyout shows the same glyph).
             menu_list.push(menu::MenuInfo::MenuItem {
                 text: w!(""),
                 command_id: id,
                 disabled: false,
                 secondary_text: None,
+                icon: item.icon(),
             });
         }
     }

@@ -44,6 +44,8 @@ pub enum MenuInfo {
         command_id: u32,
         disabled: bool,
         secondary_text: Option<PCWSTR>,
+        /// Optional leading icon (drawn 20×20). `None` = no icon column for this item.
+        icon: Option<Icon>,
     },
     /// A radio-select item: shows a leading checkmark when `checked`, and behaves
     /// like a normal item on click (posts `WM_COMMAND(command_id)`). The caller owns
@@ -54,6 +56,8 @@ pub enum MenuInfo {
         checked: bool,
         disabled: bool,
         secondary_text: Option<PCWSTR>,
+        /// Optional icon drawn after the checkmark column (checkmark, then icon, then text).
+        icon: Option<Icon>,
     },
     SubMenu {
         menu_list: Vec<MenuInfo>,
@@ -69,6 +73,7 @@ enum MenuItem {
         rect: RECT,
         disabled: bool,
         secondary_text: Option<PCWSTR>,
+        icon: Option<Icon>,
     },
     MenuItemRadio {
         text: PCWSTR,
@@ -77,6 +82,7 @@ enum MenuItem {
         checked: bool,
         disabled: bool,
         secondary_text: Option<PCWSTR>,
+        icon: Option<Icon>,
     },
     SubMenu {
         sub_menu: Rc<RefCell<Menu>>,
@@ -112,6 +118,9 @@ pub struct Context {
     sub_menu_indicator_focused_svg: ID2D1SvgDocument,
     /// Leading checkmark for a checked `MenuItemRadio`.
     checkmark_svg: ID2D1SvgDocument,
+    /// Per-item leading icon SVG (parallel to `menu.items`; `None` where the item
+    /// has no icon or isn't an item/radio). Built once in `on_create`.
+    item_icon_svgs: Vec<Option<ID2D1SvgDocument>>,
     fade_elapsed_ms: Cell<u32>,
 }
 
@@ -124,12 +133,14 @@ fn convert_menu_info_list_to_menu(menu_info_list: Vec<MenuInfo>) -> Menu {
                 command_id,
                 disabled,
                 secondary_text,
+                icon,
             } => MenuItem::MenuItem {
                 text,
                 id: command_id,
                 rect: RECT::default(),
                 disabled,
                 secondary_text,
+                icon,
             },
             MenuInfo::MenuItemRadio {
                 text,
@@ -137,6 +148,7 @@ fn convert_menu_info_list_to_menu(menu_info_list: Vec<MenuInfo>) -> Menu {
                 checked,
                 disabled,
                 secondary_text,
+                icon,
             } => MenuItem::MenuItemRadio {
                 text,
                 id: command_id,
@@ -144,6 +156,7 @@ fn convert_menu_info_list_to_menu(menu_info_list: Vec<MenuInfo>) -> Menu {
                 checked,
                 disabled,
                 secondary_text,
+                icon,
             },
             MenuInfo::SubMenu { menu_list, text } => {
                 let sub_menu = convert_menu_info_list_to_menu(menu_list);
@@ -178,6 +191,26 @@ fn set_svg_color(svg: &ID2D1SvgDocument, color: &D2D1_COLOR_F) -> Result<()> {
             .SetAttributeValue(w!("fill"), &svg_paint.cast::<ID2D1SvgAttribute>()?)?;
     }
     Ok(())
+}
+
+/// Build a tinted `ID2D1SvgDocument` for `icon` at its native viewBox size.
+fn create_icon_svg(
+    device_context5: &ID2D1DeviceContext5,
+    icon: &Icon,
+    color: &D2D1_COLOR_F,
+) -> Result<ID2D1SvgDocument> {
+    let size = D2D_SIZE_F {
+        width: icon.size as f32,
+        height: icon.size as f32,
+    };
+    let svg = unsafe {
+        match SHCreateMemStream(Some(icon.svg.as_bytes())) {
+            None => device_context5.CreateSvgDocument(None, size)?,
+            Some(stream) => device_context5.CreateSvgDocument(&stream, size)?,
+        }
+    };
+    _ = set_svg_color(&svg, color);
+    Ok(svg)
 }
 
 
@@ -664,6 +697,12 @@ const MENU_LIST_GAP: i32 = 2;
 const CHECK_SIZE: i32 = 16;
 /// Left gutter reserved before a radio item's label (checkmark + a small gap).
 const RADIO_GUTTER: i32 = CHECK_SIZE + 6;
+/// Leading icon display size (px) for menu items that carry one.
+const MENU_ICON_SIZE: i32 = 20;
+/// Gap (px) around a menu item's leading icon (before and after it).
+const MENU_ICON_GAP: i32 = 4;
+/// Gutter a leading icon adds before the label: icon + a trailing gap.
+const MENU_ICON_GUTTER: i32 = MENU_ICON_SIZE + MENU_ICON_GAP;
 
 // Fade-in animation: alpha eases 0 -> 255 over tokens.duration_normal using the
 // tokens.curve_decelerate_mid easing curve. (A bare fade wants a shorter duration
@@ -1067,6 +1106,7 @@ fn calc_menu_item_size(
                 rect,
                 text,
                 secondary_text,
+                icon,
                 ..
             } => {
                 let _ = SetRect(rect, org_x, org_y, org_x, org_y);
@@ -1080,6 +1120,9 @@ fn calc_menu_item_size(
                 let mut metrics = DWRITE_TEXT_METRICS::default();
                 text_layout.GetMetrics(&mut metrics)?;
                 let mut content_width = metrics.width.ceil() as i32;
+                if icon.is_some() {
+                    content_width += MENU_ICON_GUTTER;
+                }
                 // Reserve room for the shortcut hint + a gap after the label.
                 if let Some(secondary) = secondary_text {
                     let secondary_layout = direct_write_factory.CreateTextLayout(
@@ -1102,6 +1145,7 @@ fn calc_menu_item_size(
                 rect,
                 text,
                 secondary_text,
+                icon,
                 ..
             } => {
                 // Same as MenuItem, plus a left gutter for the checkmark column.
@@ -1116,6 +1160,9 @@ fn calc_menu_item_size(
                 let mut metrics = DWRITE_TEXT_METRICS::default();
                 text_layout.GetMetrics(&mut metrics)?;
                 let mut content_width = metrics.width.ceil() as i32 + RADIO_GUTTER;
+                if icon.is_some() {
+                    content_width += MENU_ICON_GUTTER;
+                }
                 if let Some(secondary) = secondary_text {
                     let secondary_layout = direct_write_factory.CreateTextLayout(
                         secondary.as_wide(),
@@ -1326,13 +1373,44 @@ fn show_popup(
     Ok(())
 }
 
+/// Draw a menu item's leading icon at `icon_x`, tinted `color`, scaled to
+/// `MENU_ICON_SIZE` and vertically centered between `top` and `bottom` (item rect
+/// bounds, device px).
+fn draw_menu_icon(
+    context: &Context,
+    svg: &ID2D1SvgDocument,
+    color: &D2D1_COLOR_F,
+    icon_x: f32,
+    top: i32,
+    bottom: i32,
+) -> Result<()> {
+    _ = set_svg_color(svg, color);
+    unsafe {
+        let dc5 = context.render_target.cast::<ID2D1DeviceContext5>()?;
+        let vp = svg.GetViewportSize();
+        let scale = MENU_ICON_SIZE as f32 / vp.width;
+        let icon_y = top as f32 + ((bottom - top) as f32 - MENU_ICON_SIZE as f32) / 2.0;
+        dc5.SetTransform(&Matrix3x2 {
+            M11: scale,
+            M12: 0.0,
+            M21: 0.0,
+            M22: scale,
+            M31: icon_x,
+            M32: icon_y,
+        });
+        dc5.DrawSvgDocument(svg);
+        dc5.SetTransform(&Matrix3x2::identity());
+    }
+    Ok(())
+}
+
 fn draw_menu_item(
     menu: &Menu,
     menu_item: &MenuItem,
     context: &Context,
     focused: bool,
-) -> Result<()> {
-    let tokens = &context.qt.theme.tokens;
+    icon_svg: Option<&ID2D1SvgDocument>,
+) -> Result<()> {    let tokens = &context.qt.theme.tokens;
     let rect = match menu_item {
         MenuItem::MenuItem {
             rect: item_rect, ..
@@ -1374,6 +1452,17 @@ fn draw_menu_item(
         }
     }
     unsafe {
+        // Leading-icon tint: disabled color when disabled, brand-hover when focused,
+        // otherwise the neutral foreground2 used for the label.
+        let icon_color = |disabled: bool| -> &D2D1_COLOR_F {
+            if disabled {
+                &tokens.color_neutral_foreground_disabled
+            } else if focused {
+                &tokens.color_neutral_foreground2_brand_hover
+            } else {
+                &tokens.color_neutral_foreground2
+            }
+        };
         match menu_item {
             MenuItem::MenuItem {
                 text,
@@ -1381,11 +1470,21 @@ fn draw_menu_item(
                 secondary_text,
                 ..
             } => {
+                let nudge = tokens.spacing_vertical_s_nudge;
+                // Leading icon (drawn 20×20, vertically centered); the label shifts
+                // right past it when present.
+                let text_left = if let Some(svg) = icon_svg {
+                    let icon_x = rect.left as f32 + nudge;
+                    draw_menu_icon(context, svg, icon_color(*disabled), icon_x, rect.top, rect.bottom)?;
+                    icon_x + MENU_ICON_GUTTER as f32
+                } else {
+                    rect.left as f32 + nudge
+                };
                 let text_rect = D2D_RECT_F {
-                    left: rect.left as f32 + tokens.spacing_vertical_s_nudge,
-                    top: rect.top as f32 + tokens.spacing_vertical_s_nudge,
-                    right: rect.right as f32 - tokens.spacing_vertical_s_nudge,
-                    bottom: rect.bottom as f32 - tokens.spacing_vertical_s_nudge,
+                    left: text_left,
+                    top: rect.top as f32 + nudge,
+                    right: rect.right as f32 - nudge,
+                    bottom: rect.bottom as f32 - nudge,
                 };
                 let text_brush = if *disabled {
                     &context.text_disabled_brush
@@ -1427,11 +1526,23 @@ fn draw_menu_item(
             } => {
                 // Label indented past the checkmark gutter; otherwise identical to
                 // MenuItem. The gutter holds a checkmark when this radio is selected.
+                // With an icon the row is: checkmark · 4px · icon · 4px · text.
+                let nudge = tokens.spacing_vertical_s_nudge;
+                let check_x = rect.left as f32 + nudge;
+                let text_left = if icon_svg.is_some() {
+                    let icon_x = check_x + (CHECK_SIZE + MENU_ICON_GAP) as f32;
+                    if let Some(svg) = icon_svg {
+                        draw_menu_icon(context, svg, icon_color(*disabled), icon_x, rect.top, rect.bottom)?;
+                    }
+                    icon_x + MENU_ICON_GUTTER as f32
+                } else {
+                    check_x + RADIO_GUTTER as f32
+                };
                 let text_rect = D2D_RECT_F {
-                    left: rect.left as f32 + tokens.spacing_vertical_s_nudge + RADIO_GUTTER as f32,
-                    top: rect.top as f32 + tokens.spacing_vertical_s_nudge,
-                    right: rect.right as f32 - tokens.spacing_vertical_s_nudge,
-                    bottom: rect.bottom as f32 - tokens.spacing_vertical_s_nudge,
+                    left: text_left,
+                    top: rect.top as f32 + nudge,
+                    right: rect.right as f32 - nudge,
+                    bottom: rect.bottom as f32 - nudge,
                 };
                 let text_brush = if *disabled {
                     &context.text_disabled_brush
@@ -1466,7 +1577,6 @@ fn draw_menu_item(
                 if *checked {
                     // Checkmark in the gutter, vertically centered — 20px source SVG
                     // scaled to CHECK_SIZE, exactly like the dropdown's check column.
-                    let check_x = rect.left as f32 + tokens.spacing_vertical_s_nudge;
                     let check_y =
                         rect.top as f32 + ((rect.bottom - rect.top - CHECK_SIZE) as f32 / 2.0);
                     let scale = CHECK_SIZE as f32 / 20.0;
@@ -1551,7 +1661,14 @@ fn draw_popup_menu(window: HWND, context: &Context) -> Result<()> {
     }
     let menu = context.menu.borrow();
     for (index, item) in menu.items.iter().enumerate() {
-        draw_menu_item(&menu, item, context, Some(index) == menu.focused_item_index)?;
+        let icon_svg = context.item_icon_svgs.get(index).and_then(|o| o.as_ref());
+        draw_menu_item(
+            &menu,
+            item,
+            context,
+            Some(index) == menu.focused_item_index,
+            icon_svg,
+        )?;
     }
     if menu.is_scrolling {
         draw_scroll_arrows(window, context)?;
@@ -1680,6 +1797,25 @@ fn on_create(window: HWND, params: CreateParams, x: i32, y: i32) -> Result<Conte
             )?,
         };
         _ = set_svg_color(&checkmark_svg, &tokens.color_neutral_foreground2);
+
+        // Per-item leading icons (parallel to menu.items), tinted like the text.
+        let item_icon_svgs: Vec<Option<ID2D1SvgDocument>> = {
+            let menu = params.menu.borrow();
+            menu.items
+                .iter()
+                .map(|item| {
+                    let icon = match item {
+                        MenuItem::MenuItem { icon, .. }
+                        | MenuItem::MenuItemRadio { icon, .. } => icon.as_ref(),
+                        _ => None,
+                    };
+                    icon.and_then(|ic| {
+                        create_icon_svg(&device_context5, ic, &tokens.color_neutral_foreground2).ok()
+                    })
+                })
+                .collect()
+        };
+
         Ok(Context {
             qt: params.qt,
             menu: params.menu,
@@ -1694,6 +1830,7 @@ fn on_create(window: HWND, params: CreateParams, x: i32, y: i32) -> Result<Conte
             sub_menu_indicator_svg,
             sub_menu_indicator_focused_svg,
             checkmark_svg,
+            item_icon_svgs,
             fade_elapsed_ms: Cell::new(0),
         })
     }
