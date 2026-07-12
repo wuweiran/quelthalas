@@ -84,6 +84,14 @@ const MONTH_GAP: f32 = 12.0;
 /// Padding around the whole component (DIPs).
 const PAD: f32 = 12.0;
 
+/// The Calendar's natural size (width, height) in DIPs — used by `date_picker` to
+/// size its flyout before creating the Calendar child.
+pub(crate) fn natural_size() -> (f32, f32) {
+    let w = PAD * 2.0 + 7.0 * DAY_CELL;
+    let h = PAD * 2.0 + HEADER_H + WEEKDAY_H + DAY_ROWS as f32 * DAY_CELL + FOOTER_H;
+    (w, h)
+}
+
 // --- English labels (localization deferred; the demo shows the picked date) ---
 const WEEKDAYS: [&str; 7] = ["S", "M", "T", "W", "T", "F", "S"];
 const MONTHS_SHORT: [&str; 12] = [
@@ -208,6 +216,9 @@ struct State {
     height: f32,
     background: Option<D2D1_COLOR_F>,
     on_select_date: Box<dyn Fn(&HWND, Date)>,
+    /// Hosted inside a flyout (date_picker): never grab keyboard focus, so the owner
+    /// window stays active — like a normal menu.
+    embedded: bool,
 }
 
 struct Context {
@@ -381,6 +392,29 @@ impl QT {
         y: i32,
         props: Props,
     ) -> Result<HWND> {
+        self.create_calendar_impl(parent_window, x, y, props, false)
+    }
+
+    /// Like `create_calendar` but flagged as embedded in a flyout — the Calendar will
+    /// not steal keyboard focus from the owner (used by `date_picker`).
+    pub(crate) fn create_calendar_embedded(
+        &self,
+        parent_window: HWND,
+        x: i32,
+        y: i32,
+        props: Props,
+    ) -> Result<HWND> {
+        self.create_calendar_impl(parent_window, x, y, props, true)
+    }
+
+    fn create_calendar_impl(
+        &self,
+        parent_window: HWND,
+        x: i32,
+        y: i32,
+        props: Props,
+        embedded: bool,
+    ) -> Result<HWND> {
         let class_name: PCWSTR = w!("QT_CALENDAR");
         unsafe {
             static REGISTER: Once = Once::new();
@@ -397,8 +431,7 @@ impl QT {
             });
             let scaling_factor = get_scaling_factor(parent_window);
             // Natural size: 12px padding + 7 fixed day cells; header + weekday + 6 rows + footer.
-            let natural_w = PAD * 2.0 + 7.0 * DAY_CELL;
-            let natural_h = PAD * 2.0 + HEADER_H + WEEKDAY_H + DAY_ROWS as f32 * DAY_CELL + FOOTER_H;
+            let (natural_w, natural_h) = natural_size();
             let width = if props.width > 0 { props.width as f32 } else { natural_w };
             let height = if props.height > 0 { props.height as f32 } else { natural_h };
             let boxed = Box::new(State {
@@ -407,6 +440,7 @@ impl QT {
                 height,
                 background: props.background,
                 on_select_date: props.mouse_event.on_select_date,
+                embedded,
             });
             // The initial selection rides alongside State in the create tuple.
             let selected = props.selected;
@@ -990,7 +1024,10 @@ extern "system" fn window_proc(window: HWND, message: u32, w_param: WPARAM, l_pa
         WM_LBUTTONDOWN => unsafe {
             let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
             let context = &mut *raw;
-            _ = SetFocus(Some(window));
+            // When embedded in a flyout, don't grab focus — the owner stays active.
+            if !context.state.embedded {
+                _ = SetFocus(Some(window));
+            }
             let scaling_factor = get_scaling_factor(window);
             let px = (l_param.0 as i16 as i32) as f32 / scaling_factor;
             let py = ((l_param.0 >> 16) as i16 as i32) as f32 / scaling_factor;

@@ -3,6 +3,7 @@ pub mod calendar;
 pub mod checkbox;
 pub mod combobox;
 pub mod data_grid;
+pub mod date_picker;
 pub mod dialog;
 pub mod divider;
 pub mod dropdown;
