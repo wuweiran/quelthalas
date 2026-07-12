@@ -12,6 +12,7 @@ pub mod link;
 pub mod list_box;
 pub mod menu;
 pub mod menu_bar;
+pub mod message_bar;
 pub mod option;
 pub mod progress_bar;
 pub mod radio;

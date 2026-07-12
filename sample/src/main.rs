@@ -20,8 +20,9 @@ use quelthalas::component::dialog::DialogResult;
 use quelthalas::component::menu::MenuInfo;
 use quelthalas::component::{
     button, calendar, checkbox, combobox, data_grid, date_picker, dialog, divider, dropdown, input,
-    link, list_box, menu, menu_bar, option, progress_bar, radio, search_box, slider, spin_button,
-    spinner, split_button, switch, tab_list, task_dialog, text, textarea, toolbar, tree_view,
+    link, list_box, menu, menu_bar, message_bar, option, progress_bar, radio, search_box, slider,
+    spin_button, spinner, split_button, switch, tab_list, task_dialog, text, textarea, toolbar,
+    tree_view,
 };
 use quelthalas::icon::Icon;
 use quelthalas::layout::Stack;
@@ -1176,6 +1177,65 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
                     .unwrap_or_default();
                 _ = qt.add_tooltip(tooltip_button, w!("Example tooltip"));
 
+                // Message bars: one per intent, plus an info bar with an action button.
+                let message_bar_label = section(w!("Message bar"));
+                let make_bar = |intent: message_bar::Intent, title: PCWSTR, msg: PCWSTR, actions: Vec<message_bar::Action>| {
+                    qt.create_message_bar(
+                        window,
+                        0,
+                        0,
+                        message_bar::Props {
+                            intent,
+                            title,
+                            message: msg,
+                            actions,
+                            width: 380,
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap_or_default()
+                };
+                let bar_info = make_bar(
+                    message_bar::Intent::Info,
+                    w!("Update available"),
+                    w!("A new version is ready to install."),
+                    vec![message_bar::Action {
+                        text: w!("Update"),
+                        mouse_event: MouseEvent {
+                            on_click: Box::new({
+                                let qt = qt.clone();
+                                move |_| {
+                                    _ = qt.open_dialog(
+                                        window,
+                                        w!("Update"),
+                                        w!("Updating to the latest version\u{2026}"),
+                                        &dialog::ModelType::Alert,
+                                        dialog::Actions::Ok,
+                                    );
+                                }
+                            }),
+                        },
+                    }],
+                );
+                let bar_success = make_bar(
+                    message_bar::Intent::Success,
+                    w!("Saved"),
+                    w!("Your changes were saved."),
+                    Vec::new(),
+                );
+                let bar_warning = make_bar(
+                    message_bar::Intent::Warning,
+                    w!("Heads up"),
+                    w!("Your session expires soon."),
+                    Vec::new(),
+                );
+                let bar_error = make_bar(
+                    message_bar::Intent::Error,
+                    w!("Connection failed"),
+                    w!("Couldn't connect to the server."),
+                    Vec::new(),
+                );
+
                 // Text section: an intro line, then every preset labelled by name.
                 let text_intro = qt
                     .create_body1(
@@ -1499,6 +1559,15 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
                             .gap(gap_s)
                             .add(tooltip_label)
                             .add(tooltip_button),
+                    )
+                    .add_stack(
+                        Stack::vertical()
+                            .gap(gap_s)
+                            .add(message_bar_label)
+                            .add(bar_info)
+                            .add(bar_success)
+                            .add(bar_warning)
+                            .add(bar_error),
                     );
 
                 // --- Menus & toolbars ---
