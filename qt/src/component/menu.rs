@@ -98,6 +98,8 @@ struct Menu {
     items: Vec<MenuItem>,
     window: Option<HWND>,
     focused_item_index: Option<usize>,
+    /// The item currently held down by the pointer (drawn "pressed"), if any.
+    pressed_item_index: Option<usize>,
     menu_list_rect: RECT,
     is_scrolling: bool,
     scroll_position: i32,
@@ -111,6 +113,7 @@ pub struct Context {
     text_format: IDWriteTextFormat,
     text_brush: ID2D1SolidColorBrush,
     text_focused_brush: ID2D1SolidColorBrush,
+    text_pressed_brush: ID2D1SolidColorBrush,
     text_disabled_brush: ID2D1SolidColorBrush,
     secondary_text_format: IDWriteTextFormat,
     secondary_text_brush: ID2D1SolidColorBrush,
@@ -175,6 +178,7 @@ fn convert_menu_info_list_to_menu(menu_info_list: Vec<MenuInfo>) -> Menu {
         items,
         window: None,
         focused_item_index: None,
+        pressed_item_index: None,
         menu_list_rect: RECT::default(),
         is_scrolling: false,
         scroll_position: 0,
@@ -503,11 +507,16 @@ fn menu_button_down(context: &Context, mt: &mut Tracker, menu: &mut Menu) -> Res
             switch_tracking(menu, item_index)?;
         }
         let item = &menu.items[item_index];
-        if let MenuItem::SubMenu { sub_menu, .. } = item {
-            if sub_menu.borrow().window.is_none() {
-                mt.current_menu =
-                    show_sub_popup(&context.qt, context.owning_window, sub_menu.clone())?;
+        // A non-submenu, non-divider item shows a "pressed" fill while held.
+        match item {
+            MenuItem::SubMenu { sub_menu, .. } => {
+                if sub_menu.borrow().window.is_none() {
+                    mt.current_menu =
+                        show_sub_popup(&context.qt, context.owning_window, sub_menu.clone())?;
+                }
             }
+            MenuItem::MenuDivider { .. } => {}
+            _ => set_pressed(menu, Some(item_index)),
         }
     }
 
@@ -519,6 +528,7 @@ fn menu_button_down(context: &Context, mt: &mut Tracker, menu: &mut Menu) -> Res
 }
 
 fn menu_button_up(context: &Context, mt: &mut Tracker, menu: &mut Menu) -> Result<ExecutionResult> {
+    set_pressed(menu, None);
     if let HitTest::Item(item_index) = find_item_by_coordinates(menu, &mut mt.point) {
         if menu.focused_item_index == Some(item_index) {
             if let MenuItem::SubMenu { .. } = menu.items[item_index] {
@@ -544,9 +554,12 @@ fn menu_mouse_move(context: &Context, mt: &mut Tracker, menu: Rc<RefCell<Menu>>)
     };
 
     if let HitTest::Item(item_index) = item_index_option {
-        let focused_item_index = {
+        let (focused_item_index, pressed_active) = {
             let menu_borrow = menu.borrow();
-            menu_borrow.focused_item_index
+            (
+                menu_borrow.focused_item_index,
+                menu_borrow.pressed_item_index.is_some(),
+            )
         };
 
         if focused_item_index != Some(item_index) {
@@ -555,11 +568,21 @@ fn menu_mouse_move(context: &Context, mt: &mut Tracker, menu: Rc<RefCell<Menu>>)
                 switch_tracking(&mut menu_borrow, item_index)?;
             }
             mt.current_menu = show_sub_popup(&context.qt, context.owning_window, menu)?;
+        } else if pressed_active {
+            // A held press follows the pointer onto whatever item it's over (unless
+            // that's a submenu/divider, which don't press).
+            let mut menu_borrow = menu.borrow_mut();
+            let pressable = !matches!(
+                menu_borrow.items[item_index],
+                MenuItem::SubMenu { .. } | MenuItem::MenuDivider { .. }
+            );
+            set_pressed(&mut menu_borrow, pressable.then_some(item_index));
         }
     } else {
         let mut menu_borrow = menu.borrow_mut();
         hide_sub_popups(&mut menu_borrow)?;
         select_item(&mut menu_borrow, None);
+        set_pressed(&mut menu_borrow, None);
     }
 
     Ok(true)
@@ -570,6 +593,19 @@ fn select_item(menu: &mut Menu, index: Option<usize>) {
         return;
     }
     menu.focused_item_index = index;
+    unsafe {
+        if menu.window.is_some() {
+            _ = RedrawWindow(menu.window, None, None, RDW_INVALIDATE | RDW_NOCHILDREN);
+        }
+    }
+}
+
+/// Set the pressed (pointer-down) item and repaint. `None` clears the press.
+fn set_pressed(menu: &mut Menu, index: Option<usize>) {
+    if menu.pressed_item_index == index {
+        return;
+    }
+    menu.pressed_item_index = index;
     unsafe {
         if menu.window.is_some() {
             _ = RedrawWindow(menu.window, None, None, RDW_INVALIDATE | RDW_NOCHILDREN);
@@ -1409,8 +1445,10 @@ fn draw_menu_item(
     menu_item: &MenuItem,
     context: &Context,
     focused: bool,
+    pressed: bool,
     icon_svg: Option<&ID2D1SvgDocument>,
-) -> Result<()> {    let tokens = &context.qt.theme.tokens;
+) -> Result<()> {
+    let tokens = &context.qt.theme.tokens;
     let rect = match menu_item {
         MenuItem::MenuItem {
             rect: item_rect, ..
@@ -1423,18 +1461,22 @@ fn draw_menu_item(
         }
         | MenuItem::MenuDivider { rect: item_rect } => adjust_menu_item_rect(menu, item_rect),
     };
-    if focused {
-        let show_focused = match menu_item {
+    // Highlight fill: pressed takes precedence over focus/hover.
+    if focused || pressed {
+        let show_fill = match menu_item {
             MenuItem::MenuItem { disabled, .. }
             | MenuItem::MenuItemRadio { disabled, .. } => !*disabled,
             MenuItem::SubMenu { .. } => true,
             MenuItem::MenuDivider { .. } => false,
         };
         unsafe {
-            if show_focused {
-                let focused_brush = context
-                    .render_target
-                    .CreateSolidColorBrush(&tokens.color_neutral_background1_hover, None)?;
+            if show_fill {
+                let fill = if pressed {
+                    tokens.color_neutral_background1_pressed
+                } else {
+                    tokens.color_neutral_background1_hover
+                };
+                let fill_brush = context.render_target.CreateSolidColorBrush(&fill, None)?;
                 let rounded_rect = D2D1_ROUNDED_RECT {
                     rect: D2D_RECT_F {
                         left: rect.left as f32,
@@ -1447,20 +1489,34 @@ fn draw_menu_item(
                 };
                 context
                     .render_target
-                    .FillRoundedRectangle(&rounded_rect, &focused_brush);
+                    .FillRoundedRectangle(&rounded_rect, &fill_brush);
             }
         }
     }
     unsafe {
-        // Leading-icon tint: disabled color when disabled, brand-hover when focused,
-        // otherwise the neutral foreground2 used for the label.
+        // Leading-icon tint: disabled color when disabled; brand-pressed when
+        // pressed; brand-hover when focused; else the neutral foreground2 label color.
         let icon_color = |disabled: bool| -> &D2D1_COLOR_F {
             if disabled {
                 &tokens.color_neutral_foreground_disabled
+            } else if pressed {
+                &tokens.color_neutral_foreground2_brand_pressed
             } else if focused {
                 &tokens.color_neutral_foreground2_brand_hover
             } else {
                 &tokens.color_neutral_foreground2
+            }
+        };
+        // Label brush by state (mirrors the icon tint's precedence).
+        let text_brush_for = |disabled: bool| -> &ID2D1SolidColorBrush {
+            if disabled {
+                &context.text_disabled_brush
+            } else if pressed {
+                &context.text_pressed_brush
+            } else if focused {
+                &context.text_focused_brush
+            } else {
+                &context.text_brush
             }
         };
         match menu_item {
@@ -1486,13 +1542,7 @@ fn draw_menu_item(
                     right: rect.right as f32 - nudge,
                     bottom: rect.bottom as f32 - nudge,
                 };
-                let text_brush = if *disabled {
-                    &context.text_disabled_brush
-                } else if focused {
-                    &context.text_focused_brush
-                } else {
-                    &context.text_brush
-                };
+                let text_brush = text_brush_for(*disabled);
                 context.render_target.DrawText(
                     text.as_wide(),
                     &context.text_format,
@@ -1544,13 +1594,7 @@ fn draw_menu_item(
                     right: rect.right as f32 - nudge,
                     bottom: rect.bottom as f32 - nudge,
                 };
-                let text_brush = if *disabled {
-                    &context.text_disabled_brush
-                } else if focused {
-                    &context.text_focused_brush
-                } else {
-                    &context.text_brush
-                };
+                let text_brush = text_brush_for(*disabled);
                 context.render_target.DrawText(
                     text.as_wide(),
                     &context.text_format,
@@ -1667,6 +1711,7 @@ fn draw_popup_menu(window: HWND, context: &Context) -> Result<()> {
             item,
             context,
             Some(index) == menu.focused_item_index,
+            Some(index) == menu.pressed_item_index,
             icon_svg,
         )?;
     }
@@ -1720,6 +1765,8 @@ fn on_create(window: HWND, params: CreateParams, x: i32, y: i32) -> Result<Conte
             render_target.CreateSolidColorBrush(&tokens.color_neutral_foreground2, None)?;
         let text_focused_brush =
             render_target.CreateSolidColorBrush(&tokens.color_neutral_foreground1_hover, None)?;
+        let text_pressed_brush =
+            render_target.CreateSolidColorBrush(&tokens.color_neutral_foreground1_pressed, None)?;
         let text_disabled_brush =
             render_target.CreateSolidColorBrush(&tokens.color_neutral_foreground_disabled, None)?;
         // Secondary content (shortcut hints): base200, right-aligned, foreground3.
@@ -1824,6 +1871,7 @@ fn on_create(window: HWND, params: CreateParams, x: i32, y: i32) -> Result<Conte
             text_format,
             text_brush,
             text_focused_brush,
+            text_pressed_brush,
             text_disabled_brush,
             secondary_text_format,
             secondary_text_brush,
