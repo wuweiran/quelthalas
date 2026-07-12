@@ -20,8 +20,8 @@ use quelthalas::component::dialog::DialogResult;
 use quelthalas::component::menu::MenuInfo;
 use quelthalas::component::{
     button, checkbox, combobox, data_grid, dialog, divider, dropdown, input, link, list_box, menu,
-    menu_bar, option, progress_bar, radio, slider, spin_button, spinner, split_button, switch,
-    tab_list, task_dialog, text, textarea, toolbar, tree_view,
+    menu_bar, option, progress_bar, radio, search_box, slider, spin_button, spinner, split_button,
+    switch, tab_list, task_dialog, text, textarea, toolbar, tree_view,
 };
 use quelthalas::icon::Icon;
 use quelthalas::layout::Stack;
@@ -399,6 +399,18 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
                         },
                     )
                     .unwrap_or_default();
+                let search = qt
+                    .create_search_box(
+                        window,
+                        0,
+                        0,
+                        search_box::Props {
+                            width: 360,
+                            placeholder: Some(w!("Search")),
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap_or_default();
                 let progress_medium = qt
                     .create_progress_bar(
                         window,
@@ -546,6 +558,7 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
                 };
                 let buttons_label = section(w!("Buttons"));
                 let inputs_label = section(w!("Inputs"));
+                let search_box_label = section(w!("Search box"));
                 let progress_label = section(w!("Progress bar"));
                 let dialog_label = section(w!("Dialog"));
                 let task_dialog_label = section(w!("Task dialog"));
@@ -1457,6 +1470,12 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
                             .gap(gap_s)
                             .add(textarea_label)
                             .add(textarea),
+                    )
+                    .add_stack(
+                        Stack::vertical()
+                            .gap(gap_s)
+                            .add(search_box_label)
+                            .add(search),
                     );
                 let text_page = Stack::horizontal()
                     .gap(gap_gutter)

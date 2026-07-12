@@ -14,6 +14,7 @@ pub mod option;
 pub mod progress_bar;
 pub mod radio;
 pub mod scroll;
+pub mod search_box;
 pub mod slider;
 pub mod spin_button;
 pub mod spinner;
