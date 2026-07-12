@@ -1,4 +1,5 @@
 pub mod button;
+pub mod calendar;
 pub mod checkbox;
 pub mod combobox;
 pub mod data_grid;

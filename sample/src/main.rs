@@ -19,9 +19,9 @@ use quelthalas::component::button::IconPosition;
 use quelthalas::component::dialog::DialogResult;
 use quelthalas::component::menu::MenuInfo;
 use quelthalas::component::{
-    button, checkbox, combobox, data_grid, dialog, divider, dropdown, input, link, list_box, menu,
-    menu_bar, option, progress_bar, radio, search_box, slider, spin_button, spinner, split_button,
-    switch, tab_list, task_dialog, text, textarea, toolbar, tree_view,
+    button, calendar, checkbox, combobox, data_grid, dialog, divider, dropdown, input, link,
+    list_box, menu, menu_bar, option, progress_bar, radio, search_box, slider, spin_button, spinner,
+    split_button, switch, tab_list, task_dialog, text, textarea, toolbar, tree_view,
 };
 use quelthalas::icon::Icon;
 use quelthalas::layout::Stack;
@@ -1532,7 +1532,33 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
                     );
 
                 // --- Other ---
-                // divider
+                // divider, calendar
+                let calendar_label = section(w!("Calendar"));
+                let calendar = qt
+                    .create_calendar(
+                        window,
+                        0,
+                        0,
+                        calendar::Props {
+                            background: Some(palette.canvas),
+                            mouse_event: calendar::MouseEvent {
+                                on_select_date: Box::new(|hwnd, date| {
+                                    // Show the picked date in the window title.
+                                    let title: Vec<u16> = format!(
+                                        "Quel'Thalas — picked {:04}-{:02}-{:02}",
+                                        date.year, date.month, date.day
+                                    )
+                                    .encode_utf16()
+                                    .chain(std::iter::once(0))
+                                    .collect();
+                                    let parent = GetParent(*hwnd).unwrap_or(*hwnd);
+                                    _ = SetWindowTextW(parent, PCWSTR::from_raw(title.as_ptr()));
+                                }),
+                            },
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap_or_default();
                 let other = Stack::vertical()
                     .gap(gap_section)
                     .add_stack(
@@ -1545,6 +1571,12 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
                             .add(divider_subtle)
                             .add(divider_brand)
                             .add(divider_strong),
+                    )
+                    .add_stack(
+                        Stack::vertical()
+                            .gap(gap_s)
+                            .add(calendar_label)
+                            .add(calendar),
                     );
 
                 // Each page's own controls (for show/hide) — the strip + Close are
