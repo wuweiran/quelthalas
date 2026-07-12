@@ -1006,14 +1006,23 @@ fn track_menu(
                             }
                             None => exit_menu = false,
                         },
-                        WM_MOUSEMOVE => {
-                            if let Some(menu_from_point) = menu_from_point_result {
+                        WM_MOUSEMOVE => match menu_from_point_result {
+                            Some(menu_from_point) => {
                                 let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
                                 let context = &*raw;
-                                exit_menu =
-                                    exit_menu | !menu_mouse_move(context, &mut mt, menu_from_point)?
+                                exit_menu = exit_menu
+                                    | !menu_mouse_move(context, &mut mt, menu_from_point)?
                             }
-                        }
+                            None => {
+                                // Pointer left all menu windows (the loop still gets
+                                // moves via capture). Drop the deepest menu's hover +
+                                // press so a fast exit doesn't leave them stuck — Win32
+                                // popups deselect on leave, same as our dropdown does.
+                                let mut deepest = mt.current_menu.borrow_mut();
+                                select_item(&mut deepest, None);
+                                set_pressed(&mut deepest, None);
+                            }
+                        },
                         _ => {}
                     }
                 }
