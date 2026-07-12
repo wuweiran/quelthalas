@@ -105,9 +105,9 @@ struct State {
 impl State {
     fn get_min_width(&self) -> f32 {
         (match &self.size {
-            Size::Small => 96,
+            Size::Small => 64,
             Size::Medium => 96,
-            Size::Large => 64,
+            Size::Large => 96,
         }) as f32
     }
 
