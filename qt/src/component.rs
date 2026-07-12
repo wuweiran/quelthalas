@@ -1,6 +1,7 @@
 pub mod button;
 pub mod checkbox;
 pub mod combobox;
+pub mod data_grid;
 pub mod dialog;
 pub mod divider;
 pub mod dropdown;

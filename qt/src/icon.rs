@@ -16,6 +16,7 @@ pub mod info;
 pub mod more_horizontal;
 pub mod select_all_on;
 pub mod slide_text;
+pub mod square;
 pub mod text_bold;
 pub mod text_bullet_list;
 pub mod text_font;

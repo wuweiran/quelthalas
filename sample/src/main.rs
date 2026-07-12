@@ -19,9 +19,9 @@ use quelthalas::component::button::IconPosition;
 use quelthalas::component::dialog::DialogResult;
 use quelthalas::component::menu::MenuInfo;
 use quelthalas::component::{
-    button, checkbox, combobox, dialog, divider, dropdown, input, link, list_box, menu, menu_bar,
-    option, progress_bar, radio, slider, spin_button, spinner, split_button, switch, tab_list,
-    task_dialog, text, textarea, toolbar, tree_view,
+    button, checkbox, combobox, data_grid, dialog, divider, dropdown, input, link, list_box, menu,
+    menu_bar, option, progress_bar, radio, slider, spin_button, spinner, split_button, switch,
+    tab_list, task_dialog, text, textarea, toolbar, tree_view,
 };
 use quelthalas::icon::Icon;
 use quelthalas::layout::Stack;
@@ -834,6 +834,136 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
                     )
                     .unwrap_or_default();
 
+                // Data grid: a files table (Win32 ListView report mode / Fluent
+                // DataGrid) with a select-all + per-row checkbox column and per-cell
+                // icons. Multi-select via click / Ctrl / Shift / Space / Ctrl+A.
+                let data_grid_label = section(w!("Data grid"));
+                let data_grid = qt
+                    .create_data_grid(
+                        window,
+                        0,
+                        0,
+                        data_grid::Props {
+                            columns: vec![
+                                data_grid::Column { header: w!("File"), width: 200 },
+                                data_grid::Column { header: w!("Author"), width: 140 },
+                                data_grid::Column { header: w!("Last updated"), width: 150 },
+                            ],
+                            rows: vec![
+                                data_grid::Row {
+                                    cells: vec![
+                                        data_grid::Cell::new(
+                                            Icon::text_font_24_regular(),
+                                            w!("Meeting notes"),
+                                        ),
+                                        data_grid::Cell::text(w!("Max Mustermann")),
+                                        data_grid::Cell::new(
+                                            Icon::calendar_month_20_regular(),
+                                            w!("7h ago"),
+                                        ),
+                                    ],
+                                },
+                                data_grid::Row {
+                                    cells: vec![
+                                        data_grid::Cell::new(
+                                            Icon::slide_text_20_regular(),
+                                            w!("Thursday presentation"),
+                                        ),
+                                        data_grid::Cell::text(w!("Erika Mustermann")),
+                                        data_grid::Cell::new(
+                                            Icon::calendar_month_20_regular(),
+                                            w!("Yesterday"),
+                                        ),
+                                    ],
+                                },
+                                data_grid::Row {
+                                    cells: vec![
+                                        data_grid::Cell::new(
+                                            Icon::text_bullet_list_24_regular(),
+                                            w!("Training recording"),
+                                        ),
+                                        data_grid::Cell::text(w!("John Doe")),
+                                        data_grid::Cell::new(
+                                            Icon::calendar_month_20_regular(),
+                                            w!("Yesterday"),
+                                        ),
+                                    ],
+                                },
+                                data_grid::Row {
+                                    cells: vec![
+                                        data_grid::Cell::new(
+                                            Icon::text_number_list_24_regular(),
+                                            w!("Purchase order"),
+                                        ),
+                                        data_grid::Cell::text(w!("Jane Doe")),
+                                        data_grid::Cell::new(
+                                            Icon::calendar_month_20_regular(),
+                                            w!("Tue at 9:30 AM"),
+                                        ),
+                                    ],
+                                },
+                                data_grid::Row {
+                                    cells: vec![
+                                        data_grid::Cell::new(
+                                            Icon::text_bold_24_regular(),
+                                            w!("Design spec"),
+                                        ),
+                                        data_grid::Cell::text(w!("Sam Rivera")),
+                                        data_grid::Cell::new(
+                                            Icon::calendar_month_20_regular(),
+                                            w!("Mon at 4:12 PM"),
+                                        ),
+                                    ],
+                                },
+                                data_grid::Row {
+                                    cells: vec![
+                                        data_grid::Cell::new(
+                                            Icon::text_italic_24_regular(),
+                                            w!("Budget draft"),
+                                        ),
+                                        data_grid::Cell::text(w!("Alex Kim")),
+                                        data_grid::Cell::new(
+                                            Icon::calendar_month_20_regular(),
+                                            w!("Last week"),
+                                        ),
+                                    ],
+                                },
+                            ],
+                            width: 540,
+                            height: 240,
+                            selection_mode: data_grid::SelectionMode::Multiselect,
+                            mouse_event: data_grid::MouseEvent {
+                                on_activate: Box::new({
+                                    let qt = qt.clone();
+                                    move |_, i| {
+                                        // Win32 ListView activate (double-click) —
+                                        // "open" the file. Name it in a dialog.
+                                        const FILES: [PCWSTR; 6] = [
+                                            w!("Meeting notes"),
+                                            w!("Thursday presentation"),
+                                            w!("Training recording"),
+                                            w!("Purchase order"),
+                                            w!("Design spec"),
+                                            w!("Budget draft"),
+                                        ];
+                                        let name = FILES.get(i).copied().unwrap_or(w!(""));
+                                        _ = qt.open_dialog(
+                                            window,
+                                            w!("Open"),
+                                            name,
+                                            &dialog::ModelType::Alert,
+                                            dialog::Actions::Ok,
+                                        );
+                                    }
+                                }),
+                                ..Default::default()
+                            },
+                            background: Some(palette.canvas),
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap_or_default();
+
                 let textarea_label = section(w!("Textarea"));
                 let textarea = qt
                     .create_textarea(
@@ -1261,20 +1391,30 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
                     .add_stack(basic_right);
 
                 // --- Collections ---
-                // list_box | tree_view
-                let collections = Stack::horizontal()
-                    .gap(gap_gutter)
+                // (list_box | tree_view) / data_grid
+                let collections = Stack::vertical()
+                    .gap(gap_section)
                     .add_stack(
-                        Stack::vertical()
-                            .gap(gap_s)
-                            .add(list_box_label)
-                            .add(list_box),
+                        Stack::horizontal()
+                            .gap(gap_gutter)
+                            .add_stack(
+                                Stack::vertical()
+                                    .gap(gap_s)
+                                    .add(list_box_label)
+                                    .add(list_box),
+                            )
+                            .add_stack(
+                                Stack::vertical()
+                                    .gap(gap_s)
+                                    .add(tree_view_label)
+                                    .add(tree_view),
+                            ),
                     )
                     .add_stack(
                         Stack::vertical()
                             .gap(gap_s)
-                            .add(tree_view_label)
-                            .add(tree_view),
+                            .add(data_grid_label)
+                            .add(data_grid),
                     );
 
                 // --- Text ---
