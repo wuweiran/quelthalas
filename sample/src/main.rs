@@ -20,9 +20,9 @@ use quelthalas::component::dialog::DialogResult;
 use quelthalas::component::menu::MenuInfo;
 use quelthalas::component::{
     avatar, button, calendar, checkbox, combobox, data_grid, date_picker, dialog, divider, dropdown,
-    input, link, list_box, menu, menu_bar, message_bar, option, presence_badge, progress_bar, radio,
-    search_box, slider, spin_button, spinner, split_button, switch, tab_list, task_dialog, text,
-    textarea, toolbar, tree_view,
+    image, input, link, list_box, menu, menu_bar, message_bar, option, presence_badge, progress_bar,
+    radio, search_box, slider, spin_button, spinner, split_button, switch, tab_list, task_dialog,
+    text, textarea, toolbar, tree_view,
 };
 use quelthalas::icon::Icon;
 use quelthalas::layout::Stack;
@@ -1014,6 +1014,67 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
                     .add(make_avatar(w!("Elliot Woodward"), avatar::Size::Size32, Some(presence_badge::Status::DoNotDisturb)))
                     .add(make_avatar(w!("Wanda Howard"), avatar::Size::Size32, Some(presence_badge::Status::Blocked)));
 
+                // Image: the classic Lenna test picture (512x512) shown through every
+                // fit mode, every shape, and with border / shadow. The frames are
+                // non-square, so the fit modes visibly differ.
+                const SAMPLE_PNG: &[u8] = include_bytes!("assets/sample.png");
+                let image_label = section(w!("Image"));
+                let make_image = |fit: image::Fit,
+                                  shape: image::Shape,
+                                  bordered: bool,
+                                  shadow: bool| {
+                    qt.create_image(
+                        window,
+                        0,
+                        0,
+                        image::Props {
+                            src: SAMPLE_PNG,
+                            width: 120.0,
+                            height: 90.0,
+                            fit,
+                            shape,
+                            bordered,
+                            shadow,
+                            background: Some(palette.canvas),
+                        },
+                    )
+                    .unwrap_or_default()
+                };
+                // Fit modes (120x90 frame — non-square vs. the 512x512 source).
+                let image_fit_row = Stack::horizontal()
+                    .gap(avatar_gap)
+                    .align(quelthalas::layout::Align::Center)
+                    .add(make_image(image::Fit::Default, image::Shape::Square, true, false))
+                    .add(make_image(image::Fit::Contain, image::Shape::Square, true, false))
+                    .add(make_image(image::Fit::Cover, image::Shape::Square, true, false))
+                    .add(make_image(image::Fit::Center, image::Shape::Square, true, false));
+                // Shapes + shadow (cover fit so the frame is fully filled).
+                let make_square_image = |shape: image::Shape, bordered: bool, shadow: bool| {
+                    qt.create_image(
+                        window,
+                        0,
+                        0,
+                        image::Props {
+                            src: SAMPLE_PNG,
+                            width: 96.0,
+                            height: 96.0,
+                            fit: image::Fit::Cover,
+                            shape,
+                            bordered,
+                            shadow,
+                            background: Some(palette.canvas),
+                        },
+                    )
+                    .unwrap_or_default()
+                };
+                let image_shape_row = Stack::horizontal()
+                    .gap(avatar_gap)
+                    .align(quelthalas::layout::Align::Center)
+                    .add(make_square_image(image::Shape::Square, false, false))
+                    .add(make_square_image(image::Shape::Rounded, false, false))
+                    .add(make_square_image(image::Shape::Circular, false, false))
+                    .add(make_square_image(image::Shape::Rounded, false, true));
+
                 let textarea_label = section(w!("Textarea"));
                 let textarea = qt
                     .create_textarea(
@@ -1560,6 +1621,13 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
                             .add(avatar_label)
                             .add_stack(avatar_sizes_row)
                             .add_stack(avatar_presence_row),
+                    )
+                    .add_stack(
+                        Stack::vertical()
+                            .gap(gap_s)
+                            .add(image_label)
+                            .add_stack(image_fit_row)
+                            .add_stack(image_shape_row),
                     );
 
                 // --- Text ---

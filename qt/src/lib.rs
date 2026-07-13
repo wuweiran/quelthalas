@@ -10,6 +10,7 @@ use windows::Win32::Graphics::Direct2D::{
 use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FACTORY_TYPE_SHARED, DWriteCreateFactory, IDWriteFactory,
 };
+use windows::Win32::Graphics::Imaging::{CLSID_WICImagingFactory, IWICImagingFactory};
 use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
 use windows::Win32::UI::Animation::{IUIAnimationTransitionLibrary2, UIAnimationTransitionLibrary2};
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
@@ -36,6 +37,7 @@ pub struct QT {
     theme: Rc<Theme>,
     pub(crate) d2d_factory: ID2D1Factory1,
     pub(crate) dwrite_factory: IDWriteFactory,
+    pub(crate) wic_factory: IWICImagingFactory,
     pub(crate) transition_library: IUIAnimationTransitionLibrary2,
     pub(crate) stroke_style: ID2D1StrokeStyle,
 }
@@ -58,6 +60,9 @@ impl QT {
         };
         let dwrite_factory =
             unsafe { DWriteCreateFactory::<IDWriteFactory>(DWRITE_FACTORY_TYPE_SHARED)? };
+        let wic_factory = unsafe {
+            CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER)?
+        };
         let transition_library = unsafe {
             CoCreateInstance(&UIAnimationTransitionLibrary2, None, CLSCTX_INPROC_SERVER)?
         };
@@ -70,6 +75,7 @@ impl QT {
             theme: Rc::new(theme),
             d2d_factory,
             dwrite_factory,
+            wic_factory,
             transition_library,
             stroke_style,
         })

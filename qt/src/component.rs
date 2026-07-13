@@ -8,6 +8,7 @@ pub mod date_picker;
 pub mod dialog;
 pub mod divider;
 pub mod dropdown;
+pub mod image;
 pub mod input;
 pub mod link;
 pub mod list_box;
