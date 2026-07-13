@@ -58,16 +58,41 @@ impl Status {
         ]
     }
 
-    fn icon(self) -> Icon {
-        match self {
-            Status::Available => Icon::presence_available_12_filled(),
-            Status::Away => Icon::presence_away_12_filled(),
-            Status::Busy => Icon::presence_busy_12_filled(),
-            Status::DoNotDisturb => Icon::presence_dnd_12_filled(),
-            Status::Blocked => Icon::presence_blocked_12_regular(),
-            Status::Offline => Icon::presence_offline_12_regular(),
-            Status::OutOfOffice => Icon::presence_oof_12_regular(),
-            Status::Unknown => Icon::presence_unknown_12_regular(),
+    /// The status glyph at the given native art size (10/12/16/20 px).
+    fn icon(self, art: u32) -> Icon {
+        match (self, art) {
+            (Status::Available, 10) => Icon::presence_available_10_filled(),
+            (Status::Available, 16) => Icon::presence_available_16_filled(),
+            (Status::Available, 20) => Icon::presence_available_20_filled(),
+            (Status::Available, _) => Icon::presence_available_12_filled(),
+            (Status::Away, 10) => Icon::presence_away_10_filled(),
+            (Status::Away, 16) => Icon::presence_away_16_filled(),
+            (Status::Away, 20) => Icon::presence_away_20_filled(),
+            (Status::Away, _) => Icon::presence_away_12_filled(),
+            (Status::Busy, 10) => Icon::presence_busy_10_filled(),
+            (Status::Busy, 16) => Icon::presence_busy_16_filled(),
+            (Status::Busy, 20) => Icon::presence_busy_20_filled(),
+            (Status::Busy, _) => Icon::presence_busy_12_filled(),
+            (Status::DoNotDisturb, 10) => Icon::presence_dnd_10_filled(),
+            (Status::DoNotDisturb, 16) => Icon::presence_dnd_16_filled(),
+            (Status::DoNotDisturb, 20) => Icon::presence_dnd_20_filled(),
+            (Status::DoNotDisturb, _) => Icon::presence_dnd_12_filled(),
+            (Status::Blocked, 10) => Icon::presence_blocked_10_regular(),
+            (Status::Blocked, 16) => Icon::presence_blocked_16_regular(),
+            (Status::Blocked, 20) => Icon::presence_blocked_20_regular(),
+            (Status::Blocked, _) => Icon::presence_blocked_12_regular(),
+            (Status::Offline, 10) => Icon::presence_offline_10_regular(),
+            (Status::Offline, 16) => Icon::presence_offline_16_regular(),
+            (Status::Offline, 20) => Icon::presence_offline_20_regular(),
+            (Status::Offline, _) => Icon::presence_offline_12_regular(),
+            (Status::OutOfOffice, 10) => Icon::presence_oof_10_regular(),
+            (Status::OutOfOffice, 16) => Icon::presence_oof_16_regular(),
+            (Status::OutOfOffice, 20) => Icon::presence_oof_20_regular(),
+            (Status::OutOfOffice, _) => Icon::presence_oof_12_regular(),
+            (Status::Unknown, 10) => Icon::presence_unknown_10_regular(),
+            (Status::Unknown, 16) => Icon::presence_unknown_16_regular(),
+            (Status::Unknown, 20) => Icon::presence_unknown_20_regular(),
+            (Status::Unknown, _) => Icon::presence_unknown_12_regular(),
         }
     }
 }
@@ -94,6 +119,17 @@ impl Size {
             Size::ExtraLarge => 28.0,
         }
     }
+
+    /// The native icon art size to use (Fluent maps tiny/xs→10, small→12, medium→16,
+    /// large/xl→20 — the outliers 6 and 28 scale the nearest shipped asset).
+    pub(crate) fn art_px(self) -> u32 {
+        match self {
+            Size::Tiny | Size::ExtraSmall => 10,
+            Size::Small => 12,
+            Size::Medium => 16,
+            Size::Large | Size::ExtraLarge => 20,
+        }
+    }
 }
 
 /// The status color (Fluent `colorPalette*Background3/Foreground3`, neutral for
@@ -115,12 +151,14 @@ pub(crate) struct PresenceResources {
 }
 
 impl PresenceResources {
-    pub(crate) fn new(qt: &QT, render_target: &ID2D1HwndRenderTarget) -> Self {
+    /// Build the glyph set at a single native art size (10/12/16/20 px). The badge
+    /// draws its native asset scaled 1:1 (or near it), so strokes match Fluent.
+    pub(crate) fn new(qt: &QT, render_target: &ID2D1HwndRenderTarget, art_px: u32) -> Self {
         let mut svgs = HashMap::new();
         if let Ok(dc5) = render_target.cast::<ID2D1DeviceContext5>() {
             for status in Status::all() {
                 let color = status_color(status, &qt.theme.tokens);
-                svgs.insert(status, make_svg(&dc5, &status.icon(), &color));
+                svgs.insert(status, make_svg(&dc5, &status.icon(art_px), &color));
             }
         }
         PresenceResources { svgs }
@@ -278,7 +316,7 @@ fn on_create(window: HWND, state: State) -> Result<Context> {
                 presentOptions: Default::default(),
             },
         )?;
-        let res = PresenceResources::new(&state.qt, &render_target);
+        let res = PresenceResources::new(&state.qt, &render_target, state.size.art_px());
         Ok(Context { state, render_target, res })
     }
 }
