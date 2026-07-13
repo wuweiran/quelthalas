@@ -1,3 +1,4 @@
+pub mod avatar;
 pub mod button;
 pub mod calendar;
 pub mod checkbox;

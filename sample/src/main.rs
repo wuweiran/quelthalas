@@ -19,10 +19,10 @@ use quelthalas::component::button::IconPosition;
 use quelthalas::component::dialog::DialogResult;
 use quelthalas::component::menu::MenuInfo;
 use quelthalas::component::{
-    button, calendar, checkbox, combobox, data_grid, date_picker, dialog, divider, dropdown, input,
-    link, list_box, menu, menu_bar, message_bar, option, progress_bar, radio, search_box, slider,
-    spin_button, spinner, split_button, switch, tab_list, task_dialog, text, textarea, toolbar,
-    tree_view,
+    avatar, button, calendar, checkbox, combobox, data_grid, date_picker, dialog, divider, dropdown,
+    input, link, list_box, menu, menu_bar, message_bar, option, presence_badge, progress_bar, radio,
+    search_box, slider, spin_button, spinner, split_button, switch, tab_list, task_dialog, text,
+    textarea, toolbar, tree_view,
 };
 use quelthalas::icon::Icon;
 use quelthalas::layout::Stack;
@@ -978,6 +978,42 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
                     )
                     .unwrap_or_default();
 
+                // Avatars: names → deterministic colors/initials across the size ramp,
+                // plus a row showing each presence status.
+                let avatar_label = section(w!("Avatar"));
+                let make_avatar = |name: PCWSTR, size: avatar::Size, presence: Option<presence_badge::Status>| {
+                    qt.create_avatar(
+                        window,
+                        0,
+                        0,
+                        avatar::Props {
+                            name,
+                            size,
+                            presence,
+                            background: Some(palette.canvas),
+                        },
+                    )
+                    .unwrap_or_default()
+                };
+                let avatar_gap = qt.theme().tokens.spacing_horizontal_m;
+                let avatar_sizes_row = Stack::horizontal()
+                    .gap(avatar_gap)
+                    .align(quelthalas::layout::Align::Center)
+                    .add(make_avatar(w!("Max Mustermann"), avatar::Size::Size24, None))
+                    .add(make_avatar(w!("Erika Mustermann"), avatar::Size::Size32, None))
+                    .add(make_avatar(w!("John Doe"), avatar::Size::Size48, None))
+                    .add(make_avatar(w!("Jane Doe"), avatar::Size::Size72, None));
+                let avatar_presence_row = Stack::horizontal()
+                    .gap(avatar_gap)
+                    .align(quelthalas::layout::Align::Center)
+                    .add(make_avatar(w!("Mona Kane"), avatar::Size::Size32, Some(presence_badge::Status::Available)))
+                    .add(make_avatar(w!("Allan Munger"), avatar::Size::Size32, Some(presence_badge::Status::Busy)))
+                    .add(make_avatar(w!("Erik Nason"), avatar::Size::Size32, Some(presence_badge::Status::OutOfOffice)))
+                    .add(make_avatar(w!("Daisy Phillips"), avatar::Size::Size32, Some(presence_badge::Status::Away)))
+                    .add(make_avatar(w!("Kevin Sturgis"), avatar::Size::Size32, Some(presence_badge::Status::Offline)))
+                    .add(make_avatar(w!("Elliot Woodward"), avatar::Size::Size32, Some(presence_badge::Status::DoNotDisturb)))
+                    .add(make_avatar(w!("Wanda Howard"), avatar::Size::Size32, Some(presence_badge::Status::Blocked)));
+
                 let textarea_label = section(w!("Textarea"));
                 let textarea = qt
                     .create_textarea(
@@ -1236,6 +1272,29 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
                     Vec::new(),
                 );
 
+                // Presence badges: one per status (Medium), showing the status glyph.
+                let presence_label = section(w!("Presence badge"));
+                let make_presence = |status: presence_badge::Status| {
+                    qt.create_presence_badge(
+                        window,
+                        0,
+                        0,
+                        presence_badge::Props {
+                            status,
+                            background: Some(palette.canvas),
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap_or_default()
+                };
+                let presence_gap = qt.theme().tokens.spacing_horizontal_m;
+                let mut presence_row = Stack::horizontal()
+                    .gap(presence_gap)
+                    .align(quelthalas::layout::Align::Center);
+                for status in presence_badge::Status::all() {
+                    presence_row = presence_row.add(make_presence(status));
+                }
+
                 // Text section: an intro line, then every preset labelled by name.
                 let text_intro = qt
                     .create_body1(
@@ -1344,6 +1403,7 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
                             tabs: vec![
                                 w!("Basic Input"),
                                 w!("Collections"),
+                                w!("Media"),
                                 w!("Text"),
                                 w!("Status & info"),
                                 w!("Menus & toolbars"),
@@ -1490,6 +1550,18 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
                             .add(data_grid),
                     );
 
+                // --- Media ---
+                // avatar
+                let media = Stack::vertical()
+                    .gap(gap_section)
+                    .add_stack(
+                        Stack::vertical()
+                            .gap(gap_s)
+                            .add(avatar_label)
+                            .add_stack(avatar_sizes_row)
+                            .add_stack(avatar_presence_row),
+                    );
+
                 // --- Text ---
                 // input, text | textarea
                 let text_left = Stack::vertical()
@@ -1568,6 +1640,12 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
                             .add(bar_success)
                             .add(bar_warning)
                             .add(bar_error),
+                    )
+                    .add_stack(
+                        Stack::vertical()
+                            .gap(gap_s)
+                            .add(presence_label)
+                            .add_stack(presence_row),
                     );
 
                 // --- Menus & toolbars ---
@@ -1659,6 +1737,7 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
                 let page_contents = [
                     basic_input,
                     collections,
+                    media,
                     text_page,
                     status_info,
                     menus_toolbars,
