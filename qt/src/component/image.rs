@@ -1,8 +1,7 @@
 //! An **Image** — Fluent UI 2's framed picture surface. The Win32 ancestor is the
 //! `STATIC` control with `SS_BITMAP`: a window that just displays a picture. Fluent
 //! restyles it with **fit** modes (how the picture fills the frame), a **shape**
-//! (square / rounded / circular clip), an optional 1px **border**, and an optional
-//! **shadow**.
+//! (square / rounded / circular clip), and an optional 1px **border**.
 //!
 //! A static, self-painting `WS_CHILD` — no mouse/keyboard/interaction, like Avatar.
 //! The pixels come through **WIC** (decode the source bytes → `ID2D1Bitmap`), and the
@@ -17,23 +16,18 @@
 //! | `Contain` | *(no native style)*     | aspect-fit inside the frame       |
 //! | `Cover`   | *(no native style)*     | aspect-fill, overflow clipped     |
 //!
-//! `Shape` and `Shadow` are pure Fluent additions — a `STATIC` is always a
-//! rectangle with no shadow.
+//! `Shape` is a pure Fluent addition — a `STATIC` is always a rectangle.
 
 use std::mem::{ManuallyDrop, size_of};
 use std::sync::Once;
 
 use windows::Win32::Foundation::*;
-use windows::Win32::Graphics::Direct2D::Common::{
-    D2D1_COLOR_F, D2D1_COMPOSITE_MODE_SOURCE_OVER, D2D_RECT_F, D2D_SIZE_U,
-};
+use windows::Win32::Graphics::Direct2D::Common::{D2D1_COLOR_F, D2D_RECT_F, D2D_SIZE_U};
 use windows::Win32::Graphics::Direct2D::{
-    CLSID_D2D1Shadow, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,
-    D2D1_ELLIPSE, D2D1_HWND_RENDER_TARGET_PROPERTIES, D2D1_INTERPOLATION_MODE_LINEAR,
-    D2D1_LAYER_OPTIONS_NONE, D2D1_LAYER_PARAMETERS, D2D1_PROPERTY_TYPE_FLOAT,
-    D2D1_PROPERTY_TYPE_VECTOR4, D2D1_RENDER_TARGET_PROPERTIES, D2D1_ROUNDED_RECT,
-    D2D1_SHADOW_PROP_BLUR_STANDARD_DEVIATION, D2D1_SHADOW_PROP_COLOR, ID2D1Bitmap,
-    ID2D1DeviceContext, ID2D1Geometry, ID2D1HwndRenderTarget,
+    D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, D2D1_ELLIPSE,
+    D2D1_HWND_RENDER_TARGET_PROPERTIES, D2D1_LAYER_OPTIONS_NONE, D2D1_LAYER_PARAMETERS,
+    D2D1_RENDER_TARGET_PROPERTIES, D2D1_ROUNDED_RECT, ID2D1Bitmap, ID2D1Geometry,
+    ID2D1HwndRenderTarget,
 };
 use windows::Win32::Graphics::Gdi::{BeginPaint, EndPaint, InvalidateRect, PAINTSTRUCT};
 use windows::Win32::Graphics::Imaging::{
@@ -85,8 +79,6 @@ pub struct Props<'a> {
     pub shape: Shape,
     /// A 1px `colorNeutralStroke1` frame around the picture.
     pub bordered: bool,
-    /// A soft drop shadow beneath the frame (Fluent's `shadow4`).
-    pub shadow: bool,
     /// Surface behind/around the picture (letterbox + rounded-corner gaps). `None`
     /// uses the theme surface.
     pub background: Option<D2D1_COLOR_F>,
@@ -101,15 +93,10 @@ impl Default for Props<'_> {
             fit: Fit::Default,
             shape: Shape::Square,
             bordered: false,
-            shadow: false,
             background: None,
         }
     }
 }
-
-/// Extra window padding (DIPs) reserved on each side when `shadow` is on, so the
-/// blur has room to render instead of being clipped at the window edge.
-const SHADOW_MARGIN: f32 = 8.0;
 
 struct State {
     qt: QT,
@@ -120,7 +107,6 @@ struct State {
     fit: Fit,
     shape: Shape,
     bordered: bool,
-    shadow: bool,
     background: Option<D2D1_COLOR_F>,
 }
 
@@ -188,14 +174,12 @@ impl QT {
                 fit: props.fit,
                 shape: props.shape,
                 bordered: props.bordered,
-                shadow: props.shadow,
                 background: props.background,
             });
             // Initial size is a placeholder; `layout` fixes it once the natural size
             // is known (a 0-dim frame falls back to the decoded bitmap size).
-            let margin = if props.shadow { 2.0 * SHADOW_MARGIN } else { 0.0 };
-            let w = ((props.width.max(1.0) + margin) * scaling_factor) as i32;
-            let h = ((props.height.max(1.0) + margin) * scaling_factor) as i32;
+            let w = (props.width.max(1.0) * scaling_factor) as i32;
+            let h = (props.height.max(1.0) * scaling_factor) as i32;
             CreateWindowExW(
                 WINDOW_EX_STYLE::default(),
                 class_name,
@@ -247,10 +231,9 @@ fn on_create(window: HWND, state: State) -> Result<Context> {
 
 fn layout(window: HWND, context: &Context) -> Result<()> {
     let scaling_factor = get_scaling_factor(window);
-    let margin = if context.state.shadow { 2.0 * SHADOW_MARGIN } else { 0.0 };
     let (fw, fh) = context.frame;
-    let w = ((fw + margin) * scaling_factor).ceil() as i32;
-    let h = ((fh + margin) * scaling_factor).ceil() as i32;
+    let w = (fw * scaling_factor).ceil() as i32;
+    let h = (fh * scaling_factor).ceil() as i32;
     unsafe {
         SetWindowPos(window, None, 0, 0, w, h, SWP_NOMOVE | SWP_NOZORDER)?;
         context
@@ -321,64 +304,6 @@ fn shape_geometry(qt: &QT, shape: Shape, frame: D2D_RECT_F, radius: f32) -> Opti
     }
 }
 
-/// Draw a soft `shadow4` beneath the frame shape. Renders the opaque shape into a
-/// command list, blurs it with the D2D Shadow effect, and composites it 2px down.
-/// Best-effort: any failure just skips the shadow.
-fn draw_shadow(
-    rt: &ID2D1HwndRenderTarget,
-    frame: D2D_RECT_F,
-    shape: Shape,
-    geo: &Option<ID2D1Geometry>,
-) -> Result<()> {
-    unsafe {
-        let dc = rt.cast::<ID2D1DeviceContext>()?;
-        let list = dc.CreateCommandList()?;
-        let black = D2D1_COLOR_F { r: 0.0, g: 0.0, b: 0.0, a: 1.0 };
-        let opaque = dc.CreateSolidColorBrush(&black, None)?;
-
-        // Record the opaque shape into the command list. We're already inside the
-        // caller's BeginDraw; SetTarget just redirects draws to the list (no nested
-        // BeginDraw — that would end the outer frame).
-        let previous = dc.GetTarget()?;
-        dc.SetTarget(&list);
-        match (shape, geo) {
-            (Shape::Square, _) | (_, None) => rt.FillRectangle(&frame, &opaque),
-            (_, Some(g)) => rt.FillGeometry(g, &opaque, None),
-        }
-        list.Close()?;
-        dc.SetTarget(&previous);
-
-        let shadow = dc.CreateEffect(&CLSID_D2D1Shadow)?;
-        shadow.SetInput(0, &list, true);
-        // ~4px CSS blur ≈ σ 2.0; Fluent shadow4 is a soft ambient black.
-        let sigma: f32 = 2.0;
-        shadow.SetValue(
-            D2D1_SHADOW_PROP_BLUR_STANDARD_DEVIATION.0 as u32,
-            D2D1_PROPERTY_TYPE_FLOAT,
-            &sigma.to_le_bytes(),
-        )?;
-        let color = [0.0f32, 0.0, 0.0, 0.22];
-        let mut color_bytes = [0u8; 16];
-        for (i, c) in color.iter().enumerate() {
-            color_bytes[i * 4..i * 4 + 4].copy_from_slice(&c.to_le_bytes());
-        }
-        shadow.SetValue(
-            D2D1_SHADOW_PROP_COLOR.0 as u32,
-            D2D1_PROPERTY_TYPE_VECTOR4,
-            &color_bytes,
-        )?;
-        let output = shadow.GetOutput()?;
-        dc.DrawImage(
-            &output,
-            Some(&Vector2 { X: 0.0, Y: 2.0 }),
-            None,
-            D2D1_INTERPOLATION_MODE_LINEAR,
-            D2D1_COMPOSITE_MODE_SOURCE_OVER,
-        );
-        Ok(())
-    }
-}
-
 fn paint(window: HWND, context: &Context) -> Result<()> {
     let state = &context.state;
     let rt = &context.render_target;
@@ -388,25 +313,19 @@ fn paint(window: HWND, context: &Context) -> Result<()> {
     unsafe {
         rt.Clear(Some(&canvas));
 
-        // The picture box, inset by the shadow margin when a shadow is drawn.
-        let margin = if state.shadow { SHADOW_MARGIN } else { 0.0 };
+        // The picture box fills the whole window.
         let (fw, fh) = context.frame;
         let frame = D2D_RECT_F {
-            left: margin,
-            top: margin,
-            right: margin + fw,
-            bottom: margin + fh,
+            left: 0.0,
+            top: 0.0,
+            right: fw,
+            bottom: fh,
         };
         let radius = tokens.border_radius_medium;
         let geo = shape_geometry(&state.qt, state.shape, frame, radius);
 
-        // Shadow first, beneath everything.
-        if state.shadow {
-            let _ = draw_shadow(rt, frame, state.shape, &geo);
-        }
-
         // Fill the shape with the surface so letterbox areas / rounded gaps read as
-        // the background (not the shadow) before the picture lands on top.
+        // the background before the picture lands on top.
         let canvas_brush = rt.CreateSolidColorBrush(&canvas, None)?;
         match (state.shape, &geo) {
             (Shape::Square, _) | (_, None) => rt.FillRectangle(&frame, &canvas_brush),
