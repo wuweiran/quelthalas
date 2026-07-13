@@ -14,6 +14,7 @@ pub mod menu;
 pub mod menu_bar;
 pub mod message_bar;
 pub mod option;
+pub mod presence_badge;
 pub mod progress_bar;
 pub mod radio;
 pub mod scroll;
