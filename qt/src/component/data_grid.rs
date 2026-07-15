@@ -366,8 +366,8 @@ impl QT {
             let stroke = self.theme.tokens.stroke_width_thin;
             let natural_w =
                 stroke * 2.0 + if has_checkbox_col { CHECKBOX_COL_W } else { 0.0 } + cols_w;
-            let width = if props.width > 0 { props.width as f32 } else { natural_w };
-            let height = if props.height > 0 { props.height as f32 } else { 260.0 };
+            let width = if props.width > 0 { props.width as f32 / scaling_factor } else { natural_w };
+            let height = if props.height > 0 { props.height as f32 / scaling_factor } else { 260.0 };
             let boxed = Box::new(State {
                 qt: self.clone(),
                 columns: props.columns,

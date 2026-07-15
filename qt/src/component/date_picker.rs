@@ -331,15 +331,15 @@ fn start_focus_animation(context: &mut Context) -> Result<()> {
 fn layout(window: HWND, context: &Context) -> Result<()> {
     let state = &context.state;
     let pad = state.horizontal_padding();
+    let scaling_factor = get_scaling_factor(window);
     let width = if state.props.width > 0 {
-        state.props.width as f32
+        state.props.width as f32 / scaling_factor
     } else {
-        // A sensible default (fits a long localized short-date + the glyph).
+        // A sensible default (fits a long date + the glyph).
         pad + 140.0 + state.qt.theme.tokens.spacing_horizontal_s + GLYPH + pad
     };
     let height = state.field_height();
 
-    let scaling_factor = get_scaling_factor(window);
     let scaled_width = (width * scaling_factor).ceil() as i32;
     let scaled_height = (height * scaling_factor).ceil() as i32;
     unsafe {

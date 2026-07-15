@@ -352,8 +352,8 @@ impl QT {
                 RegisterClassExW(&window_class);
             });
             let scaling_factor = get_scaling_factor(parent_window);
-            let width = if props.width > 0 { props.width as f32 } else { 260.0 };
-            let height = if props.height > 0 { props.height as f32 } else { 220.0 };
+            let width = if props.width > 0 { props.width as f32 / scaling_factor } else { 260.0 };
+            let height = if props.height > 0 { props.height as f32 / scaling_factor } else { 220.0 };
             let roots = props.roots;
             let boxed = Box::new((
                 State {

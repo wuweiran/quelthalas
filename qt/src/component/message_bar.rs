@@ -160,7 +160,7 @@ impl QT {
                 RegisterClassExW(&window_class);
             });
             let scaling_factor = get_scaling_factor(parent_window);
-            let width = if props.width > 0 { props.width as f32 } else { 360.0 };
+            let width = if props.width > 0 { props.width as f32 / scaling_factor } else { 360.0 };
             let boxed = Box::new(State {
                 qt: self.clone(),
                 intent: props.intent,

@@ -195,9 +195,9 @@ fn on_create(window: HWND, state: State) -> Result<Context> {
 /// Auto-size to `width` × 32 DIPs and resize the render target.
 fn layout(window: HWND, context: &Context) -> Result<()> {
     let state = &context.state;
-    let width = state.props.width as f32;
-    let height = state.control_height();
     let scaling_factor = get_scaling_factor(window);
+    let width = state.props.width as f32 / scaling_factor;
+    let height = state.control_height();
     let scaled_width = (width * scaling_factor).ceil() as i32;
     let scaled_height = (height * scaling_factor).ceil() as i32;
     unsafe {
@@ -233,7 +233,7 @@ fn value_from_x(window: HWND, context: &Context, x_px: i32) -> f32 {
     let scaling_factor = get_scaling_factor(window);
     let x = x_px as f32 / scaling_factor;
     let r = context.state.thumb_radius();
-    let width = context.state.props.width as f32;
+    let width = context.state.props.width as f32 / scaling_factor;
     let span = width - 2.0 * r;
     let p = if span > 0.0 {
         clamp((x - r) / span, 0.0, 1.0)

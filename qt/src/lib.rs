@@ -50,6 +50,17 @@ impl QT {
         &self.theme
     }
 
+    /// The DPI scale factor for `window` (1.0 at 96 DPI, 1.5 at 150%, …).
+    ///
+    /// Control geometry — `x`, `y`, and `width` — is in **physical device pixels**,
+    /// the Win32 convention. A DPI-aware caller multiplies its logical sizes by this
+    /// factor before passing them (e.g. `width: (280.0 * qt.scale_factor(window)) as
+    /// i32`). Resolved through the crate's DPI shim, so it stays correct on Windows 7
+    /// (system DPI) as well as Windows 10+ (per-monitor).
+    pub fn scale_factor(&self, window: HWND) -> f32 {
+        get_scaling_factor(window)
+    }
+
     pub fn new() -> Result<Self> {
         Self::new_with(Theme::web_light())
     }

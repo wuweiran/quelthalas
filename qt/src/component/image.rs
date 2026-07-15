@@ -169,8 +169,8 @@ impl QT {
             let boxed = Box::new(State {
                 qt: self.clone(),
                 src: props.src.to_vec(),
-                width: props.width,
-                height: props.height,
+                width: props.width / scaling_factor,
+                height: props.height / scaling_factor,
                 fit: props.fit,
                 shape: props.shape,
                 bordered: props.bordered,
@@ -178,8 +178,8 @@ impl QT {
             });
             // Initial size is a placeholder; `layout` fixes it once the natural size
             // is known (a 0-dim frame falls back to the decoded bitmap size).
-            let w = (props.width.max(1.0) * scaling_factor) as i32;
-            let h = (props.height.max(1.0) * scaling_factor) as i32;
+            let w = (boxed.width.max(1.0) * scaling_factor) as i32;
+            let h = (boxed.height.max(1.0) * scaling_factor) as i32;
             CreateWindowExW(
                 WINDOW_EX_STYLE::default(),
                 class_name,

@@ -346,7 +346,7 @@ fn layout(window: HWND, context: &mut Context) -> Result<()> {
         // otherwise fill whatever width the parent stretched us to.
         let fixed = context.state.props.width;
         let scaled_width = if fixed > 0 {
-            (fixed as f32 * scaling_factor).ceil() as i32
+            fixed.max(1)
         } else {
             let mut rc = RECT::default();
             GetClientRect(window, &mut rc)?;

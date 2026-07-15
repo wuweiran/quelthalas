@@ -122,7 +122,7 @@ impl QT {
                 WS_VISIBLE | WS_CHILD,
                 x,
                 y,
-                props.width,
+                (boxed.as_ref().width * scaling_factor) as i32,
                 (boxed.as_ref().get_height() * scaling_factor) as i32,
                 Some(parent_window),
                 None,

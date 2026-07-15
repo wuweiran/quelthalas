@@ -431,7 +431,7 @@ impl QT {
             let scaling_factor = get_scaling_factor(parent_window);
             // Natural size: 12px padding + 7 fixed day cells; header + weekday + 6 rows + footer.
             let (natural_w, natural_h) = natural_size();
-            let width = if props.width > 0 { props.width as f32 } else { natural_w };
+            let width = if props.width > 0 { props.width as f32 / scaling_factor } else { natural_w };
             let height = if props.height > 0 { props.height as f32 } else { natural_h };
             let boxed = Box::new(State {
                 qt: self.clone(),

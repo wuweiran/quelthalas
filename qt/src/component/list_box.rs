@@ -214,8 +214,8 @@ impl QT {
                 RegisterClassExW(&window_class);
             });
             let scaling_factor = get_scaling_factor(parent_window);
-            let width = if props.width > 0 { props.width as f32 } else { 240.0 };
-            let height = if props.height > 0 { props.height as f32 } else { 160.0 };
+            let width = if props.width > 0 { props.width as f32 / scaling_factor } else { 240.0 };
+            let height = if props.height > 0 { props.height as f32 / scaling_factor } else { 160.0 };
             let selected = props.selected;
             let boxed = Box::new(State {
                 qt: self.clone(),

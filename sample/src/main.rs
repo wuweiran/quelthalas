@@ -257,6 +257,9 @@ impl Palette {
 /// the tab to select, so a toggle keeps the current page.
 fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
     let palette = Palette::for_theme(theme);
+    // Control geometry (width/height) is physical device px, so scale logical sizes
+    // by the window DPI. `x`/`y` are 0 here — the Stack positions controls.
+    let scale = qt.scale_factor(window);
     unsafe {
                 let icon = Icon::calendar_month_20_regular();
 
@@ -354,7 +357,7 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
                         0,
                         0,
                         input::Props {
-                            width: 280,
+                            width: (160.0 * scale) as i32,
                             default_value: Some(w!("Default text")),
                             ..Default::default()
                         },
@@ -366,7 +369,7 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
                         0,
                         0,
                         input::Props {
-                            width: 280,
+                            width: (160.0 * scale) as i32,
                             appearance: input::Appearance::FilledLighter,
                             default_value: Some(w!("Filled lighter")),
                             ..Default::default()
@@ -379,7 +382,7 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
                         0,
                         0,
                         input::Props {
-                            width: 280,
+                            width: (160.0 * scale) as i32,
                             appearance: input::Appearance::FilledDarker,
                             default_value: Some(w!("Filled darker")),
                             ..Default::default()
@@ -392,7 +395,7 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
                         0,
                         0,
                         input::Props {
-                            width: 380,
+                            width: (300.0 * scale) as i32,
                             size: input::Size::Small,
                             input_type: input::Type::Password,
                             placeholder: Some(w!("Small with placeholder")),
@@ -406,7 +409,7 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
                         0,
                         0,
                         search_box::Props {
-                            width: 360,
+                            width: (260.0 * scale) as i32,
                             placeholder: Some(w!("Search")),
                             ..Default::default()
                         },
@@ -418,7 +421,7 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
                         0,
                         0,
                         progress_bar::Props {
-                            width: 400,
+                            width: (320.0 * scale) as i32,
                             ..Default::default()
                         },
                     )
@@ -429,7 +432,7 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
                         0,
                         0,
                         progress_bar::Props {
-                            width: 400,
+                            width: (320.0 * scale) as i32,
                             value: Some(0.4),
                             thickness: progress_bar::Thickness::Large,
                             ..Default::default()
@@ -800,8 +803,8 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
                                 option::Item::new(w!("Uranus")),
                                 option::Item::new(w!("Neptune")),
                             ],
-                            width: 240,
-                            height: 160,
+                            width: (240.0 * scale) as i32,
+                            height: (160.0 * scale) as i32,
                             selected: Some(2),
                             background: Some(palette.canvas),
                             ..Default::default()
@@ -840,8 +843,8 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
                                     ]
                                 }
                             }),
-                            width: 240,
-                            height: 160,
+                            width: (240.0 * scale) as i32,
+                            height: (160.0 * scale) as i32,
                             background: Some(palette.canvas),
                             ..Default::default()
                         },
@@ -943,8 +946,8 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
                                     ],
                                 },
                             ],
-                            width: 540,
-                            height: 240,
+                            width: (580.0 * scale) as i32,
+                            height: (240.0 * scale) as i32,
                             selection_mode: data_grid::SelectionMode::Multiselect,
                             mouse_event: data_grid::MouseEvent {
                                 on_activate: Box::new({
@@ -1026,8 +1029,8 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
                         0,
                         image::Props {
                             src: SAMPLE_PNG,
-                            width: 120.0,
-                            height: 90.0,
+                            width: 120.0 * scale,
+                            height: 90.0 * scale,
                             fit,
                             shape,
                             bordered,
@@ -1052,8 +1055,8 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
                         0,
                         image::Props {
                             src: SAMPLE_PNG,
-                            width: 96.0,
-                            height: 96.0,
+                            width: 96.0 * scale,
+                            height: 96.0 * scale,
                             fit: image::Fit::Cover,
                             shape,
                             bordered: false,
@@ -1076,8 +1079,8 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
                         0,
                         0,
                         textarea::Props {
-                            width: 280,
-                            height: 96,
+                            width: (220.0 * scale) as i32,
+                            height: (96.0 * scale) as i32,
                             placeholder: Some(w!("Type here\u{2026}")),
                             background: Some(palette.canvas),
                             ..Default::default()
@@ -1097,7 +1100,7 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
                             label,
                             alignment,
                             appearance,
-                            width: 280,
+                            width: (220.0 * scale) as i32,
                             background: Some(palette.canvas),
                         },
                     )
@@ -1141,7 +1144,7 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
                         0,
                         0,
                         toolbar::Props {
-                            width: 260,
+                            width: (260.0 * scale) as i32,
                             items: vec![
                                 toolbar::ToolbarItem::Button {
                                     id: CMD_TB_FONT,
@@ -1203,7 +1206,7 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
                             min: 0.0,
                             max: 100.0,
                             value: 40.0,
-                            width: 200,
+                            width: (200.0 * scale) as i32,
                             background: Some(palette.canvas),
                             ..Default::default()
                         },
@@ -1280,7 +1283,7 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
                             title,
                             message: msg,
                             actions,
-                            width: 380,
+                            width: (440.0 * scale) as i32,
                             ..Default::default()
                         },
                     )
@@ -1762,7 +1765,7 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
                         0,
                         date_picker::Props {
                             placeholder: w!("Select a date\u{2026}"),
-                            width: 260,
+                            width: (260.0 * scale) as i32,
                             background: Some(palette.canvas),
                             ..Default::default()
                         },

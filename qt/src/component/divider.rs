@@ -176,15 +176,15 @@ fn on_create(window: HWND, state: State) -> Result<Context> {
     }
 }
 
-fn width(state: &State) -> f32 {
-    if state.props.width > 0 { state.props.width as f32 } else { 240.0 }
+fn width(state: &State, scale: f32) -> f32 {
+    if state.props.width > 0 { state.props.width as f32 / scale } else { 240.0 }
 }
 
 fn layout(window: HWND, context: &Context) -> Result<()> {
     let state = &context.state;
     let tokens = &state.qt.theme.tokens;
     let scaling_factor = get_scaling_factor(window);
-    let w = width(state);
+    let w = width(state, scaling_factor);
     let h = tokens.line_height_base200;
     let scaled_width = (w * scaling_factor).ceil() as i32;
     let scaled_height = (h * scaling_factor).ceil() as i32;
