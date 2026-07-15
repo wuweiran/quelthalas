@@ -6,7 +6,7 @@ use windows::Win32::Foundation::{
     FALSE, HANDLE, HGLOBAL, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, TRUE, WPARAM,
 };
 use windows::Win32::Globalization::{
-    SCRIPT_ANALYSIS, SCRIPT_LOGATTR, SCRIPT_UNDEFINED, ScriptBreak, lstrcpynW, lstrlenW, u_memcpy,
+    SCRIPT_ANALYSIS, SCRIPT_LOGATTR, SCRIPT_UNDEFINED, ScriptBreak, lstrcpynW, lstrlenW,
 };
 use windows::Win32::Graphics::Direct2D::Common::{
     D2D_RECT_F, D2D_SIZE_F, D2D_SIZE_U, D2D1_COLOR_F, D2D1_FIGURE_BEGIN_HOLLOW, D2D1_FIGURE_END_OPEN,
@@ -39,10 +39,10 @@ use windows::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, Glo
 use windows::Win32::System::Ole::CF_UNICODETEXT;
 use windows::Win32::System::SystemServices::MK_SHIFT;
 use windows::Win32::UI::Animation::{
-    IUIAnimationManager2, IUIAnimationTimer, IUIAnimationTimerEventHandler,
+    IUIAnimationManager, IUIAnimationTimer, IUIAnimationTimerEventHandler,
     IUIAnimationTimerEventHandler_Impl, IUIAnimationTimerUpdateHandler,
-    IUIAnimationTransitionLibrary2, IUIAnimationVariable2, UI_ANIMATION_IDLE_BEHAVIOR_DISABLE,
-    UIAnimationManager2, UIAnimationTimer,
+    IUIAnimationTransitionFactory, IUIAnimationVariable, UI_ANIMATION_IDLE_BEHAVIOR_DISABLE,
+    UIAnimationManager, UIAnimationTimer,
 };
 use windows::Win32::UI::Controls::{SetScrollInfo, WORD_BREAK_ACTION};
 use windows::Win32::UI::Controls::{WB_ISDELIMITER, WB_LEFT, WB_RIGHT, WM_MOUSELEAVE};
@@ -223,10 +223,10 @@ impl StringBuffer {
 
 pub struct Context {
     state: State,
-    animation_manager: IUIAnimationManager2,
+    animation_manager: IUIAnimationManager,
     animation_timer: IUIAnimationTimer,
-    transition_library: IUIAnimationTransitionLibrary2,
-    bottom_focus_border: IUIAnimationVariable2,
+    transition_factory: IUIAnimationTransitionFactory,
+    bottom_focus_border: IUIAnimationVariable,
     cached_text_length: Option<usize>,
     buffer: StringBuffer,
     x_offset: usize,
@@ -530,10 +530,11 @@ fn replace_selection(
         let buf_length = end - start;
         buf = StringBuffer::with_capacity(buf_length);
         unsafe {
-            u_memcpy(
-                buf.as_mut_ptr(),
+            // Plain copy, not ICU's `u_memcpy` — avoids linking `icuuc.dll` (Win10-only).
+            std::ptr::copy_nonoverlapping(
                 context.buffer.as_ptr().offset(start as isize),
-                buf_length as i32,
+                buf.as_mut_ptr(),
+                buf_length as usize,
             );
             lstrcpynW(
                 from_raw_parts_mut(
@@ -573,13 +574,13 @@ fn replace_selection(
                     && start == context.undo_position
                 {
                     context.undo_buffer.make_fit(undo_text_length + end - start);
-                    u_memcpy(
+                    std::ptr::copy_nonoverlapping(
+                        context.buffer.as_ptr(),
                         context
                             .undo_buffer
                             .as_mut_ptr()
                             .offset(undo_text_length as isize),
-                        context.buffer.as_ptr(),
-                        (end - start) as i32,
+                        (end - start) as usize,
                     );
                 } else if context.undo_insert_count == 0
                     && !context.undo_buffer.is_empty()
@@ -590,10 +591,10 @@ fn replace_selection(
                     context.undo_position = start;
                 } else {
                     context.undo_buffer.make_fit(end - start);
-                    u_memcpy(
-                        context.undo_buffer.as_mut_ptr(),
+                    std::ptr::copy_nonoverlapping(
                         buf.as_ptr(),
-                        (end - start) as i32,
+                        context.undo_buffer.as_mut_ptr(),
+                        (end - start) as usize,
                     );
                     context.undo_position = start;
                 }
@@ -1025,9 +1026,9 @@ fn on_create(window: HWND, state: State) -> Result<Context> {
 
         let animation_timer: IUIAnimationTimer =
             CoCreateInstance(&UIAnimationTimer, None, CLSCTX_INPROC_SERVER)?;
-        let transition_library = state.qt.transition_library.clone();
-        let animation_manager: IUIAnimationManager2 =
-            CoCreateInstance(&UIAnimationManager2, None, CLSCTX_INPROC_SERVER)?;
+        let transition_factory = state.qt.transition_factory.clone();
+        let animation_manager: IUIAnimationManager =
+            CoCreateInstance(&UIAnimationManager, None, CLSCTX_INPROC_SERVER)?;
         let timer_update_handler = animation_manager.cast::<IUIAnimationTimerUpdateHandler>()?;
         animation_timer
             .SetTimerUpdateHandler(&timer_update_handler, UI_ANIMATION_IDLE_BEHAVIOR_DISABLE)?;
@@ -1039,7 +1040,7 @@ fn on_create(window: HWND, state: State) -> Result<Context> {
             state,
             animation_manager,
             animation_timer,
-            transition_library,
+            transition_factory,
             bottom_focus_border,
             cached_text_length: None,
             buffer: StringBuffer::new(),
@@ -1127,10 +1128,10 @@ fn on_copy(window: HWND, context: &mut Context) -> Result<()> {
         let length = end - start;
         let hdst = GlobalAlloc(GMEM_MOVEABLE, (length + 1) * size_of::<u16>())?;
         let dst = GlobalLock(hdst);
-        u_memcpy(
-            dst as _,
+        std::ptr::copy_nonoverlapping(
             context.buffer.as_ptr().offset(start as isize),
-            length as i32,
+            dst as *mut u16,
+            length as usize,
         );
         *(dst as *mut u16).offset(length as isize) = 0;
         GlobalUnlock(hdst).or_else(|error| error.code().ok())?;
@@ -1714,16 +1715,12 @@ fn set_focus(window: HWND, context: &mut Context) -> Result<()> {
         set_caret_position(window, context, context.selection_end)?;
         _ = RedrawWindow(Some(window), None, None, RDW_INVALIDATE);
         let tokens = &context.state.qt.theme.tokens;
-        let transition = context
-            .transition_library
-            .CreateCubicBezierLinearTransition(
-                tokens.duration_normal,
-                1.0,
-                tokens.curve_decelerate_mid[0],
-                tokens.curve_decelerate_mid[1],
-                tokens.curve_decelerate_mid[2],
-                tokens.curve_decelerate_mid[3],
-            )?;
+        let transition = crate::anim::cubic_bezier_linear_transition(
+            &context.transition_factory,
+            tokens.duration_normal,
+            1.0,
+            tokens.curve_decelerate_mid,
+        )?;
         let seconds_now = context.animation_timer.GetTime()?;
         context.bottom_focus_border = context.animation_manager.CreateAnimationVariable(0.0)?;
         context.animation_manager.ScheduleTransition(

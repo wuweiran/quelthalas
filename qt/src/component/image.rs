@@ -34,7 +34,7 @@ use windows::Win32::Graphics::Imaging::{
     GUID_WICPixelFormat32bppPBGRA, IWICImagingFactory, WICBitmapDitherTypeNone,
     WICBitmapPaletteTypeMedianCut, WICDecodeMetadataCacheOnLoad,
 };
-use windows::Win32::UI::HiDpi::GetDpiForWindow;
+use crate::sys::dpi_for_window;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::*;
 use windows_numerics::{Matrix3x2, Vector2};
@@ -200,7 +200,7 @@ impl QT {
 
 fn on_create(window: HWND, state: State) -> Result<Context> {
     unsafe {
-        let dpi = GetDpiForWindow(window);
+        let dpi = dpi_for_window(window);
         let render_target = state.qt.d2d_factory.CreateHwndRenderTarget(
             &D2D1_RENDER_TARGET_PROPERTIES {
                 dpiX: dpi as f32,
@@ -456,7 +456,7 @@ extern "system" fn window_proc(window: HWND, message: u32, w_param: WPARAM, l_pa
         WM_DPICHANGED_BEFOREPARENT => unsafe {
             let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
             let context = &*raw;
-            let new_dpi = GetDpiForWindow(window);
+            let new_dpi = dpi_for_window(window);
             context.render_target.SetDpi(new_dpi as f32, new_dpi as f32);
             _ = layout(window, context);
             _ = InvalidateRect(Some(window), None, false);

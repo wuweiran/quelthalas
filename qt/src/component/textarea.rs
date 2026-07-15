@@ -37,13 +37,13 @@ use windows::Win32::System::DataExchange::{
 use windows::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock};
 use windows::Win32::System::Ole::CF_UNICODETEXT;
 use windows::Win32::UI::Animation::{
-    IUIAnimationManager2, IUIAnimationTimer, IUIAnimationTimerEventHandler,
+    IUIAnimationManager, IUIAnimationTimer, IUIAnimationTimerEventHandler,
     IUIAnimationTimerEventHandler_Impl, IUIAnimationTimerUpdateHandler,
-    IUIAnimationTransitionLibrary2, IUIAnimationVariable2, UI_ANIMATION_IDLE_BEHAVIOR_DISABLE,
-    UIAnimationManager2, UIAnimationTimer,
+    IUIAnimationTransitionFactory, IUIAnimationVariable, UI_ANIMATION_IDLE_BEHAVIOR_DISABLE,
+    UIAnimationManager, UIAnimationTimer,
 };
 use windows::Win32::UI::Controls::WM_MOUSELEAVE;
-use windows::Win32::UI::HiDpi::GetDpiForWindow;
+use crate::sys::dpi_for_window;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetCapture, GetKeyState, ReleaseCapture, SetCapture, SetFocus, TME_LEAVE, TRACKMOUSEEVENT,
     TrackMouseEvent, VIRTUAL_KEY, VK_A, VK_CONTROL, VK_DELETE, VK_DOWN, VK_END, VK_HOME,
@@ -144,10 +144,10 @@ struct Context {
     state: State,
     text_format: IDWriteTextFormat,
     render_target: ID2D1HwndRenderTarget,
-    animation_manager: IUIAnimationManager2,
+    animation_manager: IUIAnimationManager,
     animation_timer: IUIAnimationTimer,
-    transition_library: IUIAnimationTransitionLibrary2,
-    bottom_focus_border: IUIAnimationVariable2,
+    transition_factory: IUIAnimationTransitionFactory,
+    bottom_focus_border: IUIAnimationVariable,
     is_focused: bool,
     is_hovered: bool,
     // --- editor ---
@@ -350,7 +350,7 @@ fn on_create(window: HWND, state: State) -> Result<Context> {
     let line_height = state.line_height();
     unsafe {
         let text_format = create_text_format(&state.qt, font_size, line_height)?;
-        let dpi = GetDpiForWindow(window);
+        let dpi = dpi_for_window(window);
         let render_target = state.qt.d2d_factory.CreateHwndRenderTarget(
             &D2D1_RENDER_TARGET_PROPERTIES {
                 dpiX: dpi as f32,
@@ -366,9 +366,9 @@ fn on_create(window: HWND, state: State) -> Result<Context> {
 
         let animation_timer: IUIAnimationTimer =
             CoCreateInstance(&UIAnimationTimer, None, CLSCTX_INPROC_SERVER)?;
-        let transition_library = state.qt.transition_library.clone();
-        let animation_manager: IUIAnimationManager2 =
-            CoCreateInstance(&UIAnimationManager2, None, CLSCTX_INPROC_SERVER)?;
+        let transition_factory = state.qt.transition_factory.clone();
+        let animation_manager: IUIAnimationManager =
+            CoCreateInstance(&UIAnimationManager, None, CLSCTX_INPROC_SERVER)?;
         let timer_update_handler = animation_manager.cast::<IUIAnimationTimerUpdateHandler>()?;
         animation_timer
             .SetTimerUpdateHandler(&timer_update_handler, UI_ANIMATION_IDLE_BEHAVIOR_DISABLE)?;
@@ -383,7 +383,7 @@ fn on_create(window: HWND, state: State) -> Result<Context> {
             render_target,
             animation_manager,
             animation_timer,
-            transition_library,
+            transition_factory,
             bottom_focus_border,
             is_focused: false,
             is_hovered: false,
@@ -420,13 +420,11 @@ impl IUIAnimationTimerEventHandler_Impl for AnimationTimerEventHandler_Impl {
 fn start_focus_animation(context: &mut Context) -> Result<()> {
     let tokens = &context.state.qt.theme.tokens;
     unsafe {
-        let transition = context.transition_library.CreateCubicBezierLinearTransition(
+        let transition = crate::anim::cubic_bezier_linear_transition(
+            &context.transition_factory,
             tokens.duration_normal,
             1.0,
-            tokens.curve_decelerate_mid[0],
-            tokens.curve_decelerate_mid[1],
-            tokens.curve_decelerate_mid[2],
-            tokens.curve_decelerate_mid[3],
+            tokens.curve_decelerate_mid,
         )?;
         let seconds_now = context.animation_timer.GetTime()?;
         context.bottom_focus_border = context.animation_manager.CreateAnimationVariable(0.0)?;
@@ -1429,7 +1427,7 @@ extern "system" fn window_proc(
             let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
             let context = &mut *raw;
             _ = layout(window, context);
-            let new_dpi = GetDpiForWindow(window);
+            let new_dpi = dpi_for_window(window);
             context.render_target.SetDpi(new_dpi as f32, new_dpi as f32);
             update_metrics(context);
             _ = InvalidateRect(Some(window), None, false);

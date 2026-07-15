@@ -18,7 +18,7 @@ use windows::Win32::Graphics::Gdi::{
     MonitorFromWindow, PAINTSTRUCT, SetWindowRgn,
 };
 use windows::Win32::UI::Controls::WM_MOUSELEAVE;
-use windows::Win32::UI::HiDpi::GetDpiForWindow;
+use crate::sys::dpi_for_window;
 use windows::Win32::UI::Input::KeyboardAndMouse::{TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent};
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::*;
@@ -26,6 +26,16 @@ use windows::core::*;
 const POPUP_CLASS: PCWSTR = w!("QT_TOOLTIP");
 /// Per-owner state pointer, attached to the subclassed window.
 const TOOLTIP_PROP: PCWSTR = w!("QT_TOOLTIP_STATE");
+
+/// The width of a window `LONG_PTR` slot — what `Set/GetWindowLongPtrW` takes and
+/// returns. It's `isize` on 64-bit, but the `windows` crate aliases the `…PtrW`
+/// calls to the 32-bit `…LongW` (`i32`) forms on a 32-bit target. Aliasing to the
+/// right width keeps the WNDPROC subclassing below compiling for both 32- and
+/// 64-bit Windows — the Win7 build is 32-bit, so this width-generic form matters.
+#[cfg(target_pointer_width = "64")]
+type WndProcLong = isize;
+#[cfg(target_pointer_width = "32")]
+type WndProcLong = i32;
 
 /// Timer on the owner: fires once after the hover delay to show the tooltip.
 const HOVER_TIMER_ID: usize = 0x71001;
@@ -111,8 +121,8 @@ impl QT {
             });
             let ptr = Box::into_raw(boxed);
             // Swap the owner's wndproc (user32 subclassing — comctl32-free).
-            let old = SetWindowLongPtrW(owner, GWLP_WNDPROC, subclass_proc as *const () as isize);
-            (*ptr).old_proc = transmute::<isize, WNDPROC>(old);
+            let old = SetWindowLongPtrW(owner, GWLP_WNDPROC, subclass_proc as *const () as WndProcLong);
+            (*ptr).old_proc = transmute::<WndProcLong, WNDPROC>(old);
             SetPropW(owner, TOOLTIP_PROP, Some(HANDLE(ptr as _)))?;
         }
         Ok(())
@@ -176,7 +186,7 @@ extern "system" fn subclass_proc(
                 hide(info, window);
                 // Restore the original proc, drop our prop + state before the
                 // window fully dies.
-                SetWindowLongPtrW(window, GWLP_WNDPROC, transmute::<WNDPROC, isize>(old));
+                SetWindowLongPtrW(window, GWLP_WNDPROC, transmute::<WNDPROC, WndProcLong>(old));
                 _ = RemovePropW(window, TOOLTIP_PROP);
                 let result = CallWindowProcW(old, window, message, w_param, l_param);
                 drop(Box::from_raw(raw));
@@ -280,7 +290,7 @@ fn popup_on_create(window: HWND, params: CreateParams) -> Result<PopupContext> {
         // the render target gets a real pixel size — no 0×0 bug.
         let mut client_rect = RECT::default();
         GetClientRect(window, &mut client_rect)?;
-        let dpi = GetDpiForWindow(window);
+        let dpi = dpi_for_window(window);
         let render_target = params.qt.d2d_factory.CreateHwndRenderTarget(
             &D2D1_RENDER_TARGET_PROPERTIES {
                 dpiX: dpi as f32,

@@ -25,13 +25,13 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
 use windows::Win32::UI::Animation::{
-    IUIAnimationManager2, IUIAnimationTimer, IUIAnimationTimerEventHandler,
+    IUIAnimationManager, IUIAnimationTimer, IUIAnimationTimerEventHandler,
     IUIAnimationTimerEventHandler_Impl, IUIAnimationTimerUpdateHandler,
-    IUIAnimationTransitionLibrary2, IUIAnimationVariable2, UI_ANIMATION_IDLE_BEHAVIOR_DISABLE,
-    UIAnimationManager2, UIAnimationTimer,
+    IUIAnimationTransitionFactory, IUIAnimationTransitionLibrary, IUIAnimationVariable,
+    UI_ANIMATION_IDLE_BEHAVIOR_DISABLE, UIAnimationManager, UIAnimationTimer,
 };
 use windows::Win32::UI::Controls::WM_MOUSELEAVE;
-use windows::Win32::UI::HiDpi::GetDpiForWindow;
+use crate::sys::dpi_for_window;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetCapture, ReleaseCapture, SetCapture, SetFocus, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent,
     VIRTUAL_KEY, VK_DOWN, VK_END, VK_HOME, VK_NEXT, VK_PRIOR, VK_UP,
@@ -139,11 +139,12 @@ struct Context {
     is_focused: bool,
     is_hovered: bool,
     scroll: VScroll,
-    animation_manager: IUIAnimationManager2,
+    animation_manager: IUIAnimationManager,
     animation_timer: IUIAnimationTimer,
-    transition_library: IUIAnimationTransitionLibrary2,
+    transition_library: IUIAnimationTransitionLibrary,
+    transition_factory: IUIAnimationTransitionFactory,
     /// Animated height of the selected row's accent bar (press-shrink → release).
-    accent_height: IUIAnimationVariable2,
+    accent_height: IUIAnimationVariable,
 }
 
 impl Context {
@@ -285,7 +286,7 @@ fn on_create(window: HWND, state: State) -> Result<Context> {
     let font_size = state.font_size();
     unsafe {
         let text_format = create_text_format(&state.qt, font_size)?;
-        let dpi = GetDpiForWindow(window);
+        let dpi = dpi_for_window(window);
         let render_target = state.qt.d2d_factory.CreateHwndRenderTarget(
             &D2D1_RENDER_TARGET_PROPERTIES {
                 dpiX: dpi as f32,
@@ -302,8 +303,9 @@ fn on_create(window: HWND, state: State) -> Result<Context> {
         let animation_timer: IUIAnimationTimer =
             CoCreateInstance(&UIAnimationTimer, None, CLSCTX_INPROC_SERVER)?;
         let transition_library = state.qt.transition_library.clone();
-        let animation_manager: IUIAnimationManager2 =
-            CoCreateInstance(&UIAnimationManager2, None, CLSCTX_INPROC_SERVER)?;
+        let transition_factory = state.qt.transition_factory.clone();
+        let animation_manager: IUIAnimationManager =
+            CoCreateInstance(&UIAnimationManager, None, CLSCTX_INPROC_SERVER)?;
         let timer_update_handler = animation_manager.cast::<IUIAnimationTimerUpdateHandler>()?;
         animation_timer
             .SetTimerUpdateHandler(&timer_update_handler, UI_ANIMATION_IDLE_BEHAVIOR_DISABLE)?;
@@ -324,6 +326,7 @@ fn on_create(window: HWND, state: State) -> Result<Context> {
             animation_manager,
             animation_timer,
             transition_library,
+            transition_factory,
             accent_height,
         })
     }
@@ -356,13 +359,11 @@ fn animate_accent(context: &mut Context, target: f64, duration: f64) -> Result<(
         let transition = if duration <= 0.0 {
             context.transition_library.CreateInstantaneousTransition(target)?
         } else {
-            context.transition_library.CreateCubicBezierLinearTransition(
+            crate::anim::cubic_bezier_linear_transition(
+                &context.transition_factory,
                 duration,
                 target,
-                curve[0],
-                curve[1],
-                curve[2],
-                curve[3],
+                curve,
             )?
         };
         let seconds_now = context.animation_timer.GetTime()?;
@@ -883,7 +884,7 @@ extern "system" fn window_proc(
             let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
             let context = &mut *raw;
             _ = layout(window, context);
-            let new_dpi = GetDpiForWindow(window);
+            let new_dpi = dpi_for_window(window);
             context.render_target.SetDpi(new_dpi as f32, new_dpi as f32);
             update_metrics(context);
             _ = InvalidateRect(Some(window), None, false);

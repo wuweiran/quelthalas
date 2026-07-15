@@ -18,15 +18,15 @@ use std::sync::Once;
 
 use crate::component::menu;
 use crate::icon::Icon;
+use crate::icon::path::build_geometry;
 use crate::{QT, get_scaling_factor};
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Direct2D::Common::{
-    D2D_RECT_F, D2D_SIZE_F, D2D_SIZE_U, D2D1_COLOR_F,
+    D2D_RECT_F, D2D_SIZE_U, D2D1_COLOR_F,
 };
 use windows::Win32::Graphics::Direct2D::{
     D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_HWND_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_PROPERTIES,
-    D2D1_ROUNDED_RECT, D2D1_SVG_PAINT_TYPE_COLOR, ID2D1DeviceContext5, ID2D1HwndRenderTarget,
-    ID2D1SvgAttribute, ID2D1SvgDocument,
+    D2D1_ROUNDED_RECT, ID2D1HwndRenderTarget, ID2D1PathGeometry1,
 };
 use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_MEASURING_MODE_NATURAL,
@@ -37,11 +37,10 @@ use windows::Win32::Graphics::Gdi::{
     BeginPaint, ClientToScreen, EndPaint, InvalidateRect, PAINTSTRUCT,
 };
 use windows::Win32::UI::Controls::WM_MOUSELEAVE;
-use windows::Win32::UI::HiDpi::GetDpiForWindow;
+use crate::sys::dpi_for_window;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetCapture, ReleaseCapture, SetCapture, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent,
 };
-use windows::Win32::UI::Shell::SHCreateMemStream;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::*;
 use windows_numerics::Matrix3x2;
@@ -168,10 +167,11 @@ struct Context {
     state: State,
     text_format: IDWriteTextFormat,
     render_target: ID2D1HwndRenderTarget,
-    /// Per-item icon SVG (None for dividers / icon-less items). Indexed by item.
-    icon_svgs: Vec<Option<ID2D1SvgDocument>>,
-    /// The "More" overflow glyph, built once.
-    more_svg: Option<ID2D1SvgDocument>,
+    /// Per-item icon geometry + native pixel size (None for dividers / icon-less
+    /// items). Indexed by item; the tint is applied per paint via a brush.
+    icon_geometries: Vec<Option<(ID2D1PathGeometry1, f32)>>,
+    /// The "More" overflow glyph geometry + native pixel size, built once.
+    more_geometry: Option<(ID2D1PathGeometry1, f32)>,
     /// Visible button slots after overflow measurement (DIPs).
     slots: Vec<Slot>,
     /// Item indices pushed into the overflow flyout (in original order).
@@ -234,41 +234,6 @@ impl QT {
     }
 }
 
-fn set_svg_color(svg: &ID2D1SvgDocument, color: &D2D1_COLOR_F) {
-    unsafe {
-        if let Ok(paint) = svg.CreatePaint(D2D1_SVG_PAINT_TYPE_COLOR, Some(color), w!("")) {
-            if let (Ok(root), Ok(attr)) = (svg.GetRoot(), paint.cast::<ID2D1SvgAttribute>()) {
-                if let Ok(child) = root.GetFirstChild() {
-                    _ = child.SetAttributeValue(w!("fill"), &attr);
-                }
-            }
-        }
-    }
-}
-
-/// Build an `ID2D1SvgDocument` for `icon`, tinted `color`.
-fn make_svg(
-    render_target: &ID2D1HwndRenderTarget,
-    icon: &Icon,
-    color: &D2D1_COLOR_F,
-) -> Option<ID2D1SvgDocument> {
-    unsafe {
-        let dc5 = render_target.cast::<ID2D1DeviceContext5>().ok()?;
-        let stream = SHCreateMemStream(Some(icon.svg.as_bytes()))?;
-        let svg = dc5
-            .CreateSvgDocument(
-                &stream,
-                D2D_SIZE_F {
-                    width: icon.size as f32,
-                    height: icon.size as f32,
-                },
-            )
-            .ok()?;
-        set_svg_color(&svg, color);
-        Some(svg)
-    }
-}
-
 fn measure_text_width(qt: &QT, format: &IDWriteTextFormat, text: PCWSTR) -> f32 {
     unsafe {
         let Ok(layout) = qt
@@ -316,7 +281,7 @@ fn on_create(window: HWND, state: State) -> Result<Context> {
         text_format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
         text_format.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER)?;
 
-        let dpi = GetDpiForWindow(window);
+        let dpi = dpi_for_window(window);
         let render_target = state.qt.d2d_factory.CreateHwndRenderTarget(
             &D2D1_RENDER_TARGET_PROPERTIES {
                 dpiX: dpi as f32,
@@ -333,21 +298,32 @@ fn on_create(window: HWND, state: State) -> Result<Context> {
             },
         )?;
 
-        let icon_color = tokens.color_neutral_foreground2;
-        let icon_svgs = state
+        // Build each item's icon (and the More glyph) as a fillable geometry paired
+        // with its native pixel size; the tint is chosen per paint (rest/hover) via a
+        // brush.
+        let icon_geometries = state
             .props
             .items
             .iter()
-            .map(|item| item.icon().and_then(|ic| make_svg(&render_target, &ic, &icon_color)))
+            .map(|item| {
+                item.icon().and_then(|ic| {
+                    build_geometry(&state.qt.d2d_factory, &ic)
+                        .ok()
+                        .map(|g| (g, ic.size as f32))
+                })
+            })
             .collect();
-        let more_svg = make_svg(&render_target, &Icon::more_horizontal_24_regular(), &icon_color);
+        let more_icon = Icon::more_horizontal_24_regular();
+        let more_geometry = build_geometry(&state.qt.d2d_factory, &more_icon)
+            .ok()
+            .map(|g| (g, more_icon.size as f32));
 
         Ok(Context {
             state,
             text_format,
             render_target,
-            icon_svgs,
-            more_svg,
+            icon_geometries,
+            more_geometry,
             slots: Vec::new(),
             overflow: Vec::new(),
             overflow_sep_left: None,
@@ -564,23 +540,22 @@ fn draw_button_bg(
     Ok(())
 }
 
-/// Draw an SVG at `ICON_DRAW_SIZE`, centered on `(cx, cy)`, tinted `color`. The
-/// glyph is scaled from its native viewport to exactly `ICON_DRAW_SIZE` (20px),
-/// regardless of whether the source is a 20- or 24-viewBox icon.
+/// Draw a glyph geometry at `ICON_DRAW_SIZE`, centered on `(cx, cy)`, tinted
+/// `color`. The glyph is scaled from its native size (`native`) to exactly
+/// `ICON_DRAW_SIZE` (20px), regardless of whether the source is a 20- or 24-px icon.
 fn draw_icon_centered(
     render_target: &ID2D1HwndRenderTarget,
-    svg: &ID2D1SvgDocument,
+    geometry: &ID2D1PathGeometry1,
+    native: f32,
     color: &D2D1_COLOR_F,
     cx: f32,
     cy: f32,
 ) -> Result<()> {
-    set_svg_color(svg, color);
     unsafe {
-        let dc5 = render_target.cast::<ID2D1DeviceContext5>()?;
-        let vp = svg.GetViewportSize();
-        let scale = ICON_DRAW_SIZE / vp.width;
-        let drawn = vp.width * scale;
-        dc5.SetTransform(&Matrix3x2 {
+        let brush = render_target.CreateSolidColorBrush(color, None)?;
+        let scale = ICON_DRAW_SIZE / native;
+        let drawn = native * scale;
+        render_target.SetTransform(&Matrix3x2 {
             M11: scale,
             M12: 0.0,
             M21: 0.0,
@@ -588,8 +563,8 @@ fn draw_icon_centered(
             M31: cx - drawn / 2.0,
             M32: cy - drawn / 2.0,
         });
-        dc5.DrawSvgDocument(svg);
-        dc5.SetTransform(&Matrix3x2::identity());
+        render_target.FillGeometry(geometry, &brush, None);
+        render_target.SetTransform(&Matrix3x2::identity());
     }
     Ok(())
 }
@@ -650,7 +625,7 @@ fn paint(window: HWND, context: &Context) -> Result<()> {
             if item.icon().is_some() {
                 // Icon-only square: native-size glyph, centered. colorNeutralForeground2
                 // at rest, colorNeutralForeground2BrandHover on hover.
-                if let Some(Some(svg)) = context.icon_svgs.get(slot.item_index) {
+                if let Some(Some((geometry, native))) = context.icon_geometries.get(slot.item_index) {
                     let color = if hovered {
                         &tokens.color_neutral_foreground2_brand_hover
                     } else {
@@ -658,7 +633,8 @@ fn paint(window: HWND, context: &Context) -> Result<()> {
                     };
                     draw_icon_centered(
                         &context.render_target,
-                        svg,
+                        geometry,
+                        *native,
                         color,
                         slot.left + slot.width / 2.0,
                         height / 2.0,
@@ -695,7 +671,7 @@ fn paint(window: HWND, context: &Context) -> Result<()> {
             let hovered = context.hovered == Some(MORE_TARGET);
             let pressed = context.pressed == Some(MORE_TARGET);
             draw_button_bg(context, left, width, height, false, hovered, pressed)?;
-            if let Some(svg) = &context.more_svg {
+            if let Some((geometry, native)) = &context.more_geometry {
                 let color = if hovered {
                     &tokens.color_neutral_foreground2_brand_hover
                 } else {
@@ -703,7 +679,8 @@ fn paint(window: HWND, context: &Context) -> Result<()> {
                 };
                 draw_icon_centered(
                     &context.render_target,
-                    svg,
+                    geometry,
+                    *native,
                     color,
                     left + width / 2.0,
                     height / 2.0,
@@ -916,7 +893,7 @@ extern "system" fn window_proc(
             let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
             let context = &mut *raw;
             _ = layout(window, context);
-            let new_dpi = GetDpiForWindow(window);
+            let new_dpi = dpi_for_window(window);
             context.render_target.SetDpi(new_dpi as f32, new_dpi as f32);
             _ = InvalidateRect(Some(window), None, false);
             LRESULT(0)

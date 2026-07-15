@@ -11,13 +11,12 @@ use windows::Win32::Graphics::DirectWrite::{
     DWRITE_MEASURING_MODE_NATURAL, DWRITE_TEXT_METRICS, IDWriteTextFormat,
 };
 use windows::Win32::Graphics::Gdi::{BeginPaint, EndPaint, InvalidateRect, PAINTSTRUCT};
-use windows::Win32::UI::HiDpi::{AdjustWindowRectExForDpi, GetDpiForWindow};
 use windows::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, SetActiveWindow};
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::*;
-use windows_version::OsVersion;
 
 use crate::component::button;
+use crate::sys::{adjust_window_rect_ex_for_dpi, dpi_for_window};
 use crate::{MouseEvent, QT, get_scaling_factor};
 
 #[derive(Copy, Clone)]
@@ -155,7 +154,7 @@ fn on_create(window: HWND, state: State) -> Result<Context> {
         let content_text_format = content_typo.create_text_format(&direct_write_factory)?;
 
         let factory = &qt.d2d_factory;
-        let dpi = GetDpiForWindow(window);
+        let dpi = dpi_for_window(window);
         let render_target = factory.CreateHwndRenderTarget(
             &D2D1_RENDER_TARGET_PROPERTIES {
                 dpiX: dpi as f32,
@@ -299,22 +298,13 @@ fn layout(window: HWND, context: &Context) -> Result<()> {
             right: scaled_width,
             bottom: scaled_height,
         };
-        if OsVersion::current() >= OsVersion::new(10, 0, 0, 14393) {
-            AdjustWindowRectExForDpi(
-                &mut rect,
-                WINDOW_STYLE(GetWindowLongPtrW(window, GWL_STYLE) as u32),
-                false,
-                WINDOW_EX_STYLE(GetWindowLongPtrW(window, GWL_EXSTYLE) as u32),
-                GetDpiForWindow(window),
-            )?;
-        } else {
-            AdjustWindowRectEx(
-                &mut rect,
-                WINDOW_STYLE(GetWindowLongPtrW(window, GWL_STYLE) as u32),
-                false,
-                WINDOW_EX_STYLE(GetWindowLongPtrW(window, GWL_EXSTYLE) as u32),
-            )?;
-        }
+        adjust_window_rect_ex_for_dpi(
+            &mut rect,
+            WINDOW_STYLE(GetWindowLongPtrW(window, GWL_STYLE) as u32),
+            false,
+            WINDOW_EX_STYLE(GetWindowLongPtrW(window, GWL_EXSTYLE) as u32),
+            dpi_for_window(window),
+        )?;
         let window_width = rect.right - rect.left;
         let window_height = rect.bottom - rect.top;
         // Center over the owner window (the app), falling back to the screen. For an

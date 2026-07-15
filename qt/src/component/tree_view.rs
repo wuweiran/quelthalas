@@ -11,12 +11,11 @@ use std::sync::Once;
 
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Direct2D::Common::{
-    D2D_RECT_F, D2D_SIZE_F, D2D_SIZE_U, D2D1_COLOR_F,
+    D2D_RECT_F, D2D_SIZE_U, D2D1_COLOR_F,
 };
 use windows::Win32::Graphics::Direct2D::{
     D2D1_ANTIALIAS_MODE_ALIASED, D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_HWND_RENDER_TARGET_PROPERTIES,
-    D2D1_RENDER_TARGET_PROPERTIES, D2D1_ROUNDED_RECT, D2D1_SVG_PAINT_TYPE_COLOR,
-    ID2D1DeviceContext5, ID2D1HwndRenderTarget, ID2D1SvgAttribute, ID2D1SvgDocument,
+    D2D1_RENDER_TARGET_PROPERTIES, D2D1_ROUNDED_RECT, ID2D1HwndRenderTarget, ID2D1PathGeometry1,
 };
 use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_MEASURING_MODE_NATURAL,
@@ -28,19 +27,18 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
 use windows::Win32::UI::Animation::{
-    IUIAnimationManager2, IUIAnimationTimer, IUIAnimationTimerEventHandler,
+    IUIAnimationManager, IUIAnimationTimer, IUIAnimationTimerEventHandler,
     IUIAnimationTimerEventHandler_Impl, IUIAnimationTimerUpdateHandler,
-    IUIAnimationTransitionLibrary2, IUIAnimationVariable2, UI_ANIMATION_IDLE_BEHAVIOR_DISABLE,
-    UIAnimationManager2, UIAnimationTimer,
+    IUIAnimationTransitionFactory, IUIAnimationTransitionLibrary, IUIAnimationVariable,
+    UI_ANIMATION_IDLE_BEHAVIOR_DISABLE, UIAnimationManager, UIAnimationTimer,
 };
 use windows::Win32::UI::Controls::WM_MOUSELEAVE;
-use windows::Win32::UI::HiDpi::GetDpiForWindow;
+use crate::sys::dpi_for_window;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetCapture, ReleaseCapture, SetCapture, SetFocus, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent,
     VIRTUAL_KEY, VK_DOWN, VK_END, VK_HOME, VK_LEFT, VK_NEXT, VK_PRIOR, VK_RETURN, VK_RIGHT, VK_SPACE,
     VK_UP,
 };
-use windows::Win32::UI::Shell::SHCreateMemStream;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::*;
 use windows_numerics::Matrix3x2;
@@ -48,6 +46,7 @@ use windows_numerics::Matrix3x2;
 use crate::component::input;
 use crate::component::scroll::{SCROLLBAR_W, ScrollHit, VScroll};
 use crate::icon::Icon;
+use crate::icon::path::build_geometry;
 use crate::{QT, get_scaling_factor};
 
 const REPEAT_TIMER_ID: usize = 1;
@@ -186,14 +185,15 @@ struct Context {
     is_focused: bool,
     is_hovered: bool,
     scroll: VScroll,
-    animation_manager: IUIAnimationManager2,
+    animation_manager: IUIAnimationManager,
     animation_timer: IUIAnimationTimer,
-    transition_library: IUIAnimationTransitionLibrary2,
-    accent_height: IUIAnimationVariable2,
-    /// Lazily-created chevron SVG (tinted once), rotated per-row at paint.
-    chevron_svg: RefCell<Option<ID2D1SvgDocument>>,
+    transition_library: IUIAnimationTransitionLibrary,
+    transition_factory: IUIAnimationTransitionFactory,
+    accent_height: IUIAnimationVariable,
+    /// Lazily-built chevron geometry, tinted at draw time and rotated per-row.
+    chevron_geometry: RefCell<Option<ID2D1PathGeometry1>>,
     /// Animated rotation (degrees) of the chevron currently expanding/collapsing.
-    chevron_rotation: IUIAnimationVariable2,
+    chevron_rotation: IUIAnimationVariable,
     /// The path of the node whose chevron is mid-animation (others draw static).
     animating_path: Option<Vec<usize>>,
 }
@@ -414,7 +414,7 @@ fn on_create(window: HWND, state: State, roots: Vec<Node>) -> Result<Context> {
     let font_size = state.font_size();
     unsafe {
         let text_format = create_text_format(&state.qt, font_size)?;
-        let dpi = GetDpiForWindow(window);
+        let dpi = dpi_for_window(window);
         let render_target = state.qt.d2d_factory.CreateHwndRenderTarget(
             &D2D1_RENDER_TARGET_PROPERTIES {
                 dpiX: dpi as f32,
@@ -431,8 +431,9 @@ fn on_create(window: HWND, state: State, roots: Vec<Node>) -> Result<Context> {
         let animation_timer: IUIAnimationTimer =
             CoCreateInstance(&UIAnimationTimer, None, CLSCTX_INPROC_SERVER)?;
         let transition_library = state.qt.transition_library.clone();
-        let animation_manager: IUIAnimationManager2 =
-            CoCreateInstance(&UIAnimationManager2, None, CLSCTX_INPROC_SERVER)?;
+        let transition_factory = state.qt.transition_factory.clone();
+        let animation_manager: IUIAnimationManager =
+            CoCreateInstance(&UIAnimationManager, None, CLSCTX_INPROC_SERVER)?;
         let timer_update_handler = animation_manager.cast::<IUIAnimationTimerUpdateHandler>()?;
         animation_timer
             .SetTimerUpdateHandler(&timer_update_handler, UI_ANIMATION_IDLE_BEHAVIOR_DISABLE)?;
@@ -457,8 +458,9 @@ fn on_create(window: HWND, state: State, roots: Vec<Node>) -> Result<Context> {
             animation_manager,
             animation_timer,
             transition_library,
+            transition_factory,
             accent_height,
-            chevron_svg: RefCell::new(None),
+            chevron_geometry: RefCell::new(None),
             chevron_rotation,
             animating_path: None,
         })
@@ -491,13 +493,11 @@ fn animate_accent(context: &mut Context, target: f64, duration: f64) -> Result<(
         let transition = if duration <= 0.0 {
             context.transition_library.CreateInstantaneousTransition(target)?
         } else {
-            context.transition_library.CreateCubicBezierLinearTransition(
+            crate::anim::cubic_bezier_linear_transition(
+                &context.transition_factory,
                 duration,
                 target,
-                curve[0],
-                curve[1],
-                curve[2],
-                curve[3],
+                curve,
             )?
         };
         let seconds_now = context.animation_timer.GetTime()?;
@@ -521,13 +521,11 @@ fn animate_chevron(context: &mut Context, path: Vec<usize>, expanded: bool) -> R
         // Start from the opposite angle so the ease plays over the full sweep.
         let start = if expanded { 0.0 } else { 90.0 };
         context.chevron_rotation = context.animation_manager.CreateAnimationVariable(start)?;
-        let transition = context.transition_library.CreateCubicBezierLinearTransition(
+        let transition = crate::anim::cubic_bezier_linear_transition(
+            &context.transition_factory,
             duration,
             target,
-            curve[0],
-            curve[1],
-            curve[2],
-            curve[3],
+            curve,
         )?;
         let seconds_now = context.animation_timer.GetTime()?;
         context.animation_manager.ScheduleTransition(
@@ -691,25 +689,16 @@ fn paint(window: HWND, context: &Context) -> Result<()> {
             D2D1_ANTIALIAS_MODE_ALIASED,
         );
 
-        // Chevron SVG (lazily created + tinted once).
-        let device_context5 = context.render_target.cast::<ID2D1DeviceContext5>()?;
-        if context.chevron_svg.borrow().is_none() {
+        // Chevron geometry (lazily built once). The tint is applied at draw time
+        // via a solid brush using the constant neutral token.
+        if context.chevron_geometry.borrow().is_none() {
             let icon = Icon::chevron_right_12_regular();
-            let stream = SHCreateMemStream(Some(icon.svg.as_bytes()));
-            let doc = device_context5.CreateSvgDocument(
-                stream.as_ref(),
-                D2D_SIZE_F {
-                    width: icon.size as f32,
-                    height: icon.size as f32,
-                },
-            )?;
-            let paint =
-                doc.CreatePaint(D2D1_SVG_PAINT_TYPE_COLOR, Some(&tokens.color_neutral_foreground3), w!(""))?;
-            doc.GetRoot()?
-                .GetFirstChild()?
-                .SetAttributeValue(w!("fill"), &paint.cast::<ID2D1SvgAttribute>()?)?;
-            *context.chevron_svg.borrow_mut() = Some(doc);
+            let geometry = build_geometry(&state.qt.d2d_factory, &icon)?;
+            *context.chevron_geometry.borrow_mut() = Some(geometry);
         }
+        let chevron_brush = context
+            .render_target
+            .CreateSolidColorBrush(&tokens.color_neutral_foreground3, None)?;
 
         for (i, vr) in context.visible.iter().enumerate() {
             let top = content.top + i as f32 * slot - offset;
@@ -770,7 +759,7 @@ fn paint(window: HWND, context: &Context) -> Result<()> {
             // Chevron twisty (branches only) — points right (0°), rotates to point
             // down (90°) when expanded; animated on the toggling row.
             if vr.has_children {
-                if let Some(svg) = context.chevron_svg.borrow().as_ref() {
+                if let Some(geometry) = context.chevron_geometry.borrow().as_ref() {
                     let gx = context.glyph_x(vr.depth);
                     let gy = top + (rh - CHEVRON_GLYPH) / 2.0;
                     let is_animating = context.animating_path.as_ref() == Some(&vr.path);
@@ -781,9 +770,13 @@ fn paint(window: HWND, context: &Context) -> Result<()> {
                     } else {
                         0.0
                     };
-                    device_context5.SetTransform(&chevron_matrix(gx, gy, angle));
-                    device_context5.DrawSvgDocument(svg);
-                    device_context5.SetTransform(&Matrix3x2::identity());
+                    context
+                        .render_target
+                        .SetTransform(&chevron_matrix(gx, gy, angle));
+                    context
+                        .render_target
+                        .FillGeometry(geometry, &chevron_brush, None);
+                    context.render_target.SetTransform(&Matrix3x2::identity());
                 }
             }
 
@@ -1140,7 +1133,7 @@ extern "system" fn window_proc(
             let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
             let context = &mut *raw;
             _ = layout(window, context);
-            let new_dpi = GetDpiForWindow(window);
+            let new_dpi = dpi_for_window(window);
             context.render_target.SetDpi(new_dpi as f32, new_dpi as f32);
             update_metrics(context);
             _ = InvalidateRect(Some(window), None, false);

@@ -3,15 +3,13 @@ use std::sync::Once;
 
 use crate::QT;
 use crate::icon::Icon;
+use crate::icon::path::build_geometry;
 use crate::{MouseEvent, get_scaling_factor};
 use windows::Win32::Foundation::*;
-use windows::Win32::Graphics::Direct2D::Common::{
-    D2D_RECT_F, D2D_SIZE_F, D2D_SIZE_U, D2D1_COLOR_F,
-};
+use windows::Win32::Graphics::Direct2D::Common::{D2D_RECT_F, D2D_SIZE_U};
 use windows::Win32::Graphics::Direct2D::{
     D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_HWND_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_PROPERTIES,
-    D2D1_ROUNDED_RECT, D2D1_SVG_PAINT_TYPE_COLOR, ID2D1DeviceContext5, ID2D1HwndRenderTarget,
-    ID2D1StrokeStyle, ID2D1SvgAttribute, ID2D1SvgDocument,
+    D2D1_ROUNDED_RECT, ID2D1HwndRenderTarget, ID2D1PathGeometry1, ID2D1StrokeStyle,
 };
 use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_MEASURING_MODE_NATURAL,
@@ -24,19 +22,18 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
 use windows::Win32::UI::Animation::{
-    IUIAnimationManager2, IUIAnimationTimer, IUIAnimationTimerEventHandler_Impl,
-    IUIAnimationTransitionLibrary2, IUIAnimationVariable2, UIAnimationTimer,
+    IUIAnimationManager, IUIAnimationTimer, IUIAnimationTimerEventHandler_Impl,
+    IUIAnimationTransitionFactory, UIAnimationTimer,
 };
 use windows::Win32::UI::Animation::{
     IUIAnimationTimerEventHandler, IUIAnimationTimerUpdateHandler,
-    UI_ANIMATION_IDLE_BEHAVIOR_DISABLE, UIAnimationManager2,
+    UI_ANIMATION_IDLE_BEHAVIOR_DISABLE, UIAnimationManager,
 };
 use windows::Win32::UI::Controls::WM_MOUSELEAVE;
-use windows::Win32::UI::HiDpi::GetDpiForWindow;
+use crate::sys::dpi_for_window;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     SetFocus, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent,
 };
-use windows::Win32::UI::Shell::SHCreateMemStream;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::*;
 use windows_numerics::Matrix3x2;
@@ -171,16 +168,16 @@ impl State {
 
 struct Context {
     state: State,
-    icon_svg: Option<ID2D1SvgDocument>,
+    icon_geometry: Option<ID2D1PathGeometry1>,
     text_format: IDWriteTextFormat,
     render_target: ID2D1HwndRenderTarget,
     stroke_style: ID2D1StrokeStyle,
-    animation_manager: IUIAnimationManager2,
+    animation_manager: IUIAnimationManager,
     animation_timer: IUIAnimationTimer,
-    transition_library: IUIAnimationTransitionLibrary2,
-    background_color_variable: IUIAnimationVariable2,
-    border_color_variable: IUIAnimationVariable2,
-    text_color_variable: IUIAnimationVariable2,
+    transition_factory: IUIAnimationTransitionFactory,
+    background_color: crate::anim::ColorVariable,
+    border_color: crate::anim::ColorVariable,
+    text_color: crate::anim::ColorVariable,
     mouse_within: bool,
     mouse_clicking: bool,
 }
@@ -245,16 +242,6 @@ impl QT {
     }
 }
 
-fn set_svg_color(svg: &ID2D1SvgDocument, color: &D2D1_COLOR_F) -> Result<()> {
-    unsafe {
-        let svg_paint = svg.CreatePaint(D2D1_SVG_PAINT_TYPE_COLOR, Some(color), w!(""))?;
-        svg.GetRoot()?
-            .GetFirstChild()?
-            .SetAttributeValue(w!("fill"), &svg_paint.cast::<ID2D1SvgAttribute>()?)?;
-    }
-    Ok(())
-}
-
 fn on_create(window: HWND, state: State) -> Result<Context> {
     let tokens = &state.qt.theme.tokens;
 
@@ -283,7 +270,7 @@ fn on_create(window: HWND, state: State) -> Result<Context> {
         text_format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
 
         let factory = &state.qt.d2d_factory;
-        let dpi = GetDpiForWindow(window);
+        let dpi = dpi_for_window(window);
         let render_target = factory.CreateHwndRenderTarget(
             &D2D1_RENDER_TARGET_PROPERTIES {
                 dpiX: dpi as f32,
@@ -304,76 +291,48 @@ fn on_create(window: HWND, state: State) -> Result<Context> {
             },
         )?;
         let stroke_style = state.qt.stroke_style.clone();
-        let svg_document = match state.icon {
+        // The icon is a filled geometry (Direct2D 1.0); its tint is applied at draw
+        // time via a brush, so we only build the shape here.
+        let icon_geometry = match state.icon {
             None => None,
-            Some(icon) => match SHCreateMemStream(Some(icon.svg.as_bytes())) {
-                None => None,
-                Some(svg_stream) => {
-                    let device_context5 = render_target.cast::<ID2D1DeviceContext5>()?;
-                    let svg = device_context5.CreateSvgDocument(
-                        &svg_stream,
-                        D2D_SIZE_F {
-                            width: icon.size as f32,
-                            height: icon.size as f32,
-                        },
-                    )?;
-                    let color = match state.appearance {
-                        Appearance::Primary => &tokens.color_neutral_foreground_on_brand,
-                        _ => &tokens.color_neutral_foreground1,
-                    };
-                    _ = set_svg_color(&svg, &color);
-                    Some(svg)
-                }
-            },
+            Some(icon) => build_geometry(&state.qt.d2d_factory, &icon).ok(),
         };
 
         let animation_timer: IUIAnimationTimer =
             CoCreateInstance(&UIAnimationTimer, None, CLSCTX_INPROC_SERVER)?;
-        let transition_library = state.qt.transition_library.clone();
-        let animation_manager: IUIAnimationManager2 =
-            CoCreateInstance(&UIAnimationManager2, None, CLSCTX_INPROC_SERVER)?;
+        let transition_factory = state.qt.transition_factory.clone();
+        let animation_manager: IUIAnimationManager =
+            CoCreateInstance(&UIAnimationManager, None, CLSCTX_INPROC_SERVER)?;
         let timer_update_handler = animation_manager.cast::<IUIAnimationTimerUpdateHandler>()?;
         animation_timer
             .SetTimerUpdateHandler(&timer_update_handler, UI_ANIMATION_IDLE_BEHAVIOR_DISABLE)?;
         let timer_event_handler: IUIAnimationTimerEventHandler =
             AnimationTimerEventHandler { window }.into();
         animation_timer.SetTimerEventHandler(&timer_event_handler)?;
-        let background_color = match state.appearance {
+        let background_start = match state.appearance {
             Appearance::Primary => &tokens.color_brand_background,
             _ => &tokens.color_neutral_background1,
         };
-        let background_color_variable = animation_manager.CreateAnimationVectorVariable(&[
-            background_color.r as f64,
-            background_color.g as f64,
-            background_color.b as f64,
-        ])?;
-        let border_color = &tokens.color_neutral_stroke1;
-        let border_color_variable = animation_manager.CreateAnimationVectorVariable(&[
-            border_color.r as f64,
-            border_color.g as f64,
-            border_color.b as f64,
-        ])?;
-        let text_color = match state.appearance {
+        let background_color = crate::anim::ColorVariable::new(&animation_manager, background_start)?;
+        let border_start = &tokens.color_neutral_stroke1;
+        let border_color = crate::anim::ColorVariable::new(&animation_manager, border_start)?;
+        let text_start = match state.appearance {
             Appearance::Primary => &tokens.color_neutral_foreground_on_brand,
             _ => &tokens.color_neutral_foreground1,
         };
-        let text_color_variable = animation_manager.CreateAnimationVectorVariable(&[
-            text_color.r as f64,
-            text_color.g as f64,
-            text_color.b as f64,
-        ])?;
+        let text_color = crate::anim::ColorVariable::new(&animation_manager, text_start)?;
         let context = Context {
             state,
             text_format,
             render_target,
-            icon_svg: svg_document,
+            icon_geometry,
             stroke_style,
             animation_manager,
             animation_timer,
-            transition_library,
-            background_color_variable,
-            border_color_variable,
-            text_color_variable,
+            transition_factory,
+            background_color,
+            border_color,
+            text_color,
             mouse_within: false,
             mouse_clicking: false,
         };
@@ -501,16 +460,7 @@ fn paint(window: HWND, context: &Context) -> Result<()> {
             radiusX: corner_radius,
             radiusY: corner_radius,
         };
-        let mut vector_variable = [0f64; 3];
-        context
-            .background_color_variable
-            .GetVectorValue(&mut vector_variable)?;
-        let background_color = D2D1_COLOR_F {
-            r: vector_variable[0] as f32,
-            g: vector_variable[1] as f32,
-            b: vector_variable[2] as f32,
-            a: 1.0,
-        };
+        let background_color = context.background_color.get()?;
         let background_brush = context
             .render_target
             .CreateSolidColorBrush(&background_color, None)?;
@@ -520,15 +470,7 @@ fn paint(window: HWND, context: &Context) -> Result<()> {
 
         if let Appearance::Primary = state.appearance {
         } else {
-            context
-                .border_color_variable
-                .GetVectorValue(&mut vector_variable)?;
-            let border_color = D2D1_COLOR_F {
-                r: vector_variable[0] as f32,
-                g: vector_variable[1] as f32,
-                b: vector_variable[2] as f32,
-                a: 1.0,
-            };
+            let border_color = context.border_color.get()?;
             let border_brush = context
                 .render_target
                 .CreateSolidColorBrush(&border_color, None)?;
@@ -550,15 +492,7 @@ fn paint(window: HWND, context: &Context) -> Result<()> {
             );
         }
 
-        context
-            .text_color_variable
-            .GetVectorValue(&mut vector_variable)?;
-        let text_color = D2D1_COLOR_F {
-            r: vector_variable[0] as f32,
-            g: vector_variable[1] as f32,
-            b: vector_variable[2] as f32,
-            a: 1.0,
-        };
+        let text_color = context.text_color.get()?;
         let text_brush = context
             .render_target
             .CreateSolidColorBrush(&text_color, None)?;
@@ -603,16 +537,25 @@ fn paint(window: HWND, context: &Context) -> Result<()> {
         );
 
         if state.has_icon() {
-            if let Some(svg) = &context.icon_svg {
-                let device_context5 = context.render_target.cast::<ID2D1DeviceContext5>()?;
-                let viewport_size = svg.GetViewportSize();
+            if let (Some(geometry), Some(icon)) = (&context.icon_geometry, state.icon) {
+                let native = icon.size as f32;
                 let desired_size = state.get_desired_icon_size();
+                let scale = desired_size / native;
+                // Same appearance-based tint the SVG path baked in — the icon does not
+                // animate with the text color, so this constant reproduces it exactly.
+                let icon_color = match state.appearance {
+                    Appearance::Primary => &tokens.color_neutral_foreground_on_brand,
+                    _ => &tokens.color_neutral_foreground1,
+                };
+                let icon_brush = context
+                    .render_target
+                    .CreateSolidColorBrush(icon_color, None)?;
                 let transform = match state.icon_position.unwrap_or(IconPosition::Before) {
                     IconPosition::Before => Matrix3x2 {
-                        M11: desired_size / viewport_size.width,
+                        M11: scale,
                         M12: 0.0,
                         M21: 0.0,
-                        M22: desired_size / viewport_size.height,
+                        M22: scale,
                         // Icon-only → centre it in the square; otherwise flush-left
                         // with the text following.
                         M31: if state.is_icon_only() {
@@ -623,17 +566,19 @@ fn paint(window: HWND, context: &Context) -> Result<()> {
                         M32: top / 2f32 + bottom / 2f32 - desired_size / 2f32,
                     },
                     IconPosition::After => Matrix3x2 {
-                        M11: desired_size / viewport_size.width,
+                        M11: scale,
                         M12: 0.0,
                         M21: 0.0,
-                        M22: desired_size / viewport_size.height,
+                        M22: scale,
                         M31: right - desired_size,
                         M32: top / 2f32 + bottom / 2f32 - desired_size / 2f32,
                     },
                 };
-                device_context5.SetTransform(&transform);
-                device_context5.DrawSvgDocument(svg);
-                device_context5.SetTransform(&Matrix3x2::identity());
+                context.render_target.SetTransform(&transform);
+                context
+                    .render_target
+                    .FillGeometry(geometry, &icon_brush, None);
+                context.render_target.SetTransform(&Matrix3x2::identity());
             }
         }
     }
@@ -676,23 +621,12 @@ fn change_color(context: &Context) -> Result<()> {
                 _ => &tokens.color_neutral_background1,
             }
         };
-        let background_color_transition = context
-            .transition_library
-            .CreateCubicBezierLinearVectorTransition(
-                tokens.duration_faster,
-                &[
-                    background_color.r as f64,
-                    background_color.g as f64,
-                    background_color.b as f64,
-                ],
-                tokens.curve_easy_ease[0],
-                tokens.curve_easy_ease[1],
-                tokens.curve_easy_ease[2],
-                tokens.curve_easy_ease[3],
-            )?;
-        storyboard.AddTransition(
-            &context.background_color_variable,
-            &background_color_transition,
+        context.background_color.add_color_transition(
+            &storyboard,
+            &context.transition_factory,
+            tokens.duration_faster,
+            background_color,
+            tokens.curve_easy_ease,
         )?;
 
         if let Appearance::Primary = appearance {
@@ -704,21 +638,13 @@ fn change_color(context: &Context) -> Result<()> {
             } else {
                 &tokens.color_neutral_stroke1
             };
-            let border_color_transition = context
-                .transition_library
-                .CreateCubicBezierLinearVectorTransition(
-                    tokens.duration_faster,
-                    &[
-                        border_color.r as f64,
-                        border_color.g as f64,
-                        border_color.b as f64,
-                    ],
-                    tokens.curve_easy_ease[0],
-                    tokens.curve_easy_ease[1],
-                    tokens.curve_easy_ease[2],
-                    tokens.curve_easy_ease[3],
-                )?;
-            storyboard.AddTransition(&context.border_color_variable, &border_color_transition)?;
+            context.border_color.add_color_transition(
+                &storyboard,
+                &context.transition_factory,
+                tokens.duration_faster,
+                border_color,
+                tokens.curve_easy_ease,
+            )?;
         }
 
         let text_color = match appearance {
@@ -733,21 +659,13 @@ fn change_color(context: &Context) -> Result<()> {
                 }
             }
         };
-        let text_color_transition = context
-            .transition_library
-            .CreateCubicBezierLinearVectorTransition(
-                tokens.duration_faster,
-                &[
-                    text_color.r as f64,
-                    text_color.g as f64,
-                    text_color.b as f64,
-                ],
-                tokens.curve_easy_ease[0],
-                tokens.curve_easy_ease[1],
-                tokens.curve_easy_ease[2],
-                tokens.curve_easy_ease[3],
-            )?;
-        storyboard.AddTransition(&context.text_color_variable, &text_color_transition)?;
+        context.text_color.add_color_transition(
+            &storyboard,
+            &context.transition_factory,
+            tokens.duration_faster,
+            text_color,
+            tokens.curve_easy_ease,
+        )?;
 
         let seconds_now = context.animation_timer.GetTime()?;
         storyboard.Schedule(seconds_now, None)
@@ -824,7 +742,7 @@ extern "system" fn window_proc(
             let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
             let context = &*raw;
             _ = layout(window, &context);
-            let new_dpi = GetDpiForWindow(window);
+            let new_dpi = dpi_for_window(window);
             context.render_target.SetDpi(new_dpi as f32, new_dpi as f32);
             _ = InvalidateRect(Some(window), None, false);
             LRESULT(0)

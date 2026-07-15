@@ -11,16 +11,16 @@ use std::sync::Once;
 use crate::component::button;
 use crate::component::menu::{self, MenuInfo};
 use crate::icon::Icon;
+use crate::icon::path::build_geometry;
 use crate::{MouseEvent, QT, get_scaling_factor};
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Direct2D::Common::{
-    D2D_RECT_F, D2D_SIZE_F, D2D_SIZE_U, D2D1_COLOR_F,
+    D2D_RECT_F, D2D_SIZE_U, D2D1_COLOR_F,
 };
 use windows::Win32::Graphics::Direct2D::{
     D2D1_ANTIALIAS_MODE_ALIASED, D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_HWND_RENDER_TARGET_PROPERTIES,
-    D2D1_RENDER_TARGET_PROPERTIES, D2D1_ROUNDED_RECT, D2D1_SVG_PAINT_TYPE_COLOR,
-    ID2D1DeviceContext5, ID2D1HwndRenderTarget, ID2D1StrokeStyle, ID2D1SvgAttribute,
-    ID2D1SvgDocument,
+    D2D1_RENDER_TARGET_PROPERTIES, D2D1_ROUNDED_RECT,
+    ID2D1HwndRenderTarget, ID2D1PathGeometry1, ID2D1StrokeStyle,
 };
 use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_MEASURING_MODE_NATURAL,
@@ -32,18 +32,17 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
 use windows::Win32::UI::Animation::{
-    IUIAnimationManager2, IUIAnimationTimer, IUIAnimationTimerEventHandler,
+    IUIAnimationManager, IUIAnimationTimer, IUIAnimationTimerEventHandler,
     IUIAnimationTimerEventHandler_Impl, IUIAnimationTimerUpdateHandler,
-    IUIAnimationTransitionLibrary2, IUIAnimationVariable2, UI_ANIMATION_IDLE_BEHAVIOR_DISABLE,
-    UIAnimationManager2, UIAnimationTimer,
+    IUIAnimationTransitionFactory, UI_ANIMATION_IDLE_BEHAVIOR_DISABLE,
+    UIAnimationManager, UIAnimationTimer,
 };
 use windows::Win32::UI::Controls::WM_MOUSELEAVE;
-use windows::Win32::UI::HiDpi::GetDpiForWindow;
+use crate::sys::dpi_for_window;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     SetFocus, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent, VIRTUAL_KEY, VK_DOWN, VK_MENU,
     VK_RETURN, VK_SPACE,
 };
-use windows::Win32::UI::Shell::SHCreateMemStream;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::*;
 use windows_numerics::{Matrix3x2, Vector2};
@@ -155,14 +154,14 @@ struct Context {
     text_format: IDWriteTextFormat,
     render_target: ID2D1HwndRenderTarget,
     stroke_style: ID2D1StrokeStyle,
-    chevron_svg: Option<ID2D1SvgDocument>,
-    animation_manager: IUIAnimationManager2,
+    chevron_geometry: Option<ID2D1PathGeometry1>,
+    animation_manager: IUIAnimationManager,
     animation_timer: IUIAnimationTimer,
-    transition_library: IUIAnimationTransitionLibrary2,
-    action_bg: IUIAnimationVariable2,
-    menu_bg: IUIAnimationVariable2,
-    border_color: IUIAnimationVariable2,
-    text_color: IUIAnimationVariable2,
+    transition_factory: IUIAnimationTransitionFactory,
+    action_bg: crate::anim::ColorVariable,
+    menu_bg: crate::anim::ColorVariable,
+    border_color: crate::anim::ColorVariable,
+    text_color: crate::anim::ColorVariable,
     hovered_zone: Zone,
     pressed_zone: Zone,
 }
@@ -219,16 +218,6 @@ impl QT {
     }
 }
 
-fn set_svg_color(svg: &ID2D1SvgDocument, color: &D2D1_COLOR_F) -> Result<()> {
-    unsafe {
-        let paint = svg.CreatePaint(D2D1_SVG_PAINT_TYPE_COLOR, Some(color), w!(""))?;
-        svg.GetRoot()?
-            .GetFirstChild()?
-            .SetAttributeValue(w!("fill"), &paint.cast::<ID2D1SvgAttribute>()?)?;
-    }
-    Ok(())
-}
-
 fn glyph_color(state: &State) -> D2D1_COLOR_F {
     let tokens = &state.qt.theme.tokens;
     match state.appearance {
@@ -243,10 +232,6 @@ fn base_bg(state: &State) -> D2D1_COLOR_F {
         button::Appearance::Primary => tokens.color_brand_background,
         _ => tokens.color_neutral_background1,
     }
-}
-
-fn vec3(c: &D2D1_COLOR_F) -> [f64; 3] {
-    [c.r as f64, c.g as f64, c.b as f64]
 }
 
 fn on_create(window: HWND, state: State) -> Result<Context> {
@@ -264,7 +249,7 @@ fn on_create(window: HWND, state: State) -> Result<Context> {
         text_format.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER)?;
         text_format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
 
-        let dpi = GetDpiForWindow(window);
+        let dpi = dpi_for_window(window);
         let render_target = state.qt.d2d_factory.CreateHwndRenderTarget(
             &D2D1_RENDER_TARGET_PROPERTIES {
                 dpiX: dpi as f32,
@@ -279,26 +264,16 @@ fn on_create(window: HWND, state: State) -> Result<Context> {
         )?;
         let stroke_style = state.qt.stroke_style.clone();
 
-        // Chevron SVG (20px down chevron, scaled to CHEVRON_SIZE at paint).
+        // Chevron geometry (20px down chevron, scaled to CHEVRON_SIZE at paint).
+        // Filled geometry (Direct2D 1.0); tint is applied at draw time via a brush.
         let icon = Icon::chevron_down_20_regular();
-        let chevron_svg = match SHCreateMemStream(Some(icon.svg.as_bytes())) {
-            None => None,
-            Some(stream) => {
-                let dc5 = render_target.cast::<ID2D1DeviceContext5>()?;
-                let svg = dc5.CreateSvgDocument(
-                    &stream,
-                    D2D_SIZE_F { width: icon.size as f32, height: icon.size as f32 },
-                )?;
-                _ = set_svg_color(&svg, &glyph_color(&state));
-                Some(svg)
-            }
-        };
+        let chevron_geometry = build_geometry(&state.qt.d2d_factory, &icon).ok();
 
         let animation_timer: IUIAnimationTimer =
             CoCreateInstance(&UIAnimationTimer, None, CLSCTX_INPROC_SERVER)?;
-        let transition_library = state.qt.transition_library.clone();
-        let animation_manager: IUIAnimationManager2 =
-            CoCreateInstance(&UIAnimationManager2, None, CLSCTX_INPROC_SERVER)?;
+        let transition_factory = state.qt.transition_factory.clone();
+        let animation_manager: IUIAnimationManager =
+            CoCreateInstance(&UIAnimationManager, None, CLSCTX_INPROC_SERVER)?;
         let timer_update_handler = animation_manager.cast::<IUIAnimationTimerUpdateHandler>()?;
         animation_timer
             .SetTimerUpdateHandler(&timer_update_handler, UI_ANIMATION_IDLE_BEHAVIOR_DISABLE)?;
@@ -307,21 +282,22 @@ fn on_create(window: HWND, state: State) -> Result<Context> {
         animation_timer.SetTimerEventHandler(&timer_event_handler)?;
 
         let bg = base_bg(&state);
-        let action_bg = animation_manager.CreateAnimationVectorVariable(&vec3(&bg))?;
-        let menu_bg = animation_manager.CreateAnimationVectorVariable(&vec3(&bg))?;
+        let action_bg = crate::anim::ColorVariable::new(&animation_manager, &bg)?;
+        let menu_bg = crate::anim::ColorVariable::new(&animation_manager, &bg)?;
         let border_color =
-            animation_manager.CreateAnimationVectorVariable(&vec3(&tokens.color_neutral_stroke1))?;
-        let text_color = animation_manager.CreateAnimationVectorVariable(&vec3(&glyph_color(&state)))?;
+            crate::anim::ColorVariable::new(&animation_manager, &tokens.color_neutral_stroke1)?;
+        let text_color =
+            crate::anim::ColorVariable::new(&animation_manager, &glyph_color(&state))?;
 
         Ok(Context {
             state,
             text_format,
             render_target,
             stroke_style,
-            chevron_svg,
+            chevron_geometry,
             animation_manager,
             animation_timer,
-            transition_library,
+            transition_factory,
             action_bg,
             menu_bg,
             border_color,
@@ -420,14 +396,6 @@ fn zone_at(window: HWND, context: &Context, x: f32) -> Zone {
     }
 }
 
-fn read_vec(v: &IUIAnimationVariable2) -> D2D1_COLOR_F {
-    let mut c = [0f64; 3];
-    unsafe {
-        _ = v.GetVectorValue(&mut c);
-    }
-    D2D1_COLOR_F { r: c[0] as f32, g: c[1] as f32, b: c[2] as f32, a: 1.0 }
-}
-
 fn paint(window: HWND, context: &Context) -> Result<()> {
     let state = &context.state;
     let tokens = &state.qt.theme.tokens;
@@ -449,8 +417,8 @@ fn paint(window: HWND, context: &Context) -> Result<()> {
         // Two independently-shaded zones: clip to each half, fill the whole pill in
         // that zone's colour (the axis-aligned clip cuts it at the divider; the
         // rounded corners stay antialiased).
-        let action_color = read_vec(&context.action_bg);
-        let menu_color = read_vec(&context.menu_bg);
+        let action_color = context.action_bg.get()?;
+        let menu_color = context.menu_bg.get()?;
         let action_brush = context.render_target.CreateSolidColorBrush(&action_color, None)?;
         context.render_target.PushAxisAlignedClip(
             &D2D_RECT_F { left: 0.0, top: 0.0, right: split_x, bottom: height },
@@ -482,7 +450,7 @@ fn paint(window: HWND, context: &Context) -> Result<()> {
 
         // Border (Secondary only, animated on the whole pill).
         if let button::Appearance::Secondary = state.appearance {
-            let bc = read_vec(&context.border_color);
+            let bc = context.border_color.get()?;
             let border_brush = context.render_target.CreateSolidColorBrush(&bc, None)?;
             let inset = D2D1_ROUNDED_RECT {
                 rect: D2D_RECT_F {
@@ -503,7 +471,7 @@ fn paint(window: HWND, context: &Context) -> Result<()> {
         }
 
         // Text in the action zone [0, split_x].
-        let tc = read_vec(&context.text_color);
+        let tc = context.text_color.get()?;
         let text_brush = context.render_target.CreateSolidColorBrush(&tc, None)?;
         let pad = state.horizontal_padding();
         context.render_target.DrawText(
@@ -516,13 +484,16 @@ fn paint(window: HWND, context: &Context) -> Result<()> {
         );
 
         // Chevron centered in the menu zone — 20px glyph scaled to CHEVRON_SIZE.
-        if let Some(svg) = &context.chevron_svg {
-            let dc5 = context.render_target.cast::<ID2D1DeviceContext5>()?;
-            let vp = svg.GetViewportSize();
-            let s = CHEVRON_SIZE / vp.width;
+        // The chevron does not animate with the text colour: it keeps the same
+        // appearance-based constant (`glyph_color`) the SVG baked in, recomputed here.
+        if let Some(geometry) = &context.chevron_geometry {
+            let s = CHEVRON_SIZE / 20.0;
             let gx = split_x + (state.menu_zone_width() - CHEVRON_SIZE) / 2.0;
             let gy = height / 2.0 - CHEVRON_SIZE / 2.0;
-            dc5.SetTransform(&Matrix3x2 {
+            let chevron_brush = context
+                .render_target
+                .CreateSolidColorBrush(&glyph_color(state), None)?;
+            context.render_target.SetTransform(&Matrix3x2 {
                 M11: s,
                 M12: 0.0,
                 M21: 0.0,
@@ -530,8 +501,10 @@ fn paint(window: HWND, context: &Context) -> Result<()> {
                 M31: gx,
                 M32: gy,
             });
-            dc5.DrawSvgDocument(svg);
-            dc5.SetTransform(&Matrix3x2::identity());
+            context
+                .render_target
+                .FillGeometry(geometry, &chevron_brush, None);
+            context.render_target.SetTransform(&Matrix3x2::identity());
         }
     }
     Ok(())
@@ -584,20 +557,11 @@ fn change_color(context: &Context) -> Result<()> {
     let dur = tokens.duration_faster;
     unsafe {
         let sb = context.animation_manager.CreateStoryboard()?;
-        let mk = |target: &D2D1_COLOR_F| -> Result<_> {
-            context.transition_library.CreateCubicBezierLinearVectorTransition(
-                dur,
-                &vec3(target),
-                ease[0],
-                ease[1],
-                ease[2],
-                ease[3],
-            )
-        };
+        let factory = &context.transition_factory;
         let a = zone_bg(context, Zone::Action);
         let m = zone_bg(context, Zone::Menu);
-        sb.AddTransition(&context.action_bg, &mk(&a)?)?;
-        sb.AddTransition(&context.menu_bg, &mk(&m)?)?;
+        context.action_bg.add_color_transition(&sb, factory, dur, &a, ease)?;
+        context.menu_bg.add_color_transition(&sb, factory, dur, &m, ease)?;
 
         // Border + text respond to the whole pill (either zone active).
         let any_pressed = context.pressed_zone != Zone::None;
@@ -610,7 +574,7 @@ fn change_color(context: &Context) -> Result<()> {
             } else {
                 &tokens.color_neutral_stroke1
             };
-            sb.AddTransition(&context.border_color, &mk(border)?)?;
+            context.border_color.add_color_transition(&sb, factory, dur, border, ease)?;
         }
         let text = match context.state.appearance {
             button::Appearance::Primary => &tokens.color_neutral_foreground_on_brand,
@@ -624,7 +588,7 @@ fn change_color(context: &Context) -> Result<()> {
                 }
             }
         };
-        sb.AddTransition(&context.text_color, &mk(text)?)?;
+        context.text_color.add_color_transition(&sb, factory, dur, text, ease)?;
 
         let now = context.animation_timer.GetTime()?;
         sb.Schedule(now, None)
@@ -704,7 +668,7 @@ extern "system" fn window_proc(
             let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
             let context = &*raw;
             _ = layout(window, context);
-            let new_dpi = GetDpiForWindow(window);
+            let new_dpi = dpi_for_window(window);
             context.render_target.SetDpi(new_dpi as f32, new_dpi as f32);
             _ = InvalidateRect(Some(window), None, false);
             LRESULT(0)

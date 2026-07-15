@@ -15,13 +15,13 @@ use windows::Win32::Graphics::DirectWrite::{
 use windows::Win32::Graphics::Gdi::{BeginPaint, EndPaint, InvalidateRect, PAINTSTRUCT};
 use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
 use windows::Win32::UI::Animation::{
-    IUIAnimationManager2, IUIAnimationTimer, IUIAnimationTimerEventHandler,
+    IUIAnimationManager, IUIAnimationTimer, IUIAnimationTimerEventHandler,
     IUIAnimationTimerEventHandler_Impl, IUIAnimationTimerUpdateHandler,
-    IUIAnimationTransitionLibrary2, IUIAnimationVariable2, UI_ANIMATION_IDLE_BEHAVIOR_DISABLE,
-    UIAnimationManager2, UIAnimationTimer,
+    IUIAnimationTransitionFactory, IUIAnimationVariable, UI_ANIMATION_IDLE_BEHAVIOR_DISABLE,
+    UIAnimationManager, UIAnimationTimer,
 };
 use windows::Win32::UI::Controls::WM_MOUSELEAVE;
-use windows::Win32::UI::HiDpi::GetDpiForWindow;
+use crate::sys::dpi_for_window;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     SetFocus, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent,
 };
@@ -111,12 +111,12 @@ struct Context {
     state: State,
     text_format: IDWriteTextFormat,
     render_target: ID2D1HwndRenderTarget,
-    animation_manager: IUIAnimationManager2,
+    animation_manager: IUIAnimationManager,
     animation_timer: IUIAnimationTimer,
-    transition_library: IUIAnimationTransitionLibrary2,
+    transition_factory: IUIAnimationTransitionFactory,
     /// Eased thumb position in [0,1]: 0 = off (left), 1 = on (right). Also drives
     /// the track/thumb colour cross-fade in paint.
-    thumb_position: IUIAnimationVariable2,
+    thumb_position: IUIAnimationVariable,
     checked: bool,
     hovered: bool,
     pressed: bool,
@@ -217,7 +217,7 @@ fn on_create(window: HWND, state: State) -> Result<Context> {
         )?;
         text_format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
 
-        let dpi = GetDpiForWindow(window);
+        let dpi = dpi_for_window(window);
         let render_target = state.qt.d2d_factory.CreateHwndRenderTarget(
             &D2D1_RENDER_TARGET_PROPERTIES {
                 dpiX: dpi as f32,
@@ -238,9 +238,9 @@ fn on_create(window: HWND, state: State) -> Result<Context> {
         // Same wiring as button.rs.
         let animation_timer: IUIAnimationTimer =
             CoCreateInstance(&UIAnimationTimer, None, CLSCTX_INPROC_SERVER)?;
-        let transition_library = state.qt.transition_library.clone();
-        let animation_manager: IUIAnimationManager2 =
-            CoCreateInstance(&UIAnimationManager2, None, CLSCTX_INPROC_SERVER)?;
+        let transition_factory = state.qt.transition_factory.clone();
+        let animation_manager: IUIAnimationManager =
+            CoCreateInstance(&UIAnimationManager, None, CLSCTX_INPROC_SERVER)?;
         let timer_update_handler = animation_manager.cast::<IUIAnimationTimerUpdateHandler>()?;
         animation_timer
             .SetTimerUpdateHandler(&timer_update_handler, UI_ANIMATION_IDLE_BEHAVIOR_DISABLE)?;
@@ -256,7 +256,7 @@ fn on_create(window: HWND, state: State) -> Result<Context> {
             render_target,
             animation_manager,
             animation_timer,
-            transition_library,
+            transition_factory,
             thumb_position,
             checked,
             hovered: false,
@@ -475,13 +475,11 @@ fn animate_to(context: &Context, target: f64) -> Result<()> {
     let tokens = &context.state.qt.theme.tokens;
     unsafe {
         let storyboard = context.animation_manager.CreateStoryboard()?;
-        let transition = context.transition_library.CreateCubicBezierLinearTransition(
+        let transition = crate::anim::cubic_bezier_linear_transition(
+            &context.transition_factory,
             tokens.duration_normal,
             target,
-            tokens.curve_easy_ease[0],
-            tokens.curve_easy_ease[1],
-            tokens.curve_easy_ease[2],
-            tokens.curve_easy_ease[3],
+            tokens.curve_easy_ease,
         )?;
         storyboard.AddTransition(&context.thumb_position, &transition)?;
         let seconds_now = context.animation_timer.GetTime()?;
@@ -578,7 +576,7 @@ extern "system" fn window_proc(
             let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
             let context = &*raw;
             _ = layout(window, context);
-            let new_dpi = GetDpiForWindow(window);
+            let new_dpi = dpi_for_window(window);
             context.render_target.SetDpi(new_dpi as f32, new_dpi as f32);
             _ = InvalidateRect(Some(window), None, false);
             LRESULT(0)

@@ -16,8 +16,9 @@ helper (a WinUI 3-style scrollbar) that self-painting controls embed.
 
 ## Platform
 
-Windows only. The `windows` crate that Quel'Thalas depends on does not build on
-other targets.
+Windows only. Runs on **Windows 7 SP1 and later**; a standard stable-Rust build
+targets Windows 10+. For Windows 7, see the workspace
+[README](https://github.com/wuweiran/quelthalas#windows-7).
 
 ## Usage
 

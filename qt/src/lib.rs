@@ -12,8 +12,10 @@ use windows::Win32::Graphics::DirectWrite::{
 };
 use windows::Win32::Graphics::Imaging::{CLSID_WICImagingFactory, IWICImagingFactory};
 use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
-use windows::Win32::UI::Animation::{IUIAnimationTransitionLibrary2, UIAnimationTransitionLibrary2};
-use windows::Win32::UI::HiDpi::GetDpiForWindow;
+use windows::Win32::UI::Animation::{
+    IUIAnimationTransitionFactory, IUIAnimationTransitionLibrary, UIAnimationTransitionFactory,
+    UIAnimationTransitionLibrary,
+};
 use windows::Win32::UI::WindowsAndMessaging::USER_DEFAULT_SCREEN_DPI;
 use windows::core::{Interface, Result};
 
@@ -38,7 +40,8 @@ pub struct QT {
     pub(crate) d2d_factory: ID2D1Factory1,
     pub(crate) dwrite_factory: IDWriteFactory,
     pub(crate) wic_factory: IWICImagingFactory,
-    pub(crate) transition_library: IUIAnimationTransitionLibrary2,
+    pub(crate) transition_library: IUIAnimationTransitionLibrary,
+    pub(crate) transition_factory: IUIAnimationTransitionFactory,
     pub(crate) stroke_style: ID2D1StrokeStyle,
 }
 
@@ -52,6 +55,8 @@ impl QT {
     }
 
     pub fn new_with(theme: Theme) -> Result<Self> {
+        // Win7: `ID2D1Factory1` (Direct2D 1.1) needs the Platform Update (KB2670838);
+        // the UIAnimation* classes are the v1 coclasses (v2 is Win8+).
         let d2d_factory = unsafe {
             D2D1CreateFactory::<ID2D1Factory1>(
                 D2D1_FACTORY_TYPE_SINGLE_THREADED,
@@ -64,7 +69,10 @@ impl QT {
             CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER)?
         };
         let transition_library = unsafe {
-            CoCreateInstance(&UIAnimationTransitionLibrary2, None, CLSCTX_INPROC_SERVER)?
+            CoCreateInstance(&UIAnimationTransitionLibrary, None, CLSCTX_INPROC_SERVER)?
+        };
+        let transition_factory = unsafe {
+            CoCreateInstance(&UIAnimationTransitionFactory, None, CLSCTX_INPROC_SERVER)?
         };
         let stroke_style = unsafe {
             d2d_factory
@@ -77,13 +85,14 @@ impl QT {
             dwrite_factory,
             wic_factory,
             transition_library,
+            transition_factory,
             stroke_style,
         })
     }
 }
 
 pub(crate) fn get_scaling_factor(window: HWND) -> f32 {
-    unsafe { GetDpiForWindow(window) as f32 / USER_DEFAULT_SCREEN_DPI as f32 }
+    sys::dpi_for_window(window) as f32 / USER_DEFAULT_SCREEN_DPI as f32
 }
 
 /// Strip the Alt-mnemonic from a Win32 label. We draw our own menus, so the `&`
@@ -161,4 +170,6 @@ pub(crate) fn system_string(id: u32, fallback: &str) -> Vec<u16> {
 pub mod component;
 pub mod icon;
 pub mod layout;
+mod anim;
+mod sys;
 mod theme;

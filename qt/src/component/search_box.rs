@@ -6,7 +6,7 @@ use windows::Win32::Foundation::{
     FALSE, HANDLE, HGLOBAL, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, TRUE, WPARAM,
 };
 use windows::Win32::Globalization::{
-    SCRIPT_ANALYSIS, SCRIPT_LOGATTR, SCRIPT_UNDEFINED, ScriptBreak, lstrcpynW, lstrlenW, u_memcpy,
+    SCRIPT_ANALYSIS, SCRIPT_LOGATTR, SCRIPT_UNDEFINED, ScriptBreak, lstrcpynW, lstrlenW,
 };
 use windows::Win32::Graphics::Direct2D::Common::{
     D2D_RECT_F, D2D_SIZE_F, D2D_SIZE_U, D2D1_COLOR_F, D2D1_FIGURE_BEGIN_HOLLOW, D2D1_FIGURE_END_OPEN,
@@ -14,9 +14,8 @@ use windows::Win32::Graphics::Direct2D::Common::{
 use windows::Win32::Graphics::Direct2D::{
     D2D1_ANTIALIAS_MODE_ALIASED, D2D1_ARC_SEGMENT, D2D1_ARC_SIZE_SMALL, D2D1_DRAW_TEXT_OPTIONS_NONE,
     D2D1_HWND_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_PROPERTIES, D2D1_ROUNDED_RECT,
-    D2D1_SVG_PAINT_TYPE_COLOR, D2D1_SWEEP_DIRECTION_COUNTER_CLOCKWISE, ID2D1DeviceContext5,
-    ID2D1Factory1, ID2D1HwndRenderTarget, ID2D1PathGeometry1, ID2D1SolidColorBrush,
-    ID2D1SvgAttribute, ID2D1SvgDocument,
+    D2D1_SWEEP_DIRECTION_COUNTER_CLOCKWISE, ID2D1Factory1, ID2D1HwndRenderTarget,
+    ID2D1PathGeometry1, ID2D1SolidColorBrush,
 };
 use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_HIT_TEST_METRICS,
@@ -40,10 +39,10 @@ use windows::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, Glo
 use windows::Win32::System::Ole::CF_UNICODETEXT;
 use windows::Win32::System::SystemServices::MK_SHIFT;
 use windows::Win32::UI::Animation::{
-    IUIAnimationManager2, IUIAnimationTimer, IUIAnimationTimerEventHandler,
+    IUIAnimationManager, IUIAnimationTimer, IUIAnimationTimerEventHandler,
     IUIAnimationTimerEventHandler_Impl, IUIAnimationTimerUpdateHandler,
-    IUIAnimationTransitionLibrary2, IUIAnimationVariable2, UI_ANIMATION_IDLE_BEHAVIOR_DISABLE,
-    UIAnimationManager2, UIAnimationTimer,
+    IUIAnimationTransitionFactory, IUIAnimationVariable, UI_ANIMATION_IDLE_BEHAVIOR_DISABLE,
+    UIAnimationManager, UIAnimationTimer,
 };
 use windows::Win32::UI::Controls::{SetScrollInfo, WORD_BREAK_ACTION};
 use windows::Win32::UI::Controls::{WB_ISDELIMITER, WB_LEFT, WB_RIGHT, WM_MOUSELEAVE};
@@ -57,12 +56,12 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     VK_RIGHT, VK_SHIFT,
 };
 use windows::Win32::UI::WindowsAndMessaging::*;
-use windows::Win32::UI::Shell::SHCreateMemStream;
 use windows::core::*;
 use windows_numerics::{Matrix3x2, Vector2};
 
 use crate::component::menu::MenuInfo;
 use crate::icon::Icon;
+use crate::icon::path::build_geometry;
 use crate::theme::TypographyStyle;
 use crate::{QT, get_scaling_factor};
 
@@ -214,10 +213,10 @@ impl StringBuffer {
 
 pub struct Context {
     state: State,
-    animation_manager: IUIAnimationManager2,
+    animation_manager: IUIAnimationManager,
     animation_timer: IUIAnimationTimer,
-    transition_library: IUIAnimationTransitionLibrary2,
-    bottom_focus_border: IUIAnimationVariable2,
+    transition_factory: IUIAnimationTransitionFactory,
+    bottom_focus_border: IUIAnimationVariable,
     cached_text_length: Option<usize>,
     buffer: StringBuffer,
     x_offset: usize,
@@ -240,8 +239,8 @@ pub struct Context {
     text_width: i32,
     log_attribute: Vec<SCRIPT_LOGATTR>,
     // Search glyph (leading, decorative) and clear button (trailing), re-tinted per paint.
-    search_svg: Option<ID2D1SvgDocument>,
-    dismiss_svg: Option<ID2D1SvgDocument>,
+    search_geometry: Option<ID2D1PathGeometry1>,
+    dismiss_geometry: Option<ID2D1PathGeometry1>,
     dismiss_hovered: bool,
     dismiss_pressed: bool,
     /// Whether the layout currently reserves the trailing clear-button slot (text present).
@@ -524,10 +523,11 @@ fn replace_selection(
         let buf_length = end - start;
         buf = StringBuffer::with_capacity(buf_length);
         unsafe {
-            u_memcpy(
-                buf.as_mut_ptr(),
+            // Plain copy, not ICU's `u_memcpy` — avoids linking `icuuc.dll` (Win10-only).
+            std::ptr::copy_nonoverlapping(
                 context.buffer.as_ptr().offset(start as isize),
-                buf_length as i32,
+                buf.as_mut_ptr(),
+                buf_length as usize,
             );
             lstrcpynW(
                 from_raw_parts_mut(
@@ -567,13 +567,13 @@ fn replace_selection(
                     && start == context.undo_position
                 {
                     context.undo_buffer.make_fit(undo_text_length + end - start);
-                    u_memcpy(
+                    std::ptr::copy_nonoverlapping(
+                        context.buffer.as_ptr(),
                         context
                             .undo_buffer
                             .as_mut_ptr()
                             .offset(undo_text_length as isize),
-                        context.buffer.as_ptr(),
-                        (end - start) as i32,
+                        (end - start) as usize,
                     );
                 } else if context.undo_insert_count == 0
                     && !context.undo_buffer.is_empty()
@@ -584,10 +584,10 @@ fn replace_selection(
                     context.undo_position = start;
                 } else {
                     context.undo_buffer.make_fit(end - start);
-                    u_memcpy(
-                        context.undo_buffer.as_mut_ptr(),
+                    std::ptr::copy_nonoverlapping(
                         buf.as_ptr(),
-                        (end - start) as i32,
+                        context.undo_buffer.as_mut_ptr(),
+                        (end - start) as usize,
                     );
                     context.undo_position = start;
                 }
@@ -772,35 +772,6 @@ fn adjust_format_rect(window: HWND, context: &mut Context) -> Result<()> {
     set_caret_position(window, context, context.selection_end)
 }
 
-fn set_svg_color(svg: &ID2D1SvgDocument, color: &D2D1_COLOR_F) {
-    unsafe {
-        if let Ok(paint) = svg.CreatePaint(D2D1_SVG_PAINT_TYPE_COLOR, Some(color), w!("")) {
-            if let (Ok(root), Ok(attr)) = (svg.GetRoot(), paint.cast::<ID2D1SvgAttribute>()) {
-                if let Ok(child) = root.GetFirstChild() {
-                    _ = child.SetAttributeValue(w!("fill"), &attr);
-                }
-            }
-        }
-    }
-}
-
-fn make_svg(dc5: &ID2D1DeviceContext5, icon: &Icon, color: &D2D1_COLOR_F) -> Option<ID2D1SvgDocument> {
-    unsafe {
-        let stream = SHCreateMemStream(Some(icon.svg.as_bytes()))?;
-        let svg = dc5
-            .CreateSvgDocument(
-                &stream,
-                D2D_SIZE_F {
-                    width: icon.size as f32,
-                    height: icon.size as f32,
-                },
-            )
-            .ok()?;
-        set_svg_color(&svg, color);
-        Some(svg)
-    }
-}
-
 /// The search-glyph slot (left) and clear-button box (right), in **device pixels**.
 /// Derived from the same border + spacing math as `set_rect_np`, so paint, hit-test
 /// and cursor all agree.
@@ -877,24 +848,24 @@ fn reflow_dismiss(window: HWND, context: &mut Context) -> Result<()> {
     Ok(())
 }
 
-/// Draw an SVG glyph of logical size `size_dip` centered in device-pixel `slot`.
+/// Draw a glyph geometry of logical size `size_dip` centered in device-pixel `slot`.
+/// `native` is the icon's native pixel size (0..native coordinate space).
 fn draw_glyph(
     context: &Context,
-    svg: &ID2D1SvgDocument,
+    geometry: &ID2D1PathGeometry1,
     slot: &RECT,
     size_dip: f32,
+    native: f32,
     color: &D2D1_COLOR_F,
     scaling_factor: f32,
 ) -> Result<()> {
     unsafe {
-        let dc5 = context.render_target.cast::<ID2D1DeviceContext5>()?;
-        set_svg_color(svg, color);
-        let vp = svg.GetViewportSize();
+        let brush = context.render_target.CreateSolidColorBrush(color, None)?;
         let px = size_dip * scaling_factor;
-        let scale = px / vp.width;
+        let scale = px / native;
         let left = slot.left as f32 + ((slot.right - slot.left) as f32 - px) / 2.0;
         let top = slot.top as f32 + ((slot.bottom - slot.top) as f32 - px) / 2.0;
-        dc5.SetTransform(&Matrix3x2 {
+        context.render_target.SetTransform(&Matrix3x2 {
             M11: scale,
             M12: 0.0,
             M21: 0.0,
@@ -902,8 +873,8 @@ fn draw_glyph(
             M31: left,
             M32: top,
         });
-        dc5.DrawSvgDocument(svg);
-        dc5.SetTransform(&Matrix3x2::identity());
+        context.render_target.FillGeometry(geometry, &brush, None);
+        context.render_target.SetTransform(&Matrix3x2::identity());
     }
     Ok(())
 }
@@ -1170,9 +1141,9 @@ fn on_create(window: HWND, state: State) -> Result<Context> {
 
         let animation_timer: IUIAnimationTimer =
             CoCreateInstance(&UIAnimationTimer, None, CLSCTX_INPROC_SERVER)?;
-        let transition_library = state.qt.transition_library.clone();
-        let animation_manager: IUIAnimationManager2 =
-            CoCreateInstance(&UIAnimationManager2, None, CLSCTX_INPROC_SERVER)?;
+        let transition_factory = state.qt.transition_factory.clone();
+        let animation_manager: IUIAnimationManager =
+            CoCreateInstance(&UIAnimationManager, None, CLSCTX_INPROC_SERVER)?;
         let timer_update_handler = animation_manager.cast::<IUIAnimationTimerUpdateHandler>()?;
         animation_timer
             .SetTimerUpdateHandler(&timer_update_handler, UI_ANIMATION_IDLE_BEHAVIOR_DISABLE)?;
@@ -1180,22 +1151,16 @@ fn on_create(window: HWND, state: State) -> Result<Context> {
             AnimationTimerEventHandler { window }.into();
         animation_timer.SetTimerEventHandler(&timer_event_handler)?;
         let bottom_focus_border = animation_manager.CreateAnimationVariable(0.0)?;
-        // Build the leading search glyph and trailing clear-button glyphs once,
-        // tinted foreground2; re-tinted per paint for theme/hover.
-        let tokens = &state.qt.theme.tokens;
-        let glyph_color = tokens.color_neutral_foreground3;
-        let (search_svg, dismiss_svg) = match render_target.cast::<ID2D1DeviceContext5>() {
-            Ok(dc5) => (
-                make_svg(&dc5, &Icon::search_20_regular(), &glyph_color),
-                make_svg(&dc5, &Icon::dismiss_20_regular(), &glyph_color),
-            ),
-            Err(_) => (None, None),
-        };
+        // Build the leading search glyph and trailing clear-button glyphs once as
+        // fillable geometries; the tint is chosen per paint (theme/hover) via a brush.
+        let search_geometry = build_geometry(&state.qt.d2d_factory, &Icon::search_20_regular()).ok();
+        let dismiss_geometry =
+            build_geometry(&state.qt.d2d_factory, &Icon::dismiss_20_regular()).ok();
         Ok(Context {
             state,
             animation_manager,
             animation_timer,
-            transition_library,
+            transition_factory,
             bottom_focus_border,
             cached_text_length: None,
             buffer: StringBuffer::new(),
@@ -1218,8 +1183,8 @@ fn on_create(window: HWND, state: State) -> Result<Context> {
             char_width: tm.tmAveCharWidth,
             text_width: 0,
             log_attribute: Vec::new(),
-            search_svg,
-            dismiss_svg,
+            search_geometry,
+            dismiss_geometry,
             dismiss_hovered: false,
             dismiss_pressed: false,
             dismiss_reserved: false,
@@ -1279,10 +1244,10 @@ fn on_copy(window: HWND, context: &mut Context) -> Result<()> {
         let length = end - start;
         let hdst = GlobalAlloc(GMEM_MOVEABLE, (length + 1) * size_of::<u16>())?;
         let dst = GlobalLock(hdst);
-        u_memcpy(
-            dst as _,
+        std::ptr::copy_nonoverlapping(
             context.buffer.as_ptr().offset(start as isize),
-            length as i32,
+            dst as *mut u16,
+            length as usize,
         );
         *(dst as *mut u16).offset(length as isize) = 0;
         GlobalUnlock(hdst).or_else(|error| error.code().ok())?;
@@ -1726,14 +1691,14 @@ fn paint_icons(window: HWND, context: &mut Context) -> Result<()> {
     let glyph_rest = context.state.qt.theme.tokens.color_neutral_foreground3;
 
     // Leading search glyph (decorative, always shown).
-    if let Some(svg) = context.search_svg.clone() {
-        draw_glyph(context, &svg, &search_rect, SEARCH_ICON, &glyph_rest, scaling_factor)?;
+    if let Some(geometry) = context.search_geometry.clone() {
+        draw_glyph(context, &geometry, &search_rect, SEARCH_ICON, 20.0, &glyph_rest, scaling_factor)?;
     }
 
     // Trailing clear button — no hover fill or color change; only the cursor reacts.
     if show_dismiss {
-        if let Some(svg) = context.dismiss_svg.clone() {
-            draw_glyph(context, &svg, &dismiss_rect, DISMISS_ICON, &glyph_rest, scaling_factor)?;
+        if let Some(geometry) = context.dismiss_geometry.clone() {
+            draw_glyph(context, &geometry, &dismiss_rect, DISMISS_ICON, 20.0, &glyph_rest, scaling_factor)?;
         }
     }
     Ok(())
@@ -1893,16 +1858,12 @@ fn set_focus(window: HWND, context: &mut Context) -> Result<()> {
         set_caret_position(window, context, context.selection_end)?;
         _ = RedrawWindow(Some(window), None, None, RDW_INVALIDATE);
         let tokens = &context.state.qt.theme.tokens;
-        let transition = context
-            .transition_library
-            .CreateCubicBezierLinearTransition(
-                tokens.duration_normal,
-                1.0,
-                tokens.curve_decelerate_mid[0],
-                tokens.curve_decelerate_mid[1],
-                tokens.curve_decelerate_mid[2],
-                tokens.curve_decelerate_mid[3],
-            )?;
+        let transition = crate::anim::cubic_bezier_linear_transition(
+            &context.transition_factory,
+            tokens.duration_normal,
+            1.0,
+            tokens.curve_decelerate_mid,
+        )?;
         let seconds_now = context.animation_timer.GetTime()?;
         context.bottom_focus_border = context.animation_manager.CreateAnimationVariable(0.0)?;
         context.animation_manager.ScheduleTransition(

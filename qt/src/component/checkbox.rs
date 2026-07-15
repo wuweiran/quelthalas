@@ -2,27 +2,24 @@ use std::mem::size_of;
 use std::sync::Once;
 
 use crate::icon::Icon;
+use crate::icon::path::build_geometry;
 use crate::{QT, get_scaling_factor};
 use windows::Win32::Foundation::*;
-use windows::Win32::Graphics::Direct2D::Common::{
-    D2D_RECT_F, D2D_SIZE_F, D2D_SIZE_U, D2D1_COLOR_F,
-};
+use windows::Win32::Graphics::Direct2D::Common::{D2D_RECT_F, D2D_SIZE_U, D2D1_COLOR_F};
 use windows::Win32::Graphics::Direct2D::{
     D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_HWND_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_PROPERTIES,
-    D2D1_ROUNDED_RECT, D2D1_SVG_PAINT_TYPE_COLOR, ID2D1DeviceContext5, ID2D1HwndRenderTarget,
-    ID2D1SvgAttribute, ID2D1SvgDocument,
+    D2D1_ROUNDED_RECT, ID2D1HwndRenderTarget, ID2D1PathGeometry1,
 };
 use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_MEASURING_MODE_NATURAL,
     DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_TEXT_METRICS, IDWriteTextFormat,
 };
 use windows::Win32::Graphics::Gdi::{BeginPaint, EndPaint, InvalidateRect, PAINTSTRUCT};
-use windows::Win32::UI::HiDpi::GetDpiForWindow;
+use crate::sys::dpi_for_window;
 use windows::Win32::UI::Controls::WM_MOUSELEAVE;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     SetFocus, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent,
 };
-use windows::Win32::UI::Shell::SHCreateMemStream;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::*;
 use windows_numerics::Matrix3x2;
@@ -126,7 +123,7 @@ struct Context {
     state: State,
     text_format: IDWriteTextFormat,
     render_target: ID2D1HwndRenderTarget,
-    checkmark_svg: ID2D1SvgDocument,
+    checkmark: ID2D1PathGeometry1,
     checked: bool,
     hovered: bool,
     pressed: bool,
@@ -190,16 +187,6 @@ impl QT {
     }
 }
 
-fn set_svg_color(svg: &ID2D1SvgDocument, color: &D2D1_COLOR_F) -> Result<()> {
-    unsafe {
-        let svg_paint = svg.CreatePaint(D2D1_SVG_PAINT_TYPE_COLOR, Some(color), w!(""))?;
-        svg.GetRoot()?
-            .GetFirstChild()?
-            .SetAttributeValue(w!("fill"), &svg_paint.cast::<ID2D1SvgAttribute>()?)?;
-    }
-    Ok(())
-}
-
 fn on_create(window: HWND, state: State) -> Result<Context> {
     let tokens = &state.qt.theme.tokens;
     let checked = state.props.checked;
@@ -215,7 +202,7 @@ fn on_create(window: HWND, state: State) -> Result<Context> {
         )?;
         text_format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
 
-        let dpi = GetDpiForWindow(window);
+        let dpi = dpi_for_window(window);
         let render_target = state.qt.d2d_factory.CreateHwndRenderTarget(
             &D2D1_RENDER_TARGET_PROPERTIES {
                 dpiX: dpi as f32,
@@ -233,22 +220,13 @@ fn on_create(window: HWND, state: State) -> Result<Context> {
         )?;
 
         let icon = Icon::checkmark_12_filled();
-        let device_context5 = render_target.cast::<ID2D1DeviceContext5>()?;
-        let svg_stream = SHCreateMemStream(Some(icon.svg.as_bytes()));
-        let checkmark_svg = device_context5.CreateSvgDocument(
-            svg_stream.as_ref(),
-            D2D_SIZE_F {
-                width: icon.size as f32,
-                height: icon.size as f32,
-            },
-        )?;
-        _ = set_svg_color(&checkmark_svg, &tokens.color_neutral_foreground_inverted);
+        let checkmark = build_geometry(&state.qt.d2d_factory, &icon)?;
 
         Ok(Context {
             state,
             text_format,
             render_target,
-            checkmark_svg,
+            checkmark,
             checked,
             hovered: false,
             pressed: false,
@@ -363,13 +341,15 @@ fn paint(window: HWND, context: &Context) -> Result<()> {
             let fill = context.render_target.CreateSolidColorBrush(box_color, None)?;
             context.render_target.FillRoundedRectangle(&box_rect, &fill);
             // Checkmark at its natural glyph size (Fluent's fontSize), centred in
-            // the box — not stretched to the edges.
-            let device_context5 = context.render_target.cast::<ID2D1DeviceContext5>()?;
-            let viewport = context.checkmark_svg.GetViewportSize();
+            // the box — not stretched to the edges. The glyph is a filled geometry
+            // (Direct2D 1.0), tinted at draw time via the brush.
             let check = state.check_size();
-            let scale = check / viewport.width;
+            let scale = check / 12.0; // checkmark_12_filled is a 12px glyph
             let inset = (box_size - check) / 2.0;
-            device_context5.SetTransform(&Matrix3x2 {
+            let glyph_brush = context
+                .render_target
+                .CreateSolidColorBrush(&state.qt.theme.tokens.color_neutral_foreground_inverted, None)?;
+            context.render_target.SetTransform(&Matrix3x2 {
                 M11: scale,
                 M12: 0.0,
                 M21: 0.0,
@@ -377,8 +357,10 @@ fn paint(window: HWND, context: &Context) -> Result<()> {
                 M31: box_left + inset,
                 M32: box_top + inset,
             });
-            device_context5.DrawSvgDocument(&context.checkmark_svg);
-            device_context5.SetTransform(&Matrix3x2::identity());
+            context
+                .render_target
+                .FillGeometry(&context.checkmark, &glyph_brush, None);
+            context.render_target.SetTransform(&Matrix3x2::identity());
         } else {
             let border = context.render_target.CreateSolidColorBrush(box_color, None)?;
             let inset = D2D1_ROUNDED_RECT {
@@ -525,7 +507,7 @@ extern "system" fn window_proc(
             let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
             let context = &*raw;
             _ = layout(window, context);
-            let new_dpi = GetDpiForWindow(window);
+            let new_dpi = dpi_for_window(window);
             context.render_target.SetDpi(new_dpi as f32, new_dpi as f32);
             _ = InvalidateRect(Some(window), None, false);
             LRESULT(0)

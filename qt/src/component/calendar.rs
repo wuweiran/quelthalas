@@ -17,11 +17,10 @@ use std::mem::size_of;
 use std::sync::Once;
 
 use windows::Win32::Foundation::*;
-use windows::Win32::Graphics::Direct2D::Common::{D2D_RECT_F, D2D_SIZE_F, D2D_SIZE_U, D2D1_COLOR_F};
+use windows::Win32::Graphics::Direct2D::Common::{D2D_RECT_F, D2D_SIZE_U, D2D1_COLOR_F};
 use windows::Win32::Graphics::Direct2D::{
     D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_HWND_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_PROPERTIES,
-    D2D1_ROUNDED_RECT, D2D1_SVG_PAINT_TYPE_COLOR, ID2D1DeviceContext5, ID2D1HwndRenderTarget,
-    ID2D1SvgAttribute, ID2D1SvgDocument,
+    D2D1_ROUNDED_RECT, ID2D1HwndRenderTarget, ID2D1PathGeometry1,
 };
 use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_LINE_SPACING_METHOD_DEFAULT,
@@ -34,17 +33,17 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::System::SystemInformation::GetLocalTime;
 use windows::Win32::UI::Controls::WM_MOUSELEAVE;
-use windows::Win32::UI::HiDpi::GetDpiForWindow;
+use crate::sys::dpi_for_window;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetCapture, ReleaseCapture, SetCapture, SetFocus, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent,
     VIRTUAL_KEY, VK_DOWN, VK_END, VK_HOME, VK_LEFT, VK_NEXT, VK_PRIOR, VK_RETURN, VK_RIGHT, VK_UP,
 };
-use windows::Win32::UI::Shell::SHCreateMemStream;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::*;
 use windows_numerics::Matrix3x2;
 
 use crate::icon::Icon;
+use crate::icon::path::build_geometry;
 use crate::{QT, get_scaling_factor};
 
 /// A calendar day. `month` is 1-12, `day` 1-31.
@@ -228,8 +227,8 @@ struct Context {
     weekday_format: IDWriteTextFormat, // centered, secondary
     title_format: IDWriteTextFormat,   // leading, semibold-ish larger
     footer_format: IDWriteTextFormat,  // trailing (right-aligned link)
-    arrow_up_svg: Option<ID2D1SvgDocument>,
-    arrow_down_svg: Option<ID2D1SvgDocument>,
+    arrow_up_geometry: Option<ID2D1PathGeometry1>,
+    arrow_down_geometry: Option<ID2D1PathGeometry1>,
     today: Date,
     selected: Option<Date>,
     view: View,
@@ -471,32 +470,6 @@ impl QT {
     }
 }
 
-fn set_svg_color(svg: &ID2D1SvgDocument, color: &D2D1_COLOR_F) {
-    unsafe {
-        if let Ok(paint) = svg.CreatePaint(D2D1_SVG_PAINT_TYPE_COLOR, Some(color), w!("")) {
-            if let (Ok(root), Ok(attr)) = (svg.GetRoot(), paint.cast::<ID2D1SvgAttribute>()) {
-                if let Ok(child) = root.GetFirstChild() {
-                    _ = child.SetAttributeValue(w!("fill"), &attr);
-                }
-            }
-        }
-    }
-}
-
-fn make_svg(dc5: &ID2D1DeviceContext5, icon: &Icon, color: &D2D1_COLOR_F) -> Option<ID2D1SvgDocument> {
-    unsafe {
-        let stream = SHCreateMemStream(Some(icon.svg.as_bytes()))?;
-        let svg = dc5
-            .CreateSvgDocument(
-                &stream,
-                D2D_SIZE_F { width: icon.size as f32, height: icon.size as f32 },
-            )
-            .ok()?;
-        set_svg_color(&svg, color);
-        Some(svg)
-    }
-}
-
 fn create_format(
     qt: &QT,
     size: f32,
@@ -527,13 +500,9 @@ fn create_format(
 
 fn on_create(window: HWND, state: State, selected: Option<Date>) -> Result<Context> {
     unsafe {
-        let (size_200, size_300, arrow_color) = {
+        let (size_200, size_300) = {
             let tokens = &state.qt.theme.tokens;
-            (
-                tokens.font_size_base200,
-                tokens.font_size_base300,
-                tokens.color_neutral_foreground2,
-            )
+            (tokens.font_size_base200, tokens.font_size_base300)
         };
         // Day numbers: caption size (base200) with a 24px line box (Fluent day cell).
         let day_format = create_format(&state.qt, size_200, Some(24.0), DWRITE_TEXT_ALIGNMENT_CENTER, false)?;
@@ -542,7 +511,7 @@ fn on_create(window: HWND, state: State, selected: Option<Date>) -> Result<Conte
         let title_format = create_format(&state.qt, size_300, None, DWRITE_TEXT_ALIGNMENT_LEADING, true)?;
         let footer_format = create_format(&state.qt, size_200, None, DWRITE_TEXT_ALIGNMENT_TRAILING, false)?;
 
-        let dpi = GetDpiForWindow(window);
+        let dpi = dpi_for_window(window);
         let render_target = state.qt.d2d_factory.CreateHwndRenderTarget(
             &D2D1_RENDER_TARGET_PROPERTIES {
                 dpiX: dpi as f32,
@@ -556,13 +525,12 @@ fn on_create(window: HWND, state: State, selected: Option<Date>) -> Result<Conte
             },
         )?;
 
-        let (arrow_up_svg, arrow_down_svg) = match render_target.cast::<ID2D1DeviceContext5>() {
-            Ok(dc5) => (
-                make_svg(&dc5, &Icon::arrow_up_20_regular(), &arrow_color),
-                make_svg(&dc5, &Icon::arrow_down_20_regular(), &arrow_color),
-            ),
-            Err(_) => (None, None),
-        };
+        // The nav arrows are filled geometries (Direct2D 1.0); their tint is applied
+        // at draw time via a brush, so we only build the shapes here.
+        let arrow_up_geometry =
+            build_geometry(&state.qt.d2d_factory, &Icon::arrow_up_20_regular()).ok();
+        let arrow_down_geometry =
+            build_geometry(&state.qt.d2d_factory, &Icon::arrow_down_20_regular()).ok();
 
         let st = GetLocalTime();
         let today = Date { year: st.wYear, month: st.wMonth as u8, day: st.wDay as u8 };
@@ -576,8 +544,8 @@ fn on_create(window: HWND, state: State, selected: Option<Date>) -> Result<Conte
             weekday_format,
             title_format,
             footer_format,
-            arrow_up_svg,
-            arrow_down_svg,
+            arrow_up_geometry,
+            arrow_down_geometry,
             today,
             selected,
             view: View::Day,
@@ -611,18 +579,18 @@ fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().collect()
 }
 
-/// Draw an SVG glyph of logical size `size` centered in `slot`, re-tinted to `color`.
-fn draw_glyph(context: &Context, svg: &ID2D1SvgDocument, slot: &D2D_RECT_F, size: f32, color: &D2D1_COLOR_F) -> Result<()> {
+/// Draw a glyph `geometry` (native art size 20px) of logical size `size` centered in
+/// `slot`, tinted to `color`.
+fn draw_glyph(context: &Context, geometry: &ID2D1PathGeometry1, slot: &D2D_RECT_F, size: f32, color: &D2D1_COLOR_F) -> Result<()> {
     unsafe {
-        let dc5 = context.render_target.cast::<ID2D1DeviceContext5>()?;
-        set_svg_color(svg, color);
-        let vp = svg.GetViewportSize();
-        let scale = size / vp.width;
+        let brush = context.render_target.CreateSolidColorBrush(color, None)?;
+        // The arrow icons are 20px art (arrow_up/down_20_regular).
+        let scale = size / 20.0;
         let left = slot.left + ((slot.right - slot.left) - size) / 2.0;
         let top = slot.top + ((slot.bottom - slot.top) - size) / 2.0;
-        dc5.SetTransform(&Matrix3x2 { M11: scale, M12: 0.0, M21: 0.0, M22: scale, M31: left, M32: top });
-        dc5.DrawSvgDocument(svg);
-        dc5.SetTransform(&Matrix3x2::identity());
+        context.render_target.SetTransform(&Matrix3x2 { M11: scale, M12: 0.0, M21: 0.0, M22: scale, M31: left, M32: top });
+        context.render_target.FillGeometry(geometry, &brush, None);
+        context.render_target.SetTransform(&Matrix3x2::identity());
     }
     Ok(())
 }
@@ -671,9 +639,9 @@ fn paint(window: HWND, context: &Context) -> Result<()> {
         draw_text(context, &wide(&title), &context.title_format, &D2D_RECT_F { left: title_rect.left + TITLE_PAD, ..title_rect }, &title_fg)?;
 
         let (prev, next) = context.arrow_rects();
-        for (r, svg, target) in [
-            (prev, &context.arrow_up_svg, Hot::Prev),
-            (next, &context.arrow_down_svg, Hot::Next),
+        for (r, geometry, target) in [
+            (prev, &context.arrow_up_geometry, Hot::Prev),
+            (next, &context.arrow_down_geometry, Hot::Next),
         ] {
             let (bg, fg) = state_colors(target, tokens.color_neutral_foreground2);
             if let Some(bg) = bg {
@@ -681,8 +649,8 @@ fn paint(window: HWND, context: &Context) -> Result<()> {
                 let rr = D2D1_ROUNDED_RECT { rect: r, radiusX: radius, radiusY: radius };
                 context.render_target.FillRoundedRectangle(&rr, &brush);
             }
-            if let Some(svg) = svg {
-                draw_glyph(context, svg, &r, ARROW_ICON, &fg)?;
+            if let Some(geometry) = geometry {
+                draw_glyph(context, geometry, &r, ARROW_ICON, &fg)?;
             }
         }
 
@@ -1073,7 +1041,7 @@ extern "system" fn window_proc(window: HWND, message: u32, w_param: WPARAM, l_pa
             let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
             let context = &mut *raw;
             _ = layout(window, context);
-            let new_dpi = GetDpiForWindow(window);
+            let new_dpi = dpi_for_window(window);
             context.render_target.SetDpi(new_dpi as f32, new_dpi as f32);
             _ = InvalidateRect(Some(window), None, false);
             LRESULT(0)

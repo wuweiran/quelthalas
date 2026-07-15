@@ -28,6 +28,3 @@ version = "0.62.2"
 
 [dependencies.windows-numerics]
 version = "0.3.1"
-
-[dependencies.windows-version]
-version = "0.1.7"

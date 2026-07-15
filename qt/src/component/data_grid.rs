@@ -13,11 +13,10 @@ use std::mem::size_of;
 use std::sync::Once;
 
 use windows::Win32::Foundation::*;
-use windows::Win32::Graphics::Direct2D::Common::{D2D_RECT_F, D2D_SIZE_F, D2D_SIZE_U, D2D1_COLOR_F};
+use windows::Win32::Graphics::Direct2D::Common::{D2D_RECT_F, D2D_SIZE_U, D2D1_COLOR_F};
 use windows::Win32::Graphics::Direct2D::{
     D2D1_ANTIALIAS_MODE_ALIASED, D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_HWND_RENDER_TARGET_PROPERTIES,
-    D2D1_RENDER_TARGET_PROPERTIES, D2D1_ROUNDED_RECT, D2D1_SVG_PAINT_TYPE_COLOR,
-    ID2D1DeviceContext5, ID2D1HwndRenderTarget, ID2D1SvgAttribute, ID2D1SvgDocument,
+    D2D1_RENDER_TARGET_PROPERTIES, D2D1_ROUNDED_RECT, ID2D1HwndRenderTarget, ID2D1PathGeometry1,
 };
 use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_MEASURING_MODE_NATURAL,
@@ -28,18 +27,18 @@ use windows::Win32::Graphics::Gdi::{
     RedrawWindow, SetWindowRgn,
 };
 use windows::Win32::UI::Controls::WM_MOUSELEAVE;
-use windows::Win32::UI::HiDpi::GetDpiForWindow;
+use crate::sys::dpi_for_window;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetCapture, GetKeyState, ReleaseCapture, SetCapture, SetFocus, TME_LEAVE, TRACKMOUSEEVENT,
     TrackMouseEvent, VIRTUAL_KEY, VK_A, VK_CONTROL, VK_DOWN, VK_END, VK_HOME, VK_NEXT, VK_PRIOR,
     VK_SHIFT, VK_SPACE, VK_UP,
 };
-use windows::Win32::UI::Shell::SHCreateMemStream;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::*;
 use windows_numerics::Matrix3x2;
 
 use crate::icon::Icon;
+use crate::icon::path::build_geometry;
 use crate::component::scroll::{SCROLLBAR_W, ScrollHit, VScroll};
 use crate::{QT, get_scaling_factor};
 
@@ -203,14 +202,14 @@ struct Context {
     cell_format: IDWriteTextFormat,
     header_format: IDWriteTextFormat,
     render_target: ID2D1HwndRenderTarget,
-    checkmark_svg: ID2D1SvgDocument,
+    checkmark_geometry: ID2D1PathGeometry1,
     /// The mixed-state inner square (Fluent `Square12Filled`), re-tinted per draw.
-    square_svg: ID2D1SvgDocument,
+    square_geometry: ID2D1PathGeometry1,
     /// Sort-direction arrows for the sorted column header.
-    arrow_up_svg: ID2D1SvgDocument,
-    arrow_down_svg: ID2D1SvgDocument,
-    /// Per-cell icon SVGs (rows × columns), built once in `on_create`.
-    icon_svgs: Vec<Vec<Option<ID2D1SvgDocument>>>,
+    arrow_up_geometry: ID2D1PathGeometry1,
+    arrow_down_geometry: ID2D1PathGeometry1,
+    /// Per-cell icon geometries (rows × columns), built once in `on_create`.
+    icon_geometries: Vec<Vec<Option<ID2D1PathGeometry1>>>,
     /// Per-row selection flag (parallel to rows, keyed by original row index).
     selected: Vec<bool>,
     /// Current sort: `(column, ascending)`. `None` = original order.
@@ -412,39 +411,6 @@ impl QT {
     }
 }
 
-fn set_svg_color(svg: &ID2D1SvgDocument, color: &D2D1_COLOR_F) {
-    unsafe {
-        if let Ok(paint) = svg.CreatePaint(D2D1_SVG_PAINT_TYPE_COLOR, Some(color), w!("")) {
-            if let (Ok(root), Ok(attr)) = (svg.GetRoot(), paint.cast::<ID2D1SvgAttribute>()) {
-                if let Ok(child) = root.GetFirstChild() {
-                    _ = child.SetAttributeValue(w!("fill"), &attr);
-                }
-            }
-        }
-    }
-}
-
-fn make_svg(
-    dc5: &ID2D1DeviceContext5,
-    icon: &Icon,
-    color: &D2D1_COLOR_F,
-) -> Option<ID2D1SvgDocument> {
-    unsafe {
-        let stream = SHCreateMemStream(Some(icon.svg.as_bytes()))?;
-        let svg = dc5
-            .CreateSvgDocument(
-                &stream,
-                D2D_SIZE_F {
-                    width: icon.size as f32,
-                    height: icon.size as f32,
-                },
-            )
-            .ok()?;
-        set_svg_color(&svg, color);
-        Some(svg)
-    }
-}
-
 fn create_format(qt: &QT) -> Result<IDWriteTextFormat> {
     let tokens = &qt.theme.tokens;
     unsafe {
@@ -466,7 +432,7 @@ fn on_create(window: HWND, state: State) -> Result<Context> {
     unsafe {
         let cell_format = create_format(&state.qt)?;
         let header_format = create_format(&state.qt)?;
-        let dpi = GetDpiForWindow(window);
+        let dpi = dpi_for_window(window);
         let render_target = state.qt.d2d_factory.CreateHwndRenderTarget(
             &D2D1_RENDER_TARGET_PROPERTIES {
                 dpiX: dpi as f32,
@@ -480,46 +446,29 @@ fn on_create(window: HWND, state: State) -> Result<Context> {
             },
         )?;
 
-        let tokens = &state.qt.theme.tokens;
-        let dc5 = render_target.cast::<ID2D1DeviceContext5>()?;
-
-        // Checkmark for the checkbox column (inverted, like checkbox.rs).
-        let checkmark_svg = make_svg(
-            &dc5,
-            &Icon::checkmark_12_filled(),
-            &tokens.color_neutral_foreground_inverted,
-        )
-        .ok_or(Error::from(E_FAIL))?;
+        // Checkmark for the checkbox column (inverted, like checkbox.rs). Glyphs are
+        // filled Direct2D 1.0 geometries — the tint is applied per draw via a brush.
+        let checkmark_geometry =
+            build_geometry(&state.qt.d2d_factory, &Icon::checkmark_12_filled())?;
         // Mixed (select-all partial) inner square — re-tinted per draw.
-        let square_svg = make_svg(
-            &dc5,
-            &Icon::square_12_filled(),
-            &tokens.color_compound_brand_foreground1,
-        )
-        .ok_or(Error::from(E_FAIL))?;
+        let square_geometry = build_geometry(&state.qt.d2d_factory, &Icon::square_12_filled())?;
         // Sort-direction arrows for the sorted column header (20px art, drawn at 12).
-        let arrow_up_svg = make_svg(
-            &dc5,
-            &Icon::arrow_up_20_regular(),
-            &tokens.color_neutral_foreground2,
-        )
-        .ok_or(Error::from(E_FAIL))?;
-        let arrow_down_svg = make_svg(
-            &dc5,
-            &Icon::arrow_down_20_regular(),
-            &tokens.color_neutral_foreground2,
-        )
-        .ok_or(Error::from(E_FAIL))?;
+        let arrow_up_geometry =
+            build_geometry(&state.qt.d2d_factory, &Icon::arrow_up_20_regular())?;
+        let arrow_down_geometry =
+            build_geometry(&state.qt.d2d_factory, &Icon::arrow_down_20_regular())?;
 
-        // Per-cell icon SVGs (rows × columns), tinted foreground2.
-        let icon_color = tokens.color_neutral_foreground2;
-        let icon_svgs = state
+        // Per-cell icon geometries (rows × columns), tinted foreground2 at draw time.
+        let icon_geometries = state
             .rows
             .iter()
             .map(|row| {
                 row.cells
                     .iter()
-                    .map(|cell| cell.icon.and_then(|ic| make_svg(&dc5, &ic, &icon_color)))
+                    .map(|cell| {
+                        cell.icon
+                            .and_then(|ic| build_geometry(&state.qt.d2d_factory, &ic).ok())
+                    })
                     .collect()
             })
             .collect();
@@ -530,11 +479,11 @@ fn on_create(window: HWND, state: State) -> Result<Context> {
             cell_format,
             header_format,
             render_target,
-            checkmark_svg,
-            square_svg,
-            arrow_up_svg,
-            arrow_down_svg,
-            icon_svgs,
+            checkmark_geometry,
+            square_geometry,
+            arrow_up_geometry,
+            arrow_down_geometry,
+            icon_geometries,
             selected: vec![false; n],
             sort: None,
             order: (0..n).collect(),
@@ -828,9 +777,18 @@ fn paint(window: HWND, context: &Context) -> Result<()> {
                     D2D1_ANTIALIAS_MODE_ALIASED,
                 );
                 let mut text_left = cl + cell_pad;
-                if cell.icon.is_some() {
-                    if let Some(Some(svg)) = context.icon_svgs.get(i).and_then(|r| r.get(c)) {
-                        draw_cell_icon(context, svg, text_left, top, bottom)?;
+                if let Some(icon) = cell.icon {
+                    if let Some(Some(geometry)) =
+                        context.icon_geometries.get(i).and_then(|r| r.get(c))
+                    {
+                        draw_cell_icon(
+                            context,
+                            geometry,
+                            icon.size as f32,
+                            text_left,
+                            top,
+                            bottom,
+                        )?;
                     }
                     text_left += CELL_ICON + cell_pad;
                 }
@@ -910,14 +868,14 @@ fn paint(window: HWND, context: &Context) -> Result<()> {
             // Sort arrow sits immediately after the header text (not right-aligned).
             if context.sort.map(|(sc, _)| sc) == Some(c) {
                 let ascending = context.sort.map(|(_, a)| a).unwrap_or(true);
-                let svg = if ascending {
-                    &context.arrow_up_svg
+                let geometry = if ascending {
+                    &context.arrow_up_geometry
                 } else {
-                    &context.arrow_down_svg
+                    &context.arrow_down_geometry
                 };
                 let text_w = measure_text_width(&state.qt, &context.header_format, col.header);
                 let arrow_left = text_left + text_w + tokens.spacing_horizontal_xs;
-                draw_sort_arrow(context, svg, arrow_left)?;
+                draw_sort_arrow(context, geometry, arrow_left)?;
             }
         }
 
@@ -976,11 +934,12 @@ fn draw_checkbox(
                 .render_target
                 .CreateSolidColorBrush(&tokens.color_compound_brand_background, None)?;
             context.render_target.FillRoundedRectangle(&rounded, &fill);
-            let dc5 = context.render_target.cast::<ID2D1DeviceContext5>()?;
-            let viewport = context.checkmark_svg.GetViewportSize();
-            let scale = CHECK_GLYPH / viewport.width;
+            let scale = CHECK_GLYPH / 12.0; // checkmark_12_filled is a 12px glyph
             let inset = (CHECK_BOX - CHECK_GLYPH) / 2.0;
-            dc5.SetTransform(&Matrix3x2 {
+            let glyph_brush = context
+                .render_target
+                .CreateSolidColorBrush(&tokens.color_neutral_foreground_inverted, None)?;
+            context.render_target.SetTransform(&Matrix3x2 {
                 M11: scale,
                 M12: 0.0,
                 M21: 0.0,
@@ -988,8 +947,10 @@ fn draw_checkbox(
                 M31: box_rect.left + inset,
                 M32: box_rect.top + inset,
             });
-            dc5.DrawSvgDocument(&context.checkmark_svg);
-            dc5.SetTransform(&Matrix3x2::identity());
+            context
+                .render_target
+                .FillGeometry(&context.checkmark_geometry, &glyph_brush, None);
+            context.render_target.SetTransform(&Matrix3x2::identity());
         } else if indeterminate {
             // Stroked box in the compound-brand stroke colour…
             let border = context
@@ -1011,12 +972,12 @@ fn draw_checkbox(
                 &context.state.qt.stroke_style,
             );
             // …with the inner Square glyph in compound-brand foreground1.
-            set_svg_color(&context.square_svg, &tokens.color_compound_brand_foreground1);
-            let dc5 = context.render_target.cast::<ID2D1DeviceContext5>()?;
-            let viewport = context.square_svg.GetViewportSize();
-            let scale = CHECK_GLYPH / viewport.width;
+            let scale = CHECK_GLYPH / 12.0; // square_12_filled is a 12px glyph
             let inset = (CHECK_BOX - CHECK_GLYPH) / 2.0;
-            dc5.SetTransform(&Matrix3x2 {
+            let glyph_brush = context
+                .render_target
+                .CreateSolidColorBrush(&tokens.color_compound_brand_foreground1, None)?;
+            context.render_target.SetTransform(&Matrix3x2 {
                 M11: scale,
                 M12: 0.0,
                 M21: 0.0,
@@ -1024,8 +985,10 @@ fn draw_checkbox(
                 M31: box_rect.left + inset,
                 M32: box_rect.top + inset,
             });
-            dc5.DrawSvgDocument(&context.square_svg);
-            dc5.SetTransform(&Matrix3x2::identity());
+            context
+                .render_target
+                .FillGeometry(&context.square_geometry, &glyph_brush, None);
+            context.render_target.SetTransform(&Matrix3x2::identity());
         } else {
             let border = context
                 .render_target
@@ -1068,20 +1031,24 @@ fn measure_text_width(qt: &QT, format: &IDWriteTextFormat, text: PCWSTR) -> f32 
     }
 }
 
-/// Draw a cell's leading icon (20px, vertically centered) at `icon_left`.
+/// Draw a cell's leading icon (20px, vertically centered) at `icon_left`. `native`
+/// is the glyph's native pixel size (its constructor size), used as the scale divisor.
 fn draw_cell_icon(
     context: &Context,
-    svg: &ID2D1SvgDocument,
+    geometry: &ID2D1PathGeometry1,
+    native: f32,
     icon_left: f32,
     top: f32,
     bottom: f32,
 ) -> Result<()> {
+    let tokens = &context.state.qt.theme.tokens;
     unsafe {
-        let dc5 = context.render_target.cast::<ID2D1DeviceContext5>()?;
-        let vp = svg.GetViewportSize();
-        let scale = CELL_ICON / vp.width;
+        let scale = CELL_ICON / native;
         let icon_top = top + ((bottom - top) - CELL_ICON) / 2.0;
-        dc5.SetTransform(&Matrix3x2 {
+        let brush = context
+            .render_target
+            .CreateSolidColorBrush(&tokens.color_neutral_foreground2, None)?;
+        context.render_target.SetTransform(&Matrix3x2 {
             M11: scale,
             M12: 0.0,
             M21: 0.0,
@@ -1089,22 +1056,24 @@ fn draw_cell_icon(
             M31: icon_left,
             M32: icon_top,
         });
-        dc5.DrawSvgDocument(svg);
-        dc5.SetTransform(&Matrix3x2::identity());
+        context.render_target.FillGeometry(geometry, &brush, None);
+        context.render_target.SetTransform(&Matrix3x2::identity());
     }
     Ok(())
 }
 
 /// Draw the sort-direction arrow
-fn draw_sort_arrow(context: &Context, svg: &ID2D1SvgDocument, arrow_left: f32) -> Result<()> {
+fn draw_sort_arrow(context: &Context, geometry: &ID2D1PathGeometry1, arrow_left: f32) -> Result<()> {
+    let tokens = &context.state.qt.theme.tokens;
     unsafe {
-        let dc5 = context.render_target.cast::<ID2D1DeviceContext5>()?;
-        let vp = svg.GetViewportSize();
-        let scale = SORT_ARROW / vp.width;
+        let scale = SORT_ARROW / 20.0; // arrow_{up,down}_20_regular are 20px glyphs
         // Centered in the header band, nudged down a touch (optical alignment).
-        let arrow_top = (HEADER_H - SORT_ARROW 
+        let arrow_top = (HEADER_H - SORT_ARROW
             + context.state.qt.theme.tokens.spacing_vertical_xxs) / 2.0;
-        dc5.SetTransform(&Matrix3x2 {
+        let brush = context
+            .render_target
+            .CreateSolidColorBrush(&tokens.color_neutral_foreground2, None)?;
+        context.render_target.SetTransform(&Matrix3x2 {
             M11: scale,
             M12: 0.0,
             M21: 0.0,
@@ -1112,8 +1081,8 @@ fn draw_sort_arrow(context: &Context, svg: &ID2D1SvgDocument, arrow_left: f32) -
             M31: arrow_left,
             M32: arrow_top,
         });
-        dc5.DrawSvgDocument(svg);
-        dc5.SetTransform(&Matrix3x2::identity());
+        context.render_target.FillGeometry(geometry, &brush, None);
+        context.render_target.SetTransform(&Matrix3x2::identity());
     }
     Ok(())
 }
@@ -1466,7 +1435,7 @@ extern "system" fn window_proc(
             let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
             let context = &mut *raw;
             _ = layout(window, context);
-            let new_dpi = GetDpiForWindow(window);
+            let new_dpi = dpi_for_window(window);
             context.render_target.SetDpi(new_dpi as f32, new_dpi as f32);
             update_metrics(context);
             _ = InvalidateRect(Some(window), None, false);

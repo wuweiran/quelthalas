@@ -2,8 +2,8 @@
 //! `DatePicker`). A read-styled field (like `dropdown`'s) with a trailing calendar
 //! glyph; clicking it (or Enter/Space/Down/F4) opens the **Calendar** in a flyout
 //! popup below. Picking a day closes the flyout and writes the date into the field,
-//! formatted with the user's locale short-date pattern (`GetDateFormatEx`) — exactly
-//! what the real `SysDateTimePick32` shows.
+//! formatted as an ISO 8601 short date (`YYYY-MM-DD`) — a fixed, locale-independent
+//! pattern (no ICU/`GetDateFormatEx` dependency, so it stays Windows 7-compatible).
 //!
 //! Structurally the field clones `dropdown`'s field wiring (chrome, WAM focus
 //! underline, hover/focus tracking). The flyout differs: instead of drawing its own
@@ -16,15 +16,14 @@ use std::rc::Rc;
 use std::sync::Once;
 
 use windows::Win32::Foundation::*;
-use windows::Win32::Globalization::{DATE_SHORTDATE, GetDateFormatEx};
 use windows::Win32::Graphics::Direct2D::Common::{
     D2D_RECT_F, D2D_SIZE_F, D2D_SIZE_U, D2D1_COLOR_F, D2D1_FIGURE_BEGIN_HOLLOW, D2D1_FIGURE_END_OPEN,
 };
 use windows::Win32::Graphics::Direct2D::{
     D2D1_ARC_SEGMENT, D2D1_ARC_SIZE_SMALL, D2D1_DRAW_TEXT_OPTIONS_NONE,
     D2D1_HWND_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_PROPERTIES, D2D1_ROUNDED_RECT,
-    D2D1_SVG_PAINT_TYPE_COLOR, D2D1_SWEEP_DIRECTION_COUNTER_CLOCKWISE, ID2D1DeviceContext5,
-    ID2D1Factory1, ID2D1HwndRenderTarget, ID2D1PathGeometry1, ID2D1SvgAttribute, ID2D1SvgDocument,
+    D2D1_SWEEP_DIRECTION_COUNTER_CLOCKWISE,
+    ID2D1Factory1, ID2D1HwndRenderTarget, ID2D1PathGeometry1,
 };
 use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_MEASURING_MODE_NATURAL,
@@ -37,18 +36,17 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
 use windows::Win32::UI::Animation::{
-    IUIAnimationManager2, IUIAnimationTimer, IUIAnimationTimerEventHandler,
+    IUIAnimationManager, IUIAnimationTimer, IUIAnimationTimerEventHandler,
     IUIAnimationTimerEventHandler_Impl, IUIAnimationTimerUpdateHandler,
-    IUIAnimationTransitionLibrary2, IUIAnimationVariable2, UI_ANIMATION_IDLE_BEHAVIOR_DISABLE,
-    UIAnimationManager2, UIAnimationTimer,
+    IUIAnimationTransitionFactory, IUIAnimationVariable, UI_ANIMATION_IDLE_BEHAVIOR_DISABLE,
+    UIAnimationManager, UIAnimationTimer,
 };
 use windows::Win32::UI::Controls::WM_MOUSELEAVE;
-use windows::Win32::UI::HiDpi::GetDpiForWindow;
+use crate::sys::dpi_for_window;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     SetFocus, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent, VIRTUAL_KEY, VK_DOWN, VK_ESCAPE, VK_F4,
     VK_RETURN, VK_SPACE,
 };
-use windows::Win32::UI::Shell::SHCreateMemStream;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::*;
 use windows_numerics::{Matrix3x2, Vector2};
@@ -56,6 +54,7 @@ use windows_numerics::{Matrix3x2, Vector2};
 use crate::component::calendar;
 use crate::component::input;
 use crate::icon::Icon;
+use crate::icon::path::build_geometry;
 use crate::{QT, get_scaling_factor};
 
 pub use crate::component::calendar::Date;
@@ -138,11 +137,11 @@ struct Context {
     state: State,
     text_format: IDWriteTextFormat,
     render_target: ID2D1HwndRenderTarget,
-    glyph_svg: ID2D1SvgDocument,
-    animation_manager: IUIAnimationManager2,
+    glyph_geometry: ID2D1PathGeometry1,
+    animation_manager: IUIAnimationManager,
     animation_timer: IUIAnimationTimer,
-    transition_library: IUIAnimationTransitionLibrary2,
-    bottom_focus_border: IUIAnimationVariable2,
+    transition_factory: IUIAnimationTransitionFactory,
+    bottom_focus_border: IUIAnimationVariable,
     value: Option<Date>,
     is_focused: bool,
     is_hovered: bool,
@@ -211,42 +210,12 @@ impl QT {
     }
 }
 
-fn set_svg_color(svg: &ID2D1SvgDocument, color: &D2D1_COLOR_F) -> Result<()> {
-    unsafe {
-        let svg_paint = svg.CreatePaint(D2D1_SVG_PAINT_TYPE_COLOR, Some(color), w!(""))?;
-        svg.GetRoot()?
-            .GetFirstChild()?
-            .SetAttributeValue(w!("fill"), &svg_paint.cast::<ID2D1SvgAttribute>()?)?;
-    }
-    Ok(())
-}
-
-/// Format `date` with the user's locale short-date pattern (`GetDateFormatEx`).
+/// Format `date` as an ISO 8601 short date (`YYYY-MM-DD`) — a fixed, unambiguous
+/// pattern with no locale dependency. (Avoids `GetDateFormatEx`, which links ICU
+/// and pins the binary to Windows 10.)
 fn format_date(date: Date) -> Vec<u16> {
-    let st = SYSTEMTIME {
-        wYear: date.year,
-        wMonth: date.month as u16,
-        wDay: date.day as u16,
-        ..Default::default()
-    };
-    let mut buf = [0u16; 128];
-    // Null locale name = LOCALE_NAME_USER_DEFAULT; null format = the locale's
-    // short-date pattern (DATE_SHORTDATE).
-    let len = unsafe {
-        GetDateFormatEx(
-            PCWSTR::null(),
-            DATE_SHORTDATE,
-            Some(&st),
-            PCWSTR::null(),
-            Some(&mut buf),
-            PCWSTR::null(),
-        )
-    };
-    if len > 1 {
-        buf[..(len - 1) as usize].to_vec()
-    } else {
-        Vec::new()
-    }
+    let s = format!("{:04}-{:02}-{:02}", date.year, date.month as u16, date.day as u16);
+    s.encode_utf16().collect()
 }
 
 fn create_text_format(qt: &QT, font_size: f32) -> Result<IDWriteTextFormat> {
@@ -267,12 +236,11 @@ fn create_text_format(qt: &QT, font_size: f32) -> Result<IDWriteTextFormat> {
 }
 
 fn on_create(window: HWND, state: State) -> Result<Context> {
-    let tokens = &state.qt.theme.tokens;
     let value = state.props.value;
     unsafe {
         let text_format = create_text_format(&state.qt, state.font_size())?;
 
-        let dpi = GetDpiForWindow(window);
+        let dpi = dpi_for_window(window);
         let render_target = state.qt.d2d_factory.CreateHwndRenderTarget(
             &D2D1_RENDER_TARGET_PROPERTIES {
                 dpiX: dpi as f32,
@@ -287,19 +255,14 @@ fn on_create(window: HWND, state: State) -> Result<Context> {
         )?;
 
         let icon = Icon::calendar_month_20_regular();
-        let device_context5 = render_target.cast::<ID2D1DeviceContext5>()?;
-        let svg_stream = SHCreateMemStream(Some(icon.svg.as_bytes()));
-        let glyph_svg = device_context5.CreateSvgDocument(
-            svg_stream.as_ref(),
-            D2D_SIZE_F { width: icon.size as f32, height: icon.size as f32 },
-        )?;
-        _ = set_svg_color(&glyph_svg, &tokens.color_neutral_stroke_accessible);
+        // Filled geometry (Direct2D 1.0); tint is applied at draw time via a brush.
+        let glyph_geometry = build_geometry(&state.qt.d2d_factory, &icon)?;
 
         let animation_timer: IUIAnimationTimer =
             CoCreateInstance(&UIAnimationTimer, None, CLSCTX_INPROC_SERVER)?;
-        let transition_library = state.qt.transition_library.clone();
-        let animation_manager: IUIAnimationManager2 =
-            CoCreateInstance(&UIAnimationManager2, None, CLSCTX_INPROC_SERVER)?;
+        let transition_factory = state.qt.transition_factory.clone();
+        let animation_manager: IUIAnimationManager =
+            CoCreateInstance(&UIAnimationManager, None, CLSCTX_INPROC_SERVER)?;
         let timer_update_handler = animation_manager.cast::<IUIAnimationTimerUpdateHandler>()?;
         animation_timer
             .SetTimerUpdateHandler(&timer_update_handler, UI_ANIMATION_IDLE_BEHAVIOR_DISABLE)?;
@@ -312,10 +275,10 @@ fn on_create(window: HWND, state: State) -> Result<Context> {
             state,
             text_format,
             render_target,
-            glyph_svg,
+            glyph_geometry,
             animation_manager,
             animation_timer,
-            transition_library,
+            transition_factory,
             bottom_focus_border,
             value,
             is_focused: false,
@@ -348,13 +311,11 @@ impl IUIAnimationTimerEventHandler_Impl for AnimationTimerEventHandler_Impl {
 fn start_focus_animation(context: &mut Context) -> Result<()> {
     let tokens = &context.state.qt.theme.tokens;
     unsafe {
-        let transition = context.transition_library.CreateCubicBezierLinearTransition(
+        let transition = crate::anim::cubic_bezier_linear_transition(
+            &context.transition_factory,
             tokens.duration_normal,
             1.0,
-            tokens.curve_decelerate_mid[0],
-            tokens.curve_decelerate_mid[1],
-            tokens.curve_decelerate_mid[2],
-            tokens.curve_decelerate_mid[3],
+            tokens.curve_decelerate_mid,
         )?;
         let seconds_now = context.animation_timer.GetTime()?;
         context.bottom_focus_border = context.animation_manager.CreateAnimationVariable(0.0)?;
@@ -504,13 +465,17 @@ fn paint(window: HWND, context: &Context) -> Result<()> {
             );
         }
 
-        // Calendar glyph at the right edge, vertically centred.
-        let device_context5 = context.render_target.cast::<ID2D1DeviceContext5>()?;
+        // Calendar glyph at the right edge, vertically centred. Filled geometry
+        // tinted at draw time with the same constant the SVG baked in
+        // (`color_neutral_stroke_accessible`); drawn at its native 20px size.
         let glyph_x = width - pad - GLYPH;
         let glyph_y = (height - GLYPH) / 2.0;
-        device_context5.SetTransform(&Matrix3x2 { M11: 1.0, M12: 0.0, M21: 0.0, M22: 1.0, M31: glyph_x, M32: glyph_y });
-        device_context5.DrawSvgDocument(&context.glyph_svg);
-        device_context5.SetTransform(&Matrix3x2::identity());
+        let glyph_brush = context
+            .render_target
+            .CreateSolidColorBrush(&tokens.color_neutral_stroke_accessible, None)?;
+        context.render_target.SetTransform(&Matrix3x2 { M11: 1.0, M12: 0.0, M21: 0.0, M22: 1.0, M31: glyph_x, M32: glyph_y });
+        context.render_target.FillGeometry(&context.glyph_geometry, &glyph_brush, None);
+        context.render_target.SetTransform(&Matrix3x2::identity());
     }
     Ok(())
 }
@@ -650,7 +615,7 @@ extern "system" fn field_proc(window: HWND, message: u32, w_param: WPARAM, l_par
             let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
             let context = &*raw;
             _ = layout(window, context);
-            let new_dpi = GetDpiForWindow(window);
+            let new_dpi = dpi_for_window(window);
             context.render_target.SetDpi(new_dpi as f32, new_dpi as f32);
             _ = InvalidateRect(Some(window), None, false);
             LRESULT(0)

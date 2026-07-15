@@ -11,16 +11,15 @@
 
 use std::cell::RefCell;
 
-use windows::Win32::Graphics::Direct2D::Common::{D2D_RECT_F, D2D1_COLOR_F, D2D_SIZE_F};
+use windows::Win32::Graphics::Direct2D::Common::{D2D_RECT_F, D2D1_COLOR_F};
 use windows::Win32::Graphics::Direct2D::{
-    D2D1_ROUNDED_RECT, D2D1_SVG_PAINT_TYPE_COLOR, ID2D1DeviceContext5, ID2D1HwndRenderTarget,
-    ID2D1SvgAttribute, ID2D1SvgDocument,
+    D2D1_ROUNDED_RECT, ID2D1Factory1, ID2D1HwndRenderTarget, ID2D1PathGeometry1,
 };
-use windows::Win32::UI::Shell::SHCreateMemStream;
-use windows::core::{Interface, Result, w};
+use windows::core::{Interface, Result};
 use windows_numerics::Matrix3x2;
 
 use crate::icon::Icon;
+use crate::icon::path::build_geometry;
 use crate::theme::Tokens;
 
 /// Scrollbar gutter width (DIPs) — WinUI ScrollBarSize. Reserved on the right of
@@ -90,9 +89,10 @@ pub struct VScroll {
     page_dir: f32,
     page_target_y: f32,
     page_track: D2D_RECT_F,
-    /// Arrow glyph SVGs, lazily created on first paint from the render target.
-    up_svg: RefCell<Option<ID2D1SvgDocument>>,
-    down_svg: RefCell<Option<ID2D1SvgDocument>>,
+    /// Arrow glyph geometries, lazily built on first paint from the render
+    /// target's factory. Tinted at draw time via a solid brush.
+    up_geometry: RefCell<Option<ID2D1PathGeometry1>>,
+    down_geometry: RefCell<Option<ID2D1PathGeometry1>>,
 }
 
 impl VScroll {
@@ -117,8 +117,8 @@ impl VScroll {
                 right: 0.0,
                 bottom: 0.0,
             },
-            up_svg: RefCell::new(None),
-            down_svg: RefCell::new(None),
+            up_geometry: RefCell::new(None),
+            down_geometry: RefCell::new(None),
         }
     }
 
@@ -348,40 +348,30 @@ impl VScroll {
             tokens.color_neutral_foreground3
         };
         unsafe {
-            let device_context5 = rt.cast::<ID2D1DeviceContext5>()?;
-            // Lazily create the SVG doc (once) from the render target.
-            let cell = if up { &self.up_svg } else { &self.down_svg };
+            // Lazily build the arrow geometry (once) from the render target's factory.
+            let cell = if up { &self.up_geometry } else { &self.down_geometry };
             if cell.borrow().is_none() {
                 let icon = if up {
                     Icon::triangle_up_20_filled()
                 } else {
                     Icon::triangle_down_20_filled()
                 };
-                let stream = SHCreateMemStream(Some(icon.svg.as_bytes()));
-                let doc = device_context5.CreateSvgDocument(
-                    stream.as_ref(),
-                    D2D_SIZE_F {
-                        width: icon.size as f32,
-                        height: icon.size as f32,
-                    },
-                )?;
-                *cell.borrow_mut() = Some(doc);
+                let factory = rt.GetFactory()?.cast::<ID2D1Factory1>()?;
+                let geometry = build_geometry(&factory, &icon)?;
+                *cell.borrow_mut() = Some(geometry);
             }
-            let svg = cell.borrow();
-            let svg = svg.as_ref().unwrap();
+            let geometry = cell.borrow();
+            let geometry = geometry.as_ref().unwrap();
 
-            // Tint to the current state colour.
-            let paint = svg.CreatePaint(D2D1_SVG_PAINT_TYPE_COLOR, Some(&glyph_color), w!(""))?;
-            svg.GetRoot()?
-                .GetFirstChild()?
-                .SetAttributeValue(w!("fill"), &paint.cast::<ID2D1SvgAttribute>()?)?;
+            // Tint to the current state colour (chosen at draw time).
+            let brush = rt.CreateSolidColorBrush(&glyph_color, None)?;
 
             // Scale the 20-viewBox glyph into GLYPH_W × GLYPH_H, centred in the button.
             let scale_x = GLYPH_W / 20.0;
             let scale_y = GLYPH_H / 20.0;
             let gx = (rect.left + rect.right) / 2.0 - GLYPH_W / 2.0;
             let gy = (rect.top + rect.bottom) / 2.0 - GLYPH_H / 2.0;
-            device_context5.SetTransform(&Matrix3x2 {
+            rt.SetTransform(&Matrix3x2 {
                 M11: scale_x,
                 M12: 0.0,
                 M21: 0.0,
@@ -389,8 +379,8 @@ impl VScroll {
                 M31: gx,
                 M32: gy,
             });
-            device_context5.DrawSvgDocument(svg);
-            device_context5.SetTransform(&Matrix3x2::identity());
+            rt.FillGeometry(geometry, &brush, None);
+            rt.SetTransform(&Matrix3x2::identity());
         }
         Ok(())
     }

@@ -4,7 +4,7 @@
 //! DIPs, scaled by the parent window's DPI at arrange time.
 
 use windows::Win32::Foundation::{HWND, RECT};
-use windows::Win32::UI::HiDpi::GetDpiForWindow;
+use crate::sys::dpi_for_window;
 use windows::Win32::UI::WindowsAndMessaging::{
     GetWindowRect, SWP_NOCOPYBITS, SWP_NOSIZE, SWP_NOZORDER, SetWindowPos, USER_DEFAULT_SCREEN_DPI,
 };
@@ -181,7 +181,7 @@ impl Stack {
     /// Position every control within `rect` (parent client-area px). `parent`
     /// supplies the DPI. Call from `WM_CREATE` and `WM_SIZE`.
     pub fn arrange(&self, parent: HWND, rect: RECT) -> Result<()> {
-        let scale = unsafe { GetDpiForWindow(parent) } as f32 / USER_DEFAULT_SCREEN_DPI as f32;
+        let scale = dpi_for_window(parent) as f32 / USER_DEFAULT_SCREEN_DPI as f32;
         self.arrange_scaled(rect, scale)
     }
 

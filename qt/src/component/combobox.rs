@@ -4,6 +4,7 @@ use std::sync::Once;
 use crate::component::input;
 use crate::component::option::Item;
 use crate::icon::Icon;
+use crate::icon::path::build_geometry;
 use crate::{QT, get_scaling_factor};
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Direct2D::Common::{
@@ -12,9 +13,8 @@ use windows::Win32::Graphics::Direct2D::Common::{
 use windows::Win32::Graphics::Direct2D::{
     D2D1_ANTIALIAS_MODE_ALIASED, D2D1_ARC_SEGMENT, D2D1_ARC_SIZE_SMALL, D2D1_DRAW_TEXT_OPTIONS_CLIP,
     D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_HWND_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_PROPERTIES,
-    D2D1_ROUNDED_RECT, D2D1_SVG_PAINT_TYPE_COLOR, D2D1_SWEEP_DIRECTION_COUNTER_CLOCKWISE,
-    ID2D1DeviceContext5, ID2D1Factory1, ID2D1HwndRenderTarget, ID2D1PathGeometry1,
-    ID2D1SvgAttribute, ID2D1SvgDocument,
+    D2D1_ROUNDED_RECT, D2D1_SWEEP_DIRECTION_COUNTER_CLOCKWISE, ID2D1Factory1, ID2D1HwndRenderTarget,
+    ID2D1PathGeometry1,
 };
 use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_HIT_TEST_METRICS,
@@ -33,19 +33,18 @@ use windows::Win32::System::DataExchange::{
 use windows::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock};
 use windows::Win32::System::Ole::CF_UNICODETEXT;
 use windows::Win32::UI::Animation::{
-    IUIAnimationManager2, IUIAnimationTimer, IUIAnimationTimerEventHandler,
+    IUIAnimationManager, IUIAnimationTimer, IUIAnimationTimerEventHandler,
     IUIAnimationTimerEventHandler_Impl, IUIAnimationTimerUpdateHandler,
-    IUIAnimationTransitionLibrary2, IUIAnimationVariable2, UI_ANIMATION_IDLE_BEHAVIOR_DISABLE,
-    UIAnimationManager2, UIAnimationTimer,
+    IUIAnimationTransitionFactory, IUIAnimationVariable, UI_ANIMATION_IDLE_BEHAVIOR_DISABLE,
+    UIAnimationManager, UIAnimationTimer,
 };
 use windows::Win32::UI::Controls::WM_MOUSELEAVE;
-use windows::Win32::UI::HiDpi::GetDpiForWindow;
+use crate::sys::dpi_for_window;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetKeyState, ReleaseCapture, SetCapture, SetFocus, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent,
     VIRTUAL_KEY, VK_A, VK_CONTROL, VK_DELETE, VK_DOWN, VK_END, VK_ESCAPE, VK_F4, VK_HOME, VK_LEFT,
     VK_RETURN, VK_RIGHT, VK_SHIFT, VK_UP,
 };
-use windows::Win32::UI::Shell::SHCreateMemStream;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::*;
 use windows_numerics::{Matrix3x2, Vector2};
@@ -132,11 +131,11 @@ struct Context {
     state: State,
     text_format: IDWriteTextFormat,
     render_target: ID2D1HwndRenderTarget,
-    chevron_svg: ID2D1SvgDocument,
-    animation_manager: IUIAnimationManager2,
+    chevron_geometry: ID2D1PathGeometry1,
+    animation_manager: IUIAnimationManager,
     animation_timer: IUIAnimationTimer,
-    transition_library: IUIAnimationTransitionLibrary2,
-    bottom_focus_border: IUIAnimationVariable2,
+    transition_factory: IUIAnimationTransitionFactory,
+    bottom_focus_border: IUIAnimationVariable,
     is_focused: bool,
     is_hovered: bool,
     // --- editor ---
@@ -234,16 +233,6 @@ impl QT {
 // Shared helpers (cloned from dropdown)
 // ---------------------------------------------------------------------------
 
-fn set_svg_color(svg: &ID2D1SvgDocument, color: &D2D1_COLOR_F) -> Result<()> {
-    unsafe {
-        let svg_paint = svg.CreatePaint(D2D1_SVG_PAINT_TYPE_COLOR, Some(color), w!(""))?;
-        svg.GetRoot()?
-            .GetFirstChild()?
-            .SetAttributeValue(w!("fill"), &svg_paint.cast::<ID2D1SvgAttribute>()?)?;
-    }
-    Ok(())
-}
-
 fn create_text_format(qt: &QT, font_size: f32) -> Result<IDWriteTextFormat> {
     let tokens = &qt.theme.tokens;
     unsafe {
@@ -306,11 +295,10 @@ fn field_width(state: &State) -> f32 {
 // ---------------------------------------------------------------------------
 
 fn on_create(window: HWND, state: State) -> Result<Context> {
-    let tokens = &state.qt.theme.tokens;
     let default_value = state.props.default_value;
     unsafe {
         let text_format = create_text_format(&state.qt, state.font_size())?;
-        let dpi = GetDpiForWindow(window);
+        let dpi = dpi_for_window(window);
         let render_target = state.qt.d2d_factory.CreateHwndRenderTarget(
             &D2D1_RENDER_TARGET_PROPERTIES {
                 dpiX: dpi as f32,
@@ -327,23 +315,16 @@ fn on_create(window: HWND, state: State) -> Result<Context> {
             },
         )?;
 
+        // Chevron is a filled geometry (Direct2D 1.0); its tint is applied at draw
+        // time via a brush, so we only build the shape here.
         let icon = Icon::chevron_down_20_regular();
-        let device_context5 = render_target.cast::<ID2D1DeviceContext5>()?;
-        let svg_stream = SHCreateMemStream(Some(icon.svg.as_bytes()));
-        let chevron_svg = device_context5.CreateSvgDocument(
-            svg_stream.as_ref(),
-            D2D_SIZE_F {
-                width: icon.size as f32,
-                height: icon.size as f32,
-            },
-        )?;
-        _ = set_svg_color(&chevron_svg, &tokens.color_neutral_stroke_accessible);
+        let chevron_geometry = build_geometry(&state.qt.d2d_factory, &icon)?;
 
         let animation_timer: IUIAnimationTimer =
             CoCreateInstance(&UIAnimationTimer, None, CLSCTX_INPROC_SERVER)?;
-        let transition_library = state.qt.transition_library.clone();
-        let animation_manager: IUIAnimationManager2 =
-            CoCreateInstance(&UIAnimationManager2, None, CLSCTX_INPROC_SERVER)?;
+        let transition_factory = state.qt.transition_factory.clone();
+        let animation_manager: IUIAnimationManager =
+            CoCreateInstance(&UIAnimationManager, None, CLSCTX_INPROC_SERVER)?;
         let timer_update_handler = animation_manager.cast::<IUIAnimationTimerUpdateHandler>()?;
         animation_timer
             .SetTimerUpdateHandler(&timer_update_handler, UI_ANIMATION_IDLE_BEHAVIOR_DISABLE)?;
@@ -362,10 +343,10 @@ fn on_create(window: HWND, state: State) -> Result<Context> {
             state,
             text_format,
             render_target,
-            chevron_svg,
+            chevron_geometry,
             animation_manager,
             animation_timer,
-            transition_library,
+            transition_factory,
             bottom_focus_border,
             is_focused: false,
             is_hovered: false,
@@ -404,13 +385,11 @@ impl IUIAnimationTimerEventHandler_Impl for AnimationTimerEventHandler_Impl {
 fn start_focus_animation(context: &mut Context) -> Result<()> {
     let tokens = &context.state.qt.theme.tokens;
     unsafe {
-        let transition = context.transition_library.CreateCubicBezierLinearTransition(
+        let transition = crate::anim::cubic_bezier_linear_transition(
+            &context.transition_factory,
             tokens.duration_normal,
             1.0,
-            tokens.curve_decelerate_mid[0],
-            tokens.curve_decelerate_mid[1],
-            tokens.curve_decelerate_mid[2],
-            tokens.curve_decelerate_mid[3],
+            tokens.curve_decelerate_mid,
         )?;
         let seconds_now = context.animation_timer.GetTime()?;
         context.bottom_focus_border = context.animation_manager.CreateAnimationVariable(0.0)?;
@@ -923,11 +902,14 @@ fn paint(window: HWND, context: &Context) -> Result<()> {
             }
         }
 
-        // Chevron.
-        let device_context5 = context.render_target.cast::<ID2D1DeviceContext5>()?;
+        // Chevron. The 20-viewBox glyph is drawn at its native size (scale 1.0),
+        // tinted with the constant neutral-accessible token.
         let chevron_x = width - pad - 20.0;
         let chevron_y = (height - 20.0) / 2.0;
-        device_context5.SetTransform(&Matrix3x2 {
+        let chevron_brush = context
+            .render_target
+            .CreateSolidColorBrush(&tokens.color_neutral_stroke_accessible, None)?;
+        context.render_target.SetTransform(&Matrix3x2 {
             M11: 1.0,
             M12: 0.0,
             M21: 0.0,
@@ -935,8 +917,10 @@ fn paint(window: HWND, context: &Context) -> Result<()> {
             M31: chevron_x,
             M32: chevron_y,
         });
-        device_context5.DrawSvgDocument(&context.chevron_svg);
-        device_context5.SetTransform(&Matrix3x2::identity());
+        context
+            .render_target
+            .FillGeometry(&context.chevron_geometry, &chevron_brush, None);
+        context.render_target.SetTransform(&Matrix3x2::identity());
     }
     Ok(())
 }
@@ -1077,7 +1061,7 @@ fn open_or_update_popup(window: HWND, context: &mut Context) {
                 );
                 let raw = GetWindowLongPtrW(popup, GWLP_USERDATA) as *mut PopupContext;
                 if !raw.is_null() {
-                    let popup_dpi = GetDpiForWindow(popup);
+                    let popup_dpi = dpi_for_window(popup);
                     (*raw).render_target.SetDpi(popup_dpi as f32, popup_dpi as f32);
                     _ = (*raw).render_target.Resize(&D2D_SIZE_U {
                         width: width_px as u32,
@@ -1324,7 +1308,7 @@ extern "system" fn field_proc(
             let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
             let context = &*raw;
             _ = layout(window, context);
-            let new_dpi = GetDpiForWindow(window);
+            let new_dpi = dpi_for_window(window);
             context.render_target.SetDpi(new_dpi as f32, new_dpi as f32);
             _ = InvalidateRect(Some(window), None, false);
             LRESULT(0)
@@ -1355,7 +1339,7 @@ fn popup_on_create(window: HWND, params: PopupParams) -> Result<PopupContext> {
     let tokens = &params.qt.theme.tokens;
     unsafe {
         let text_format = create_text_format(&params.qt, tokens.font_size_base300)?;
-        let dpi = GetDpiForWindow(window);
+        let dpi = dpi_for_window(window);
         let render_target = params.qt.d2d_factory.CreateHwndRenderTarget(
             &D2D1_RENDER_TARGET_PROPERTIES {
                 dpiX: dpi as f32,

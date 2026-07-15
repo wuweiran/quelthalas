@@ -4,18 +4,18 @@ use std::rc::Rc;
 use std::sync::Once;
 
 use crate::icon::Icon;
+use crate::icon::path::build_geometry;
 use crate::{QT, get_scaling_factor};
 use windows::Win32::Foundation::{
     COLORREF, ERROR_INVALID_WINDOW_HANDLE, FALSE, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT,
     TRUE, WPARAM,
 };
 use windows::Win32::Graphics::Direct2D::Common::{
-    D2D_RECT_F, D2D_SIZE_F, D2D_SIZE_U, D2D1_COLOR_F,
+    D2D_RECT_F, D2D_SIZE_U, D2D1_COLOR_F,
 };
 use windows::Win32::Graphics::Direct2D::{
     D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_HWND_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_PROPERTIES,
-    D2D1_ROUNDED_RECT, D2D1_SVG_PAINT_TYPE_COLOR, ID2D1DeviceContext5, ID2D1HwndRenderTarget,
-    ID2D1SolidColorBrush, ID2D1SvgAttribute, ID2D1SvgDocument,
+    D2D1_ROUNDED_RECT, ID2D1HwndRenderTarget, ID2D1PathGeometry1, ID2D1SolidColorBrush,
 };
 use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_MEASURING_MODE_NATURAL,
@@ -27,12 +27,11 @@ use windows::Win32::Graphics::Gdi::{
     MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromPoint, OffsetRect, PAINTSTRUCT, PtInRect,
     RDW_INVALIDATE, RDW_NOCHILDREN, RedrawWindow, SetRect, SetRectEmpty, SetWindowRgn,
 };
-use windows::Win32::UI::HiDpi::GetDpiForWindow;
+use crate::sys::dpi_for_window;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     ReleaseCapture, SetCapture, VIRTUAL_KEY, VK_DOWN, VK_END, VK_ESCAPE, VK_F10, VK_HOME, VK_LEFT,
     VK_MENU, VK_RIGHT, VK_UP,
 };
-use windows::Win32::UI::Shell::SHCreateMemStream;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::*;
 use windows_numerics::{Matrix3x2, Vector2};
@@ -117,13 +116,14 @@ pub struct Context {
     text_disabled_brush: ID2D1SolidColorBrush,
     secondary_text_format: IDWriteTextFormat,
     secondary_text_brush: ID2D1SolidColorBrush,
-    sub_menu_indicator_svg: ID2D1SvgDocument,
-    sub_menu_indicator_focused_svg: ID2D1SvgDocument,
+    sub_menu_indicator_geometry: ID2D1PathGeometry1,
+    sub_menu_indicator_focused_geometry: ID2D1PathGeometry1,
     /// Leading checkmark for a checked `MenuItemRadio`.
-    checkmark_svg: ID2D1SvgDocument,
-    /// Per-item leading icon SVG (parallel to `menu.items`; `None` where the item
-    /// has no icon or isn't an item/radio). Built once in `on_create`.
-    item_icon_svgs: Vec<Option<ID2D1SvgDocument>>,
+    checkmark_geometry: ID2D1PathGeometry1,
+    /// Per-item leading icon geometry (parallel to `menu.items`; `None` where the item
+    /// has no icon or isn't an item/radio). Built once in `on_create`. The paired
+    /// `f32` is the glyph's native pixel size (the scale divisor at draw time).
+    item_icon_geometries: Vec<Option<(ID2D1PathGeometry1, f32)>>,
     fade_elapsed_ms: Cell<u32>,
 }
 
@@ -186,36 +186,6 @@ fn convert_menu_info_list_to_menu(menu_info_list: Vec<MenuInfo>) -> Menu {
 }
 
 const CLASS_NAME: PCWSTR = w!("QT_MENU");
-
-fn set_svg_color(svg: &ID2D1SvgDocument, color: &D2D1_COLOR_F) -> Result<()> {
-    unsafe {
-        let svg_paint = svg.CreatePaint(D2D1_SVG_PAINT_TYPE_COLOR, Some(color), w!(""))?;
-        svg.GetRoot()?
-            .GetFirstChild()?
-            .SetAttributeValue(w!("fill"), &svg_paint.cast::<ID2D1SvgAttribute>()?)?;
-    }
-    Ok(())
-}
-
-/// Build a tinted `ID2D1SvgDocument` for `icon` at its native viewBox size.
-fn create_icon_svg(
-    device_context5: &ID2D1DeviceContext5,
-    icon: &Icon,
-    color: &D2D1_COLOR_F,
-) -> Result<ID2D1SvgDocument> {
-    let size = D2D_SIZE_F {
-        width: icon.size as f32,
-        height: icon.size as f32,
-    };
-    let svg = unsafe {
-        match SHCreateMemStream(Some(icon.svg.as_bytes())) {
-            None => device_context5.CreateSvgDocument(None, size)?,
-            Some(stream) => device_context5.CreateSvgDocument(&stream, size)?,
-        }
-    };
-    _ = set_svg_color(&svg, color);
-    Ok(svg)
-}
 
 
 #[derive(Default)]
@@ -1420,22 +1390,21 @@ fn show_popup(
 
 /// Draw a menu item's leading icon at `icon_x`, tinted `color`, scaled to
 /// `MENU_ICON_SIZE` and vertically centered between `top` and `bottom` (item rect
-/// bounds, device px).
+/// bounds, device px). `native` is the glyph's native pixel size (scale divisor).
 fn draw_menu_icon(
     context: &Context,
-    svg: &ID2D1SvgDocument,
+    geometry: &ID2D1PathGeometry1,
+    native: f32,
     color: &D2D1_COLOR_F,
     icon_x: f32,
     top: i32,
     bottom: i32,
 ) -> Result<()> {
-    _ = set_svg_color(svg, color);
     unsafe {
-        let dc5 = context.render_target.cast::<ID2D1DeviceContext5>()?;
-        let vp = svg.GetViewportSize();
-        let scale = MENU_ICON_SIZE as f32 / vp.width;
+        let brush = context.render_target.CreateSolidColorBrush(color, None)?;
+        let scale = MENU_ICON_SIZE as f32 / native;
         let icon_y = top as f32 + ((bottom - top) as f32 - MENU_ICON_SIZE as f32) / 2.0;
-        dc5.SetTransform(&Matrix3x2 {
+        context.render_target.SetTransform(&Matrix3x2 {
             M11: scale,
             M12: 0.0,
             M21: 0.0,
@@ -1443,8 +1412,10 @@ fn draw_menu_icon(
             M31: icon_x,
             M32: icon_y,
         });
-        dc5.DrawSvgDocument(svg);
-        dc5.SetTransform(&Matrix3x2::identity());
+        context
+            .render_target
+            .FillGeometry(geometry, &brush, None);
+        context.render_target.SetTransform(&Matrix3x2::identity());
     }
     Ok(())
 }
@@ -1455,7 +1426,7 @@ fn draw_menu_item(
     context: &Context,
     focused: bool,
     pressed: bool,
-    icon_svg: Option<&ID2D1SvgDocument>,
+    icon_geometry: Option<&(ID2D1PathGeometry1, f32)>,
 ) -> Result<()> {
     let tokens = &context.qt.theme.tokens;
     let rect = match menu_item {
@@ -1538,9 +1509,9 @@ fn draw_menu_item(
                 let nudge = tokens.spacing_vertical_s_nudge;
                 // Leading icon (drawn 20×20, vertically centered); the label shifts
                 // right past it when present.
-                let text_left = if let Some(svg) = icon_svg {
+                let text_left = if let Some((geometry, native)) = icon_geometry {
                     let icon_x = rect.left as f32 + nudge;
-                    draw_menu_icon(context, svg, icon_color(*disabled), icon_x, rect.top, rect.bottom)?;
+                    draw_menu_icon(context, geometry, *native, icon_color(*disabled), icon_x, rect.top, rect.bottom)?;
                     icon_x + MENU_ICON_GUTTER as f32
                 } else {
                     rect.left as f32 + nudge
@@ -1588,10 +1559,10 @@ fn draw_menu_item(
                 // With an icon the row is: checkmark · 4px · icon · 4px · text.
                 let nudge = tokens.spacing_vertical_s_nudge;
                 let check_x = rect.left as f32 + nudge;
-                let text_left = if icon_svg.is_some() {
+                let text_left = if icon_geometry.is_some() {
                     let icon_x = check_x + (CHECK_SIZE + MENU_ICON_GAP) as f32;
-                    if let Some(svg) = icon_svg {
-                        draw_menu_icon(context, svg, icon_color(*disabled), icon_x, rect.top, rect.bottom)?;
+                    if let Some((geometry, native)) = icon_geometry {
+                        draw_menu_icon(context, geometry, *native, icon_color(*disabled), icon_x, rect.top, rect.bottom)?;
                     }
                     icon_x + MENU_ICON_GUTTER as f32
                 } else {
@@ -1628,13 +1599,17 @@ fn draw_menu_item(
                     );
                 }
                 if *checked {
-                    // Checkmark in the gutter, vertically centered — 20px source SVG
+                    // Checkmark in the gutter, vertically centered — 20px source glyph
                     // scaled to CHECK_SIZE, exactly like the dropdown's check column.
+                    // Tint matches the SVG's baked color (neutral foreground2), constant
+                    // regardless of item state.
                     let check_y =
                         rect.top as f32 + ((rect.bottom - rect.top - CHECK_SIZE) as f32 / 2.0);
                     let scale = CHECK_SIZE as f32 / 20.0;
-                    let device_context5 = context.render_target.cast::<ID2D1DeviceContext5>()?;
-                    device_context5.SetTransform(&Matrix3x2 {
+                    let check_brush = context
+                        .render_target
+                        .CreateSolidColorBrush(&tokens.color_neutral_foreground2, None)?;
+                    context.render_target.SetTransform(&Matrix3x2 {
                         M11: scale,
                         M12: 0.0,
                         M21: 0.0,
@@ -1642,8 +1617,10 @@ fn draw_menu_item(
                         M31: check_x,
                         M32: check_y,
                     });
-                    device_context5.DrawSvgDocument(&context.checkmark_svg);
-                    device_context5.SetTransform(&Matrix3x2::identity());
+                    context
+                        .render_target
+                        .FillGeometry(&context.checkmark_geometry, &check_brush, None);
+                    context.render_target.SetTransform(&Matrix3x2::identity());
                 }
             }
             MenuItem::SubMenu { text, .. } => {
@@ -1661,18 +1638,22 @@ fn draw_menu_item(
                     D2D1_DRAW_TEXT_OPTIONS_NONE,
                     DWRITE_MEASURING_MODE_NATURAL,
                 );
-                let device_context5 = context.render_target.cast::<ID2D1DeviceContext5>()?;
-                device_context5.SetTransform(&Matrix3x2::translation(
+                let chevron_brush = context
+                    .render_target
+                    .CreateSolidColorBrush(&tokens.color_neutral_foreground2, None)?;
+                context.render_target.SetTransform(&Matrix3x2::translation(
                     rect.right as f32 - tokens.spacing_vertical_s_nudge - 4f32 - 20f32,
                     rect.top as f32 + tokens.spacing_vertical_s_nudge,
                 ));
-                let svg = if focused {
-                    &context.sub_menu_indicator_focused_svg
+                let geometry = if focused {
+                    &context.sub_menu_indicator_focused_geometry
                 } else {
-                    &context.sub_menu_indicator_svg
+                    &context.sub_menu_indicator_geometry
                 };
-                device_context5.DrawSvgDocument(svg);
-                device_context5.SetTransform(&Matrix3x2::identity());
+                context
+                    .render_target
+                    .FillGeometry(geometry, &chevron_brush, None);
+                context.render_target.SetTransform(&Matrix3x2::identity());
             }
             MenuItem::MenuDivider { .. } => {
                 let start = Vector2 {
@@ -1714,14 +1695,17 @@ fn draw_popup_menu(window: HWND, context: &Context) -> Result<()> {
     }
     let menu = context.menu.borrow();
     for (index, item) in menu.items.iter().enumerate() {
-        let icon_svg = context.item_icon_svgs.get(index).and_then(|o| o.as_ref());
+        let icon_geometry = context
+            .item_icon_geometries
+            .get(index)
+            .and_then(|o| o.as_ref());
         draw_menu_item(
             &menu,
             item,
             context,
             Some(index) == menu.focused_item_index,
             Some(index) == menu.pressed_item_index,
-            icon_svg,
+            icon_geometry,
         )?;
     }
     if menu.is_scrolling {
@@ -1751,7 +1735,7 @@ fn on_create(window: HWND, params: CreateParams, x: i32, y: i32) -> Result<Conte
     unsafe {
         let mut client_rect = RECT::default();
         GetClientRect(window, &mut client_rect)?;
-        let dpi = GetDpiForWindow(window);
+        let dpi = dpi_for_window(window);
         let factory = &params.qt.d2d_factory;
         let render_target = factory.CreateHwndRenderTarget(
             &D2D1_RENDER_TARGET_PROPERTIES {
@@ -1792,70 +1776,20 @@ fn on_create(window: HWND, params: CreateParams, x: i32, y: i32) -> Result<Conte
         secondary_text_format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
         let secondary_text_brush =
             render_target.CreateSolidColorBrush(&tokens.color_neutral_foreground3, None)?;
-        let device_context5 = render_target.cast::<ID2D1DeviceContext5>()?;
+        // Icon glyphs are filled path geometries (Direct2D 1.0); their tint is chosen
+        // at draw time via a brush, so we only build the shapes here.
         let sub_menu_indicator_icon = Icon::chevron_right_20_regular();
-        let sub_menu_indicator_svg =
-            match SHCreateMemStream(Some(sub_menu_indicator_icon.svg.as_bytes())) {
-                None => device_context5.CreateSvgDocument(
-                    None,
-                    D2D_SIZE_F {
-                        width: sub_menu_indicator_icon.size as f32,
-                        height: sub_menu_indicator_icon.size as f32,
-                    },
-                )?,
-                Some(svg_stream) => device_context5.CreateSvgDocument(
-                    &svg_stream,
-                    D2D_SIZE_F {
-                        width: sub_menu_indicator_icon.size as f32,
-                        height: sub_menu_indicator_icon.size as f32,
-                    },
-                )?,
-            };
-        _ = set_svg_color(&sub_menu_indicator_svg, &tokens.color_neutral_foreground2);
+        let sub_menu_indicator_geometry = build_geometry(factory, &sub_menu_indicator_icon)?;
         let sub_menu_indicator_focused_icon = Icon::chevron_right_20_filled();
-        let sub_menu_indicator_focused_svg =
-            match SHCreateMemStream(Some(sub_menu_indicator_focused_icon.svg.as_bytes())) {
-                None => device_context5.CreateSvgDocument(
-                    None,
-                    D2D_SIZE_F {
-                        width: sub_menu_indicator_focused_icon.size as f32,
-                        height: sub_menu_indicator_focused_icon.size as f32,
-                    },
-                )?,
-                Some(svg_stream) => device_context5.CreateSvgDocument(
-                    &svg_stream,
-                    D2D_SIZE_F {
-                        width: sub_menu_indicator_focused_icon.size as f32,
-                        height: sub_menu_indicator_focused_icon.size as f32,
-                    },
-                )?,
-            };
-        _ = set_svg_color(
-            &sub_menu_indicator_focused_svg,
-            &tokens.color_neutral_foreground2,
-        );
+        let sub_menu_indicator_focused_geometry =
+            build_geometry(factory, &sub_menu_indicator_focused_icon)?;
         // Leading checkmark for checked radio items — same glyph the dropdown uses.
         let checkmark_icon = Icon::checkmark_20_filled();
-        let checkmark_svg = match SHCreateMemStream(Some(checkmark_icon.svg.as_bytes())) {
-            None => device_context5.CreateSvgDocument(
-                None,
-                D2D_SIZE_F {
-                    width: checkmark_icon.size as f32,
-                    height: checkmark_icon.size as f32,
-                },
-            )?,
-            Some(svg_stream) => device_context5.CreateSvgDocument(
-                &svg_stream,
-                D2D_SIZE_F {
-                    width: checkmark_icon.size as f32,
-                    height: checkmark_icon.size as f32,
-                },
-            )?,
-        };
-        _ = set_svg_color(&checkmark_svg, &tokens.color_neutral_foreground2);
+        let checkmark_geometry = build_geometry(factory, &checkmark_icon)?;
 
-        // Per-item leading icons (parallel to menu.items), tinted like the text.
-        let item_icon_svgs: Vec<Option<ID2D1SvgDocument>> = {
+        // Per-item leading icon geometries (parallel to menu.items), each paired with
+        // its native pixel size (the scale divisor at draw time).
+        let item_icon_geometries: Vec<Option<(ID2D1PathGeometry1, f32)>> = {
             let menu = params.menu.borrow();
             menu.items
                 .iter()
@@ -1866,7 +1800,7 @@ fn on_create(window: HWND, params: CreateParams, x: i32, y: i32) -> Result<Conte
                         _ => None,
                     };
                     icon.and_then(|ic| {
-                        create_icon_svg(&device_context5, ic, &tokens.color_neutral_foreground2).ok()
+                        build_geometry(factory, ic).ok().map(|g| (g, ic.size as f32))
                     })
                 })
                 .collect()
@@ -1884,10 +1818,10 @@ fn on_create(window: HWND, params: CreateParams, x: i32, y: i32) -> Result<Conte
             text_disabled_brush,
             secondary_text_format,
             secondary_text_brush,
-            sub_menu_indicator_svg,
-            sub_menu_indicator_focused_svg,
-            checkmark_svg,
-            item_icon_svgs,
+            sub_menu_indicator_geometry,
+            sub_menu_indicator_focused_geometry,
+            checkmark_geometry,
+            item_icon_geometries,
             fade_elapsed_ms: Cell::new(0),
         })
     }

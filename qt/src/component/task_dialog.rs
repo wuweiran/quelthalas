@@ -12,12 +12,11 @@ use std::sync::Once;
 
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Direct2D::Common::{
-    D2D_RECT_F, D2D_SIZE_F, D2D_SIZE_U, D2D1_COLOR_F,
+    D2D_RECT_F, D2D_SIZE_U, D2D1_COLOR_F,
 };
 use windows::Win32::Graphics::Direct2D::{
     D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_HWND_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_PROPERTIES,
-    D2D1_ROUNDED_RECT, D2D1_SVG_PAINT_TYPE_COLOR, ID2D1DeviceContext5, ID2D1HwndRenderTarget,
-    ID2D1SvgAttribute, ID2D1SvgDocument,
+    D2D1_ROUNDED_RECT, ID2D1HwndRenderTarget, ID2D1PathGeometry1,
 };
 use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_MEASURING_MODE_NATURAL,
@@ -26,19 +25,19 @@ use windows::Win32::Graphics::DirectWrite::{
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, EndPaint, InvalidateRect, PAINTSTRUCT, ScreenToClient,
 };
-use windows::Win32::UI::HiDpi::{AdjustWindowRectExForDpi, GetDpiForWindow};
 use windows::Win32::UI::Controls::WM_MOUSELEAVE;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     EnableWindow, GetCapture, ReleaseCapture, SetActiveWindow, SetCapture, TrackMouseEvent,
     TME_LEAVE, TRACKMOUSEEVENT,
 };
-use windows::Win32::UI::Shell::SHCreateMemStream;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::*;
 use windows_numerics::Matrix3x2;
 
 use crate::component::{button, checkbox};
 use crate::icon::Icon as SvgIcon;
+use crate::icon::path::build_geometry;
+use crate::sys::{adjust_window_rect_ex_for_dpi, dpi_for_window};
 use crate::{MouseEvent, QT, get_scaling_factor};
 
 // --- layout constants (DIPs) ---
@@ -147,8 +146,8 @@ struct Context {
     content_format: IDWriteTextFormat,
     link_text_format: IDWriteTextFormat,
     link_note_format: IDWriteTextFormat,
-    icon_svg: Option<ID2D1SvgDocument>,
-    chevron_svg: Option<ID2D1SvgDocument>,
+    icon_geometry: Option<ID2D1PathGeometry1>,
+    chevron_geometry: Option<ID2D1PathGeometry1>,
     buttons: Vec<(HWND, i32)>, // (hwnd, result id)
     // Owned button-label buffers the child buttons' `PCWSTR`s point into; kept
     // alive for the dialog's lifetime (the buttons read them live, never copy).
@@ -236,27 +235,6 @@ impl QT {
     }
 }
 
-fn make_svg(rt: &ID2D1HwndRenderTarget, icon: SvgIcon, color: &D2D1_COLOR_F) -> Option<ID2D1SvgDocument> {
-    unsafe {
-        let stream = SHCreateMemStream(Some(icon.svg.as_bytes()))?;
-        let dc5 = rt.cast::<ID2D1DeviceContext5>().ok()?;
-        let svg = dc5
-            .CreateSvgDocument(
-                &stream,
-                D2D_SIZE_F { width: icon.size as f32, height: icon.size as f32 },
-            )
-            .ok()?;
-        if let Ok(paint) = svg.CreatePaint(D2D1_SVG_PAINT_TYPE_COLOR, Some(color), w!("")) {
-            if let (Ok(root), Ok(attr)) = (svg.GetRoot(), paint.cast::<ID2D1SvgAttribute>()) {
-                if let Ok(child) = root.GetFirstChild() {
-                    _ = child.SetAttributeValue(w!("fill"), &attr);
-                }
-            }
-        }
-        Some(svg)
-    }
-}
-
 fn intent_color(state: &State) -> D2D1_COLOR_F {
     let tokens = &state.qt.theme.tokens;
     match state.props.intent {
@@ -288,7 +266,7 @@ fn on_create(window: HWND, state: State) -> Result<Context> {
         )?;
         let link_note_format = qt.theme.typography_styles.caption1.create_text_format(dwrite)?;
 
-        let dpi = GetDpiForWindow(window);
+        let dpi = dpi_for_window(window);
         let render_target = qt.d2d_factory.CreateHwndRenderTarget(
             &D2D1_RENDER_TARGET_PROPERTIES {
                 dpiX: dpi as f32,
@@ -302,21 +280,19 @@ fn on_create(window: HWND, state: State) -> Result<Context> {
             },
         )?;
 
-        let icon_svg = match state.props.intent {
+        // Icon glyphs are filled path geometries (Direct2D 1.0); the tint is chosen
+        // at draw time via a brush, so we only build the shapes here.
+        let icon_geometry = match state.props.intent {
             Intent::None => None,
-            Intent::Info => make_svg(&render_target, SvgIcon::info_20_filled(), &intent_color(&state)),
-            Intent::Warning => make_svg(&render_target, SvgIcon::warning_20_filled(), &intent_color(&state)),
-            Intent::Error => make_svg(&render_target, SvgIcon::diamond_dismiss_20_filled(), &intent_color(&state)),
-            Intent::Success => make_svg(&render_target, SvgIcon::checkmark_circle_20_filled(), &intent_color(&state)),
+            Intent::Info => build_geometry(&qt.d2d_factory, &SvgIcon::info_20_filled()).ok(),
+            Intent::Warning => build_geometry(&qt.d2d_factory, &SvgIcon::warning_20_filled()).ok(),
+            Intent::Error => build_geometry(&qt.d2d_factory, &SvgIcon::diamond_dismiss_20_filled()).ok(),
+            Intent::Success => build_geometry(&qt.d2d_factory, &SvgIcon::checkmark_circle_20_filled()).ok(),
         };
-        let chevron_svg = if state.props.command_links.is_empty() {
+        let chevron_geometry = if state.props.command_links.is_empty() {
             None
         } else {
-            make_svg(
-                &render_target,
-                SvgIcon::chevron_right_20_regular(),
-                &qt.theme.tokens.color_neutral_foreground2,
-            )
+            build_geometry(&qt.d2d_factory, &SvgIcon::chevron_right_20_regular()).ok()
         };
 
         // Common buttons — first Primary, rest Secondary. Empty → single OK.
@@ -387,8 +363,8 @@ fn on_create(window: HWND, state: State) -> Result<Context> {
             content_format,
             link_text_format,
             link_note_format,
-            icon_svg,
-            chevron_svg,
+            icon_geometry,
+            chevron_geometry,
             buttons,
             _button_labels: button_labels,
             checkbox,
@@ -508,12 +484,12 @@ fn layout(window: HWND, context: &Context) -> Result<()> {
 
         // Size + center over owner (dialog.rs pattern).
         let mut rect = RECT { left: 0, top: 0, right: scaled_width, bottom: scaled_height };
-        AdjustWindowRectExForDpi(
+        adjust_window_rect_ex_for_dpi(
             &mut rect,
             WINDOW_STYLE(GetWindowLongPtrW(window, GWL_STYLE) as u32),
             false,
             WINDOW_EX_STYLE(GetWindowLongPtrW(window, GWL_EXSTYLE) as u32),
-            GetDpiForWindow(window),
+            dpi_for_window(window),
         )?;
         let win_w = rect.right - rect.left;
         let win_h = rect.bottom - rect.top;
@@ -559,11 +535,12 @@ fn paint(context: &Context) -> Result<()> {
         let rt = &context.render_target;
         let text_brush = rt.CreateSolidColorBrush(&tokens.color_neutral_foreground1, None)?;
 
-        // Status icon (top-left, aligned with the instruction).
-        if let Some(svg) = &context.icon_svg {
-            let dc5 = rt.cast::<ID2D1DeviceContext5>()?;
+        // Status icon (top-left, aligned with the instruction). Tint = the intent
+        // colour the SVG baked in.
+        if let Some(geometry) = &context.icon_geometry {
+            let icon_brush = rt.CreateSolidColorBrush(&intent_color(state), None)?;
             let s = ICON_SIZE / 20.0;
-            dc5.SetTransform(&Matrix3x2 {
+            rt.SetTransform(&Matrix3x2 {
                 M11: s,
                 M12: 0.0,
                 M21: 0.0,
@@ -571,8 +548,8 @@ fn paint(context: &Context) -> Result<()> {
                 M31: PAD,
                 M32: g.instruction_top,
             });
-            dc5.DrawSvgDocument(svg);
-            dc5.SetTransform(&Matrix3x2::identity());
+            rt.FillGeometry(geometry, &icon_brush, None);
+            rt.SetTransform(&Matrix3x2::identity());
         }
 
         // Instruction.
@@ -677,13 +654,14 @@ fn paint(context: &Context) -> Result<()> {
                     DWRITE_MEASURING_MODE_NATURAL,
                 );
             }
-            // Chevron, right-centered.
-            if let Some(chevron) = &context.chevron_svg {
-                let dc5 = rt.cast::<ID2D1DeviceContext5>()?;
+            // Chevron, right-centered. Tint = the neutral foreground2 the SVG baked in.
+            if let Some(chevron) = &context.chevron_geometry {
+                let chevron_brush =
+                    rt.CreateSolidColorBrush(&tokens.color_neutral_foreground2, None)?;
                 let s = LINK_CHEVRON / 20.0;
                 let gx = r.right - LINK_PAD - LINK_CHEVRON;
                 let gy = (r.top + r.bottom) / 2.0 - LINK_CHEVRON / 2.0;
-                dc5.SetTransform(&Matrix3x2 {
+                rt.SetTransform(&Matrix3x2 {
                     M11: s,
                     M12: 0.0,
                     M21: 0.0,
@@ -691,8 +669,8 @@ fn paint(context: &Context) -> Result<()> {
                     M31: gx,
                     M32: gy,
                 });
-                dc5.DrawSvgDocument(chevron);
-                dc5.SetTransform(&Matrix3x2::identity());
+                rt.FillGeometry(chevron, &chevron_brush, None);
+                rt.SetTransform(&Matrix3x2::identity());
             }
         }
     }

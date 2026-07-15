@@ -14,12 +14,12 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
 use windows::Win32::UI::Animation::{
-    IUIAnimationManager2, IUIAnimationTimer, IUIAnimationTimerEventHandler,
+    IUIAnimationManager, IUIAnimationTimer, IUIAnimationTimerEventHandler,
     IUIAnimationTimerEventHandler_Impl, IUIAnimationTimerUpdateHandler,
-    IUIAnimationTransitionLibrary2, IUIAnimationVariable2, UI_ANIMATION_IDLE_BEHAVIOR_DISABLE,
-    UI_ANIMATION_MANAGER_IDLE, UIAnimationManager2, UIAnimationTimer,
+    IUIAnimationTransitionLibrary, IUIAnimationVariable, UI_ANIMATION_IDLE_BEHAVIOR_DISABLE,
+    UI_ANIMATION_MANAGER_IDLE, UIAnimationManager, UIAnimationTimer,
 };
-use windows::Win32::UI::HiDpi::GetDpiForWindow;
+use crate::sys::dpi_for_window;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::*;
 use windows_numerics::Vector2;
@@ -77,11 +77,11 @@ impl State {
 pub struct Context {
     state: State,
     render_target: ID2D1HwndRenderTarget,
-    animation_manager: IUIAnimationManager2,
+    animation_manager: IUIAnimationManager,
     animation_timer: IUIAnimationTimer,
-    transition_library: IUIAnimationTransitionLibrary2,
+    transition_library: IUIAnimationTransitionLibrary,
     indeterminate_stop_collection: ID2D1GradientStopCollection,
-    indeterminate_left: IUIAnimationVariable2,
+    indeterminate_left: IUIAnimationVariable,
 }
 
 impl QT {
@@ -179,7 +179,7 @@ fn on_create(window: HWND, state: State) -> Result<Context> {
         let factory = &state.qt.d2d_factory;
         let mut rect = RECT::default();
         GetClientRect(window, &mut rect)?;
-        let dpi = GetDpiForWindow(window);
+        let dpi = dpi_for_window(window);
         let render_target = factory.CreateHwndRenderTarget(
             &D2D1_RENDER_TARGET_PROPERTIES {
                 dpiX: dpi as f32,
@@ -218,8 +218,8 @@ fn on_create(window: HWND, state: State) -> Result<Context> {
         let animation_timer: IUIAnimationTimer =
             CoCreateInstance(&UIAnimationTimer, None, CLSCTX_INPROC_SERVER)?;
         let transition_library = state.qt.transition_library.clone();
-        let animation_manager: IUIAnimationManager2 =
-            CoCreateInstance(&UIAnimationManager2, None, CLSCTX_INPROC_SERVER)?;
+        let animation_manager: IUIAnimationManager =
+            CoCreateInstance(&UIAnimationManager, None, CLSCTX_INPROC_SERVER)?;
         let timer_update_handler = animation_manager.cast::<IUIAnimationTimerUpdateHandler>()?;
         animation_timer
             .SetTimerUpdateHandler(&timer_update_handler, UI_ANIMATION_IDLE_BEHAVIOR_DISABLE)?;
@@ -366,7 +366,7 @@ fn on_dpi_changed(window: HWND, context: &Context) -> Result<()> {
             width: scaled_width as u32,
             height: scaled_height as u32,
         })?;
-        let new_dpi = GetDpiForWindow(window);
+        let new_dpi = dpi_for_window(window);
         context.render_target.SetDpi(new_dpi as f32, new_dpi as f32);
         let _ = InvalidateRect(Some(window), None, false);
 

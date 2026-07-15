@@ -39,6 +39,8 @@ pub mod triangle_down;
 pub mod triangle_up;
 pub mod warning;
 
+pub(crate) mod path;
+
 #[derive(Copy, Clone)]
 pub struct Icon {
     pub(crate) svg: PCSTR,

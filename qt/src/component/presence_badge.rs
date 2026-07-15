@@ -13,20 +13,19 @@ use std::mem::size_of;
 use std::sync::Once;
 
 use windows::Win32::Foundation::*;
-use windows::Win32::Graphics::Direct2D::Common::{D2D_SIZE_F, D2D_SIZE_U, D2D1_COLOR_F};
+use windows::Win32::Graphics::Direct2D::Common::{D2D_SIZE_U, D2D1_COLOR_F};
 use windows::Win32::Graphics::Direct2D::{
     D2D1_ELLIPSE, D2D1_HWND_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_PROPERTIES,
-    D2D1_SVG_PAINT_TYPE_COLOR, ID2D1DeviceContext5, ID2D1HwndRenderTarget, ID2D1SvgAttribute,
-    ID2D1SvgDocument,
+    ID2D1HwndRenderTarget, ID2D1PathGeometry1,
 };
 use windows::Win32::Graphics::Gdi::{BeginPaint, EndPaint, InvalidateRect, PAINTSTRUCT};
-use windows::Win32::UI::HiDpi::GetDpiForWindow;
-use windows::Win32::UI::Shell::SHCreateMemStream;
+use crate::sys::dpi_for_window;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::*;
 use windows_numerics::{Matrix3x2, Vector2};
 
 use crate::icon::Icon;
+use crate::icon::path::build_geometry;
 use crate::theme::Tokens;
 use crate::{QT, get_scaling_factor};
 
@@ -144,47 +143,28 @@ pub(crate) fn status_color(status: Status, tokens: &Tokens) -> D2D1_COLOR_F {
     }
 }
 
-/// Per-status glyph SVGs, pre-tinted to their status color. Built once per render
-/// target (glyph color is baked in, so rebuild on theme change).
+/// Per-status glyph geometries paired with their status color. Built once per render
+/// target; the tint is applied at draw time via a brush (rebuild on theme change to
+/// refresh the colors).
 pub(crate) struct PresenceResources {
-    svgs: HashMap<Status, Option<ID2D1SvgDocument>>,
+    /// Each entry: the glyph geometry (in its native art coordinate space) and the
+    /// status color to fill it with.
+    glyphs: HashMap<Status, (Option<ID2D1PathGeometry1>, D2D1_COLOR_F)>,
+    /// Native art size the glyphs were built at (10/12/16/20 px) — the scale divisor.
+    art_px: u32,
 }
 
 impl PresenceResources {
     /// Build the glyph set at a single native art size (10/12/16/20 px). The badge
     /// draws its native asset scaled 1:1 (or near it), so strokes match Fluent.
-    pub(crate) fn new(qt: &QT, render_target: &ID2D1HwndRenderTarget, art_px: u32) -> Self {
-        let mut svgs = HashMap::new();
-        if let Ok(dc5) = render_target.cast::<ID2D1DeviceContext5>() {
-            for status in Status::all() {
-                let color = status_color(status, &qt.theme.tokens);
-                svgs.insert(status, make_svg(&dc5, &status.icon(art_px), &color));
-            }
+    pub(crate) fn new(qt: &QT, _render_target: &ID2D1HwndRenderTarget, art_px: u32) -> Self {
+        let mut glyphs = HashMap::new();
+        for status in Status::all() {
+            let color = status_color(status, &qt.theme.tokens);
+            let geometry = build_geometry(&qt.d2d_factory, &status.icon(art_px)).ok();
+            glyphs.insert(status, (geometry, color));
         }
-        PresenceResources { svgs }
-    }
-}
-
-fn set_svg_color(svg: &ID2D1SvgDocument, color: &D2D1_COLOR_F) {
-    unsafe {
-        if let Ok(paint) = svg.CreatePaint(D2D1_SVG_PAINT_TYPE_COLOR, Some(color), w!("")) {
-            if let (Ok(root), Ok(attr)) = (svg.GetRoot(), paint.cast::<ID2D1SvgAttribute>()) {
-                if let Ok(child) = root.GetFirstChild() {
-                    _ = child.SetAttributeValue(w!("fill"), &attr);
-                }
-            }
-        }
-    }
-}
-
-fn make_svg(dc5: &ID2D1DeviceContext5, icon: &Icon, color: &D2D1_COLOR_F) -> Option<ID2D1SvgDocument> {
-    unsafe {
-        let stream = SHCreateMemStream(Some(icon.svg.as_bytes()))?;
-        let svg = dc5
-            .CreateSvgDocument(&stream, D2D_SIZE_F { width: icon.size as f32, height: icon.size as f32 })
-            .ok()?;
-        set_svg_color(&svg, color);
-        Some(svg)
+        PresenceResources { glyphs, art_px }
     }
 }
 
@@ -207,16 +187,15 @@ pub(crate) fn draw_presence(
             &D2D1_ELLIPSE { point: center, radiusX: ring / 2.0, radiusY: ring / 2.0 },
             &ring_brush,
         );
-        // The tinted glyph (12px art scaled to badge_px), centered.
-        if let Some(Some(svg)) = res.svgs.get(&status) {
-            let dc5 = rt.cast::<ID2D1DeviceContext5>()?;
-            let vp = svg.GetViewportSize();
-            let scale = badge_px / vp.width;
+        // The tinted glyph (native art scaled to badge_px), centered.
+        if let Some((Some(geometry), color)) = res.glyphs.get(&status) {
+            let brush = rt.CreateSolidColorBrush(color, None)?;
+            let scale = badge_px / res.art_px as f32;
             let left = center.X - badge_px / 2.0;
             let top = center.Y - badge_px / 2.0;
-            dc5.SetTransform(&Matrix3x2 { M11: scale, M12: 0.0, M21: 0.0, M22: scale, M31: left, M32: top });
-            dc5.DrawSvgDocument(svg);
-            dc5.SetTransform(&Matrix3x2::identity());
+            rt.SetTransform(&Matrix3x2 { M11: scale, M12: 0.0, M21: 0.0, M22: scale, M31: left, M32: top });
+            rt.FillGeometry(geometry, &brush, None);
+            rt.SetTransform(&Matrix3x2::identity());
         }
     }
     Ok(())
@@ -303,7 +282,7 @@ impl QT {
 
 fn on_create(window: HWND, state: State) -> Result<Context> {
     unsafe {
-        let dpi = GetDpiForWindow(window);
+        let dpi = dpi_for_window(window);
         let render_target = state.qt.d2d_factory.CreateHwndRenderTarget(
             &D2D1_RENDER_TARGET_PROPERTIES {
                 dpiX: dpi as f32,
@@ -407,7 +386,7 @@ extern "system" fn window_proc(window: HWND, message: u32, w_param: WPARAM, l_pa
         WM_DPICHANGED_BEFOREPARENT => unsafe {
             let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
             let context = &*raw;
-            let new_dpi = GetDpiForWindow(window);
+            let new_dpi = dpi_for_window(window);
             context.render_target.SetDpi(new_dpi as f32, new_dpi as f32);
             _ = layout(window, context);
             _ = InvalidateRect(Some(window), None, false);

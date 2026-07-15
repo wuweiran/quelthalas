@@ -13,11 +13,10 @@ use std::mem::size_of;
 use std::sync::Once;
 
 use windows::Win32::Foundation::*;
-use windows::Win32::Graphics::Direct2D::Common::{D2D_RECT_F, D2D_SIZE_F, D2D_SIZE_U, D2D1_COLOR_F};
+use windows::Win32::Graphics::Direct2D::Common::{D2D_RECT_F, D2D_SIZE_U, D2D1_COLOR_F};
 use windows::Win32::Graphics::Direct2D::{
     D2D1_DRAW_TEXT_OPTIONS_CLIP, D2D1_HWND_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_PROPERTIES,
-    D2D1_ROUNDED_RECT, D2D1_SVG_PAINT_TYPE_COLOR, ID2D1DeviceContext5, ID2D1HwndRenderTarget,
-    ID2D1SvgAttribute, ID2D1SvgDocument,
+    D2D1_ROUNDED_RECT, ID2D1HwndRenderTarget, ID2D1PathGeometry1,
 };
 use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_MEASURING_MODE_NATURAL,
@@ -28,14 +27,14 @@ use windows::Win32::Graphics::Gdi::{
     BeginPaint, CreateRoundRectRgn, EndPaint, InvalidateRect, MapWindowPoints, PAINTSTRUCT,
     SetWindowRgn,
 };
-use windows::Win32::UI::HiDpi::GetDpiForWindow;
-use windows::Win32::UI::Shell::SHCreateMemStream;
+use crate::sys::dpi_for_window;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::*;
 use windows_numerics::Matrix3x2;
 
 use crate::component::button;
 use crate::icon::Icon;
+use crate::icon::path::build_geometry;
 use crate::{MouseEvent, QT, get_scaling_factor};
 
 /// Bar height (DIPs) — fits a 24px Small action button with vertical padding.
@@ -135,7 +134,7 @@ struct Context {
     render_target: ID2D1HwndRenderTarget,
     text_format: IDWriteTextFormat,
     title_format: IDWriteTextFormat,
-    icon_svg: Option<ID2D1SvgDocument>,
+    icon_geometry: Option<ID2D1PathGeometry1>,
 }
 
 impl QT {
@@ -192,29 +191,6 @@ impl QT {
     }
 }
 
-fn set_svg_color(svg: &ID2D1SvgDocument, color: &D2D1_COLOR_F) {
-    unsafe {
-        if let Ok(paint) = svg.CreatePaint(D2D1_SVG_PAINT_TYPE_COLOR, Some(color), w!("")) {
-            if let (Ok(root), Ok(attr)) = (svg.GetRoot(), paint.cast::<ID2D1SvgAttribute>()) {
-                if let Ok(child) = root.GetFirstChild() {
-                    _ = child.SetAttributeValue(w!("fill"), &attr);
-                }
-            }
-        }
-    }
-}
-
-fn make_svg(dc5: &ID2D1DeviceContext5, icon: &Icon, color: &D2D1_COLOR_F) -> Option<ID2D1SvgDocument> {
-    unsafe {
-        let stream = SHCreateMemStream(Some(icon.svg.as_bytes()))?;
-        let svg = dc5
-            .CreateSvgDocument(&stream, D2D_SIZE_F { width: icon.size as f32, height: icon.size as f32 })
-            .ok()?;
-        set_svg_color(&svg, color);
-        Some(svg)
-    }
-}
-
 /// Natural width (DIPs) of `text` in `format`.
 fn measure_width(qt: &QT, format: &IDWriteTextFormat, text: PCWSTR) -> f32 {
     unsafe {
@@ -258,7 +234,7 @@ fn on_create(window: HWND, mut state: State, actions: Vec<Action>) -> Result<Con
         title_format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
         title_format.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)?;
 
-        let dpi = GetDpiForWindow(window);
+        let dpi = dpi_for_window(window);
         let render_target = state.qt.d2d_factory.CreateHwndRenderTarget(
             &D2D1_RENDER_TARGET_PROPERTIES {
                 dpiX: dpi as f32,
@@ -272,11 +248,9 @@ fn on_create(window: HWND, mut state: State, actions: Vec<Action>) -> Result<Con
             },
         )?;
 
-        let icon_color = state.icon_color();
-        let icon_svg = match render_target.cast::<ID2D1DeviceContext5>() {
-            Ok(dc5) => make_svg(&dc5, &state.icon(), &icon_color),
-            Err(_) => None,
-        };
+        // The intent icon is a filled geometry (Direct2D 1.0); its tint is applied at
+        // draw time via a brush (the intent color), so we only build the shape here.
+        let icon_geometry = build_geometry(&state.qt.d2d_factory, &state.icon()).ok();
 
         // Create the real action Buttons, parented to the bar (Secondary, Small).
         for action in actions {
@@ -296,7 +270,7 @@ fn on_create(window: HWND, mut state: State, actions: Vec<Action>) -> Result<Con
             }
         }
 
-        Ok(Context { state, render_target, text_format, title_format, icon_svg })
+        Ok(Context { state, render_target, text_format, title_format, icon_geometry })
     }
 }
 
@@ -367,13 +341,16 @@ fn paint(window: HWND, context: &Context) -> Result<()> {
         // Intent icon at the left, vertically centered.
         let pad = tokens.spacing_horizontal_m;
         let icon_top = (height - ICON) / 2.0;
-        if let Some(svg) = &context.icon_svg {
-            let dc5 = context.render_target.cast::<ID2D1DeviceContext5>()?;
-            let vp = svg.GetViewportSize();
-            let scale = ICON / vp.width;
-            dc5.SetTransform(&Matrix3x2 { M11: scale, M12: 0.0, M21: 0.0, M22: scale, M31: pad, M32: icon_top });
-            dc5.DrawSvgDocument(svg);
-            dc5.SetTransform(&Matrix3x2::identity());
+        if let Some(geometry) = &context.icon_geometry {
+            // Native art size of the intent icon (all intent icons are 20px).
+            let native = state.icon().size as f32;
+            let scale = ICON / native;
+            // Same intent-based tint the SVG path baked in (info/success/warning/error).
+            let icon_color = state.icon_color();
+            let icon_brush = context.render_target.CreateSolidColorBrush(&icon_color, None)?;
+            context.render_target.SetTransform(&Matrix3x2 { M11: scale, M12: 0.0, M21: 0.0, M22: scale, M31: pad, M32: icon_top });
+            context.render_target.FillGeometry(geometry, &icon_brush, None);
+            context.render_target.SetTransform(&Matrix3x2::identity());
         }
 
         // Content row: [title (semibold)] [message], after the icon and clipped to end
@@ -475,7 +452,7 @@ extern "system" fn window_proc(window: HWND, message: u32, w_param: WPARAM, l_pa
         WM_DPICHANGED_BEFOREPARENT => unsafe {
             let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
             let context = &*raw;
-            let new_dpi = GetDpiForWindow(window);
+            let new_dpi = dpi_for_window(window);
             context.render_target.SetDpi(new_dpi as f32, new_dpi as f32);
             _ = layout(window, context);
             _ = InvalidateRect(Some(window), None, false);
