@@ -245,7 +245,10 @@ impl Context {
 
     /// Left DIP where a row's text starts, for the given depth.
     fn text_x(&self, depth: usize) -> f32 {
-        self.glyph_x(depth) + CHEVRON_GLYPH + CHEVRON_GAP
+        self.glyph_x(depth)
+            + CHEVRON_GLYPH
+            + CHEVRON_GAP
+            + self.state.qt.theme.tokens.spacing_horizontal_xxs
     }
 
     /// The flat visible index of the currently-selected path, if visible.
