@@ -135,6 +135,10 @@ struct Context {
     selected_index: Option<usize>,
     is_focused: bool,
     is_hovered: bool,
+    /// Swallow the next WM_LBUTTONUP (the tail of a click that closed the popup).
+    /// Needed because the modal `run_popup` dismisses on button-DOWN; combobox's
+    /// non-modal popup toggles in its own down-handler and needs no such flag.
+    suppress_next_up: bool,
 }
 
 impl QT {
@@ -289,6 +293,7 @@ fn on_create(window: HWND, state: State) -> Result<Context> {
             selected_index,
             is_focused: false,
             is_hovered: false,
+            suppress_next_up: false,
         })
     }
 }
@@ -698,12 +703,22 @@ extern "system" fn field_proc(
             LRESULT(0)
         },
         WM_LBUTTONDOWN => unsafe {
+            let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
+            // Fresh press: clear any stale suppression.
+            if !raw.is_null() {
+                (*raw).suppress_next_up = false;
+            }
             _ = SetFocus(Some(window));
             LRESULT(0)
         },
         WM_LBUTTONUP => unsafe {
             let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
-            open(window, raw);
+            // Swallow the UP that tails a click which just closed the popup.
+            if !raw.is_null() && (*raw).suppress_next_up {
+                (*raw).suppress_next_up = false;
+            } else {
+                open(window, raw);
+            }
             LRESULT(0)
         },
         WM_GETDLGCODE => LRESULT((DLGC_WANTARROWS | DLGC_WANTCHARS) as isize),
@@ -1165,6 +1180,13 @@ fn run_popup(qt: &QT, field: HWND, options: &[Item], selected: Option<usize>) ->
             let target = WindowFromPoint(pt);
             if !target.is_invalid() && target != field {
                 _ = SetFocus(Some(target));
+            } else if target == field {
+                // Dismissed by a press on the field: flag it to swallow the trailing UP,
+                // so a click while open just closes.
+                let fraw = GetWindowLongPtrW(field, GWLP_USERDATA) as *mut Context;
+                if !fraw.is_null() {
+                    (*fraw).suppress_next_up = true;
+                }
             }
         }
         result
