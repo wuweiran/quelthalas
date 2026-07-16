@@ -5,6 +5,37 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-07-16
+
+### Added
+
+- **Windows 7 support.** The library now runs on Windows 7 SP1. Icons render as
+  Direct2D 1.0 path geometry (parsed from the Fluent SVG `d` strings) instead of
+  Direct2D SVG documents; per-monitor DPI is resolved at runtime via
+  `GetProcAddress` with a system-DPI fallback; and animations use the v1 Windows
+  Animation Manager with a custom cubic-bezier interpolator that reproduces the
+  Fluent easing curve exactly. A standard stable-Rust build still targets Windows
+  10+ (the prebuilt `std` does); the tier-3 `*-win7-windows-msvc` target builds
+  for Windows 7. See the README's "Windows 7" section.
+- **`QT::scale_factor(window)`** — a public DPI scale accessor for callers sizing
+  controls (routed through the DPI shim, so it is Windows 7-safe).
+
+### Changed
+
+- **BREAKING: control geometry is now physical device pixels.** `x`, `y`, `width`,
+  and `height` on every component's `Props` are physical pixels (the Win32
+  convention), so a DPI-aware caller scales its logical sizes by
+  `QT::scale_factor(window)`. Previously `width`/`height` were treated as DIPs
+  (auto-scaled) in most components but as physical pixels in a few — this unifies
+  them. Callers passing fixed `width`/`height` must now multiply by the scale
+  factor to keep the same apparent size.
+- **TreeView**: row labels get a small left padding (`spacingHorizontalXXS`).
+
+### Fixed
+
+- **Dropdown**: clicking the field while the list is open now closes it (and stays
+  closed) instead of immediately re-opening, matching the combobox toggle.
+
 ## [0.3.0] - 2026-07-13
 
 ### Added
@@ -105,6 +136,7 @@ input, link, menu, menu_bar, option, progress_bar, radio, slider, spin_button,
 spinner, switch, tab_list, text, textarea, and tooltip, plus a shared `scroll`
 helper.
 
+[0.4.0]: https://github.com/wuweiran/quelthalas/releases/tag/v0.4.0
 [0.3.0]: https://github.com/wuweiran/quelthalas/releases/tag/v0.3.0
 [0.2.1]: https://github.com/wuweiran/quelthalas/releases/tag/v0.2.1
 [0.2.0]: https://github.com/wuweiran/quelthalas/releases/tag/v0.2.0
