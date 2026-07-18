@@ -50,8 +50,7 @@ custom cubic-bezier interpolator.
 
 The only Windows 10 floor is the **prebuilt Rust `std`** for the default MSVC
 targets. Building for Windows 7 therefore uses Rust's tier-3
-`*-win7-windows-msvc` target (which compiles `std` from source), a static CRT,
-and one post-link patch:
+`*-win7-windows-msvc` target (which compiles `std` from source) and a static CRT:
 
 ```sh
 # One-time setup (nightly + std source for build-std)
@@ -62,12 +61,25 @@ RUSTFLAGS="-C target-feature=+crt-static" \
   cargo +nightly build --release -Z build-std=std,panic_abort \
   --target i686-win7-windows-msvc -p sample
 
-# Redirect the one Win8+ import (combase.dll) to its Windows 7 home (ole32.dll)
-python3 scripts/patch-combase-to-ole32.py \
-  target/i686-win7-windows-msvc/release/sample.exe
-
 # Optional: verify the binary has no Windows 7 load blockers (needs MSVC dumpbin)
 scripts/check-win7-imports.sh target/i686-win7-windows-msvc/release/sample.exe
+```
+
+The one Win8+ import that `windows-core`'s COM runtime hardcodes (`combase.dll`)
+is redirected to its Windows 7 home (`ole32.dll`) at **link time** by a small
+vendored `windows-link` (`vendor/windows-link/`), applied via
+`[patch.crates-io]` and gated to the `win7` target — so there is no post-build
+step and non-Win7 builds are unaffected.
+
+Because Cargo only honors `[patch]` in the **root** manifest being built (a
+library's patches are ignored by its consumers), a downstream app that wants the
+Windows 7 build must copy `vendor/windows-link/` into its own project and
+add the patch to its **own** workspace `Cargo.toml` (adjust the path to wherever
+you place it):
+
+```toml
+[patch.crates-io]
+windows-link = { path = "vendor/windows-link" }
 ```
 
 On the Windows 7 machine, install the **Platform Update for Windows 7 SP1

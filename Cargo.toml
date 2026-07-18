@@ -4,3 +4,9 @@ members = [
     "qt",
     "sample"
 ]
+
+# Vendored windows-link that redirects combase.dll -> ole32.dll on the Windows 7
+# targets (see vendor/windows-link/src/lib.rs). Non-Win7 builds are unaffected.
+# `[patch]` is only honored in the root manifest, so it must live here.
+[patch.crates-io]
+windows-link = { path = "vendor/windows-link" }

@@ -1,0 +1,12 @@
+[package]
+name = "windows-link"
+version = "0.2.1"
+edition = "2021"
+rust-version = "1.71"
+description = "Linking for Windows (vendored: adds a Windows 7 combase.dll -> ole32.dll redirect)"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/microsoft/windows-rs"
+
+[lib]
+name = "windows_link"
+path = "src/lib.rs"
