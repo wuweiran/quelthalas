@@ -51,9 +51,9 @@ use windows::Win32::UI::Input::Ime::{
     ImmReleaseContext, ImmSetCompositionFontW, ImmSetCompositionWindow,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetCapture, GetKeyState, ReleaseCapture, SetCapture, SetFocus, TME_LEAVE, TRACKMOUSEEVENT,
-    TrackMouseEvent, VK_BACK, VK_CONTROL, VK_DELETE, VK_END, VK_HOME, VK_INSERT, VK_LEFT, VK_MENU,
-    VK_RIGHT, VK_SHIFT,
+    EnableWindow, GetCapture, GetKeyState, IsWindowEnabled, ReleaseCapture, SetCapture, SetFocus,
+    TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent, VK_BACK, VK_CONTROL, VK_DELETE, VK_END, VK_HOME,
+    VK_INSERT, VK_LEFT, VK_MENU, VK_RIGHT, VK_SHIFT,
 };
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::*;
@@ -114,6 +114,8 @@ pub struct Props {
     pub default_value: Option<PCWSTR>,
     pub input_type: Type,
     pub placeholder: Option<PCWSTR>,
+    pub disabled: bool,
+    pub background: Option<D2D1_COLOR_F>,
 }
 
 impl Default for Props {
@@ -125,6 +127,8 @@ impl Default for Props {
             default_value: None,
             input_type: Type::Text,
             placeholder: None,
+            disabled: false,
+            background: None,
         }
     }
 }
@@ -137,6 +141,7 @@ pub struct State {
     default_value: Option<PCWSTR>,
     input_type: Type,
     placeholder: Option<PCWSTR>,
+    background: Option<D2D1_COLOR_F>,
 }
 
 impl State {
@@ -380,8 +385,9 @@ impl QT {
                 default_value: props.default_value,
                 input_type: props.input_type,
                 placeholder: props.placeholder,
+                background: props.background,
             });
-            CreateWindowExW(
+            let hwnd = CreateWindowExW(
                 WINDOW_EX_STYLE::default(),
                 class_name,
                 w!(""),
@@ -396,7 +402,11 @@ impl QT {
                     GetWindowLongPtrW(parent_window, GWLP_HINSTANCE) as _
                 )),
                 Some(Box::<State>::into_raw(boxed) as _),
-            )
+            )?;
+            if props.disabled {
+                _ = EnableWindow(hwnd, false);
+            }
+            Ok(hwnd)
         }
     }
 }
@@ -1436,12 +1446,24 @@ fn sys_color_to_d2d(index: SYS_COLOR_INDEX) -> D2D1_COLOR_F {
 /// Content pass: text, selection, placeholder. Chrome is drawn by the caller.
 fn paint(window: HWND, context: &mut Context) -> Result<()> {
     // Owned snapshots so the `tokens` borrow doesn't outlive the mutable calls below.
-    // FilledDarker uses background3; Outline and FilledLighter both use background1.
-    let background_color = match context.state.appearance {
-        Appearance::FilledDarker => context.state.qt.theme.tokens.color_neutral_background3,
-        _ => context.state.qt.theme.tokens.color_neutral_background1,
+    // Field fill. An enabled Outline/Filled field is opaque (background1, or
+    // background3 for FilledDarker). Disabled is Fluent's transparent — emulated by
+    // filling with the caller's page `background` so the field blends into the page.
+    let disabled = unsafe { !IsWindowEnabled(window).as_bool() };
+    let tokens = &context.state.qt.theme.tokens;
+    let background_color = if disabled {
+        context.state.background.unwrap_or(tokens.color_neutral_background1)
+    } else {
+        match context.state.appearance {
+            Appearance::FilledDarker => tokens.color_neutral_background3,
+            _ => tokens.color_neutral_background1,
+        }
     };
-    let foreground_color = context.state.qt.theme.tokens.color_neutral_foreground1;
+    let foreground_color = if disabled {
+        tokens.color_neutral_foreground_disabled
+    } else {
+        tokens.color_neutral_foreground1
+    };
     let rt = context.render_target.clone();
     unsafe {
         rt.Clear(Some(&background_color));
@@ -1642,8 +1664,11 @@ fn paint_content_and_chrome(window: HWND, context: &mut Context) -> Result<()> {
         // borderColor: colorTransparentStroke), so they draw neither the border
         // nor the resting bottom accent — only the brand focus underline below.
         if let Appearance::Outline = context.state.appearance {
-            // Fluent Input outline :hover → colorNeutralStroke1Hover (focus wins).
-            let border_color = if context.is_focused {
+            // Fluent Input outline :hover → colorNeutralStroke1Hover (focus wins);
+            // disabled → colorNeutralStrokeDisabled.
+            let border_color = if !IsWindowEnabled(window).as_bool() {
+                &tokens.color_neutral_stroke_disabled
+            } else if context.is_focused {
                 &tokens.color_neutral_stroke1_pressed
             } else if context.is_hovered {
                 &tokens.color_neutral_stroke1_hover
@@ -1664,20 +1689,23 @@ fn paint_content_and_chrome(window: HWND, context: &mut Context) -> Result<()> {
             rt.DrawRoundedRectangle(&rounded, &border_brush, stroke, &context.state.qt.stroke_style);
 
             // Bottom accent; Fluent :hover → colorNeutralStrokeAccessibleHover (the
-            // focus brand underline is drawn over it below).
-            let accent_color = if context.is_hovered && !context.is_focused {
-                &tokens.color_neutral_stroke_accessible_hover
-            } else {
-                &tokens.color_neutral_stroke_accessible
-            };
-            let accent_brush = rt.CreateSolidColorBrush(accent_color, None)?;
-            let accent_geometry = bottom_accent_geometry(
-                &context.state.qt.d2d_factory,
-                width,
-                radius,
-                height - stroke * 0.5,
-            )?;
-            rt.DrawGeometry(&accent_geometry, &accent_brush, stroke, &context.state.qt.stroke_style);
+            // focus brand underline is drawn over it below). Suppressed when disabled —
+            // a disabled Outline field is just the flat strokeDisabled outline.
+            if IsWindowEnabled(window).as_bool() {
+                let accent_color = if context.is_hovered && !context.is_focused {
+                    &tokens.color_neutral_stroke_accessible_hover
+                } else {
+                    &tokens.color_neutral_stroke_accessible
+                };
+                let accent_brush = rt.CreateSolidColorBrush(accent_color, None)?;
+                let accent_geometry = bottom_accent_geometry(
+                    &context.state.qt.d2d_factory,
+                    width,
+                    radius,
+                    height - stroke * 0.5,
+                )?;
+                rt.DrawGeometry(&accent_geometry, &accent_brush, stroke, &context.state.qt.stroke_style);
+            }
         }
 
         // Brand underline grows from the centre on focus, over the resting line.
@@ -2010,6 +2038,10 @@ extern "system" fn window_proc(
             let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
             let context = &mut *raw;
             context.is_hovered = false;
+            _ = InvalidateRect(Some(window), None, false);
+            LRESULT(0)
+        },
+        WM_ENABLE => unsafe {
             _ = InvalidateRect(Some(window), None, false);
             LRESULT(0)
         },

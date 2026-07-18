@@ -11,6 +11,7 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
 use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::*;
@@ -400,6 +401,39 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
                             input_type: input::Type::Password,
                             placeholder: Some(w!("Small with placeholder")),
                             ..Default::default()
+                        },
+                    )
+                    .unwrap_or_default();
+                let input_disabled = qt
+                    .create_input(
+                        window,
+                        0,
+                        0,
+                        input::Props {
+                            width: (300.0 * scale) as i32,
+                            default_value: Some(w!("disabled value")),
+                            disabled: true,
+                            background: Some(palette.canvas),
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap_or_default();
+                // Toggles the disabled input's enabled state at runtime — exercises the
+                // live WM_ENABLE path (like Fluent's "Disabled" toggle in its docs).
+                let disable_toggle = qt
+                    .create_switch(
+                        window,
+                        0,
+                        0,
+                        switch::Props {
+                            label: w!("Disabled"),
+                            checked: true,
+                            background: Some(palette.canvas),
+                            mouse_event: switch::MouseEvent {
+                                on_change: Box::new(move |_, checked| {
+                                    _ = EnableWindow(input_disabled, !checked);
+                                }),
+                            },
                         },
                     )
                     .unwrap_or_default();
@@ -1675,7 +1709,9 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
                                     .add(input_filled)
                                     .add(input_filled_darker),
                             )
-                            .add(input_password),
+                            .add(input_password)
+                            .add(input_disabled)
+                            .add(disable_toggle),
                     )
                     .add_stack(
                         Stack::vertical()
