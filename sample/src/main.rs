@@ -313,6 +313,18 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
                         },
                     )
                     .unwrap_or_default();
+                let disabled_button = qt
+                    .create_button(
+                        window,
+                        0,
+                        0,
+                        button::Props {
+                            text: w!("Disabled state"),
+                            disabled: true,
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap_or_default();
                 let small_icon = qt
                     .create_button(
                         window,
@@ -1597,6 +1609,7 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
                                     .add(square)
                                     .add(primary),
                             )
+                            .add_stack(Stack::horizontal().add(disabled_button))
                             .add_stack(
                                 Stack::vertical()
                                     .gap(gap_s)

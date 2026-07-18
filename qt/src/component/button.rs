@@ -32,7 +32,7 @@ use windows::Win32::UI::Animation::{
 use windows::Win32::UI::Controls::WM_MOUSELEAVE;
 use crate::sys::dpi_for_window;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    SetFocus, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent,
+    EnableWindow, IsWindowEnabled, SetFocus, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent,
 };
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::*;
@@ -72,6 +72,7 @@ pub struct Props {
     pub shape: Shape,
     pub size: Size,
     pub mouse_event: MouseEvent,
+    pub disabled: bool,
 }
 
 impl Default for Props {
@@ -84,6 +85,7 @@ impl Default for Props {
             shape: Shape::Rounded,
             size: Size::Medium,
             mouse_event: MouseEvent::default(),
+            disabled: false,
         }
     }
 }
@@ -222,7 +224,7 @@ impl QT {
             } else {
                 boxed.as_ref().get_min_width()
             };
-            CreateWindowExW(
+            let hwnd = CreateWindowExW(
                 WINDOW_EX_STYLE::default(),
                 class_name,
                 w!(""),
@@ -237,7 +239,11 @@ impl QT {
                     GetWindowLongPtrW(parent_window, GWLP_HINSTANCE) as _
                 )),
                 Some(Box::<State>::into_raw(boxed) as _),
-            )
+            )?;
+            if props.disabled {
+                _ = EnableWindow(hwnd, false);
+            }
+            Ok(hwnd)
         }
     }
 }
@@ -460,7 +466,12 @@ fn paint(window: HWND, context: &Context) -> Result<()> {
             radiusX: corner_radius,
             radiusY: corner_radius,
         };
-        let background_color = context.background_color.get()?;
+        let disabled = !IsWindowEnabled(window).as_bool();
+        let background_color = if disabled {
+            tokens.color_neutral_background_disabled
+        } else {
+            context.background_color.get()?
+        };
         let background_brush = context
             .render_target
             .CreateSolidColorBrush(&background_color, None)?;
@@ -470,7 +481,11 @@ fn paint(window: HWND, context: &Context) -> Result<()> {
 
         if let Appearance::Primary = state.appearance {
         } else {
-            let border_color = context.border_color.get()?;
+            let border_color = if disabled {
+                tokens.color_neutral_stroke_disabled
+            } else {
+                context.border_color.get()?
+            };
             let border_brush = context
                 .render_target
                 .CreateSolidColorBrush(&border_color, None)?;
@@ -492,7 +507,11 @@ fn paint(window: HWND, context: &Context) -> Result<()> {
             );
         }
 
-        let text_color = context.text_color.get()?;
+        let text_color = if disabled {
+            tokens.color_neutral_foreground_disabled
+        } else {
+            context.text_color.get()?
+        };
         let text_brush = context
             .render_target
             .CreateSolidColorBrush(&text_color, None)?;
@@ -541,11 +560,13 @@ fn paint(window: HWND, context: &Context) -> Result<()> {
                 let native = icon.size as f32;
                 let desired_size = state.get_desired_icon_size();
                 let scale = desired_size / native;
-                // Same appearance-based tint the SVG path baked in — the icon does not
-                // animate with the text color, so this constant reproduces it exactly.
-                let icon_color = match state.appearance {
-                    Appearance::Primary => &tokens.color_neutral_foreground_on_brand,
-                    _ => &tokens.color_neutral_foreground1,
+                let icon_color = if disabled {
+                    &tokens.color_neutral_foreground_disabled
+                } else {
+                    match state.appearance {
+                        Appearance::Primary => &tokens.color_neutral_foreground_on_brand,
+                        _ => &tokens.color_neutral_foreground1,
+                    }
                 };
                 let icon_brush = context
                     .render_target
@@ -721,6 +742,10 @@ extern "system" fn window_proc(
         WM_DESTROY => unsafe {
             let raw = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Context;
             _ = Box::<Context>::from_raw(raw);
+            LRESULT(0)
+        },
+        WM_ENABLE => unsafe {
+            _ = InvalidateRect(Some(window), None, false);
             LRESULT(0)
         },
         WM_PAINT => unsafe {
