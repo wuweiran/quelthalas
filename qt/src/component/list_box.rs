@@ -262,6 +262,92 @@ impl QT {
             if raw.is_null() { None } else { (*raw).selected }
         }
     }
+
+    /// Append `item` to the end of the list; returns its index. (Like `LB_ADDSTRING`.)
+    /// Existing selection is unchanged (appending never shifts indices).
+    pub fn list_box_add(&self, list_box: HWND, item: Item) -> Option<usize> {
+        unsafe {
+            let raw = GetWindowLongPtrW(list_box, GWLP_USERDATA) as *mut Context;
+            if raw.is_null() {
+                return None;
+            }
+            let context = &mut *raw;
+            context.state.items.push(item);
+            let i = context.state.items.len() - 1;
+            after_items_changed(list_box, context);
+            Some(i)
+        }
+    }
+
+    /// Insert `item` at `index` (clamped to the list length). (Like `LB_INSERTSTRING`.)
+    /// A selection at or after `index` shifts down by one to track the same item.
+    pub fn list_box_insert(&self, list_box: HWND, index: usize, item: Item) -> usize {
+        unsafe {
+            let raw = GetWindowLongPtrW(list_box, GWLP_USERDATA) as *mut Context;
+            if raw.is_null() {
+                return 0;
+            }
+            let context = &mut *raw;
+            let i = index.min(context.state.items.len());
+            context.state.items.insert(i, item);
+            if let Some(sel) = context.selected {
+                if sel >= i {
+                    context.selected = Some(sel + 1);
+                }
+            }
+            after_items_changed(list_box, context);
+            i
+        }
+    }
+
+    /// Remove the item at `index` (no-op if out of range); returns true if removed.
+    /// (Like `LB_DELETESTRING`.) Removing the selected row clears the selection;
+    /// removing a row above it shifts the selection up by one.
+    pub fn list_box_remove(&self, list_box: HWND, index: usize) -> bool {
+        unsafe {
+            let raw = GetWindowLongPtrW(list_box, GWLP_USERDATA) as *mut Context;
+            if raw.is_null() {
+                return false;
+            }
+            let context = &mut *raw;
+            if index >= context.state.items.len() {
+                return false;
+            }
+            context.state.items.remove(index);
+            context.selected = match context.selected {
+                Some(sel) if sel == index => None,
+                Some(sel) if sel > index => Some(sel - 1),
+                other => other,
+            };
+            after_items_changed(list_box, context);
+            true
+        }
+    }
+
+    /// Remove every item and clear the selection. (Like `LB_RESETCONTENT`.)
+    pub fn list_box_clear(&self, list_box: HWND) {
+        unsafe {
+            let raw = GetWindowLongPtrW(list_box, GWLP_USERDATA) as *mut Context;
+            if raw.is_null() {
+                return;
+            }
+            let context = &mut *raw;
+            context.state.items.clear();
+            context.selected = None;
+            after_items_changed(list_box, context);
+        }
+    }
+}
+
+/// Shared re-plumbing after the item list changes: recompute scroll metrics (which
+/// re-clamps the offset), drop the stale hover (row identities may have shifted; the
+/// next mouse move recomputes it), and repaint.
+fn after_items_changed(window: HWND, context: &mut Context) {
+    context.hovered = None;
+    update_metrics(context);
+    unsafe {
+        _ = InvalidateRect(Some(window), None, false);
+    }
 }
 
 fn create_text_format(qt: &QT, font_size: f32) -> Result<IDWriteTextFormat> {

@@ -812,6 +812,38 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
                     )
                     .unwrap_or_default();
 
+                // Demo of the runtime list_box mutation API: append a row on click.
+                // Labels are cycled from a static table so the appended text (a
+                // `PCWSTR`) stays alive for the list's lifetime.
+                let add_list_item = qt
+                    .create_button(
+                        window,
+                        0,
+                        0,
+                        button::Props {
+                            text: w!("Add item"),
+                            size: button::Size::Small,
+                            mouse_event: MouseEvent {
+                                on_click: Box::new({
+                                    let qt = qt.clone();
+                                    move |_| {
+                                        use std::sync::atomic::{AtomicUsize, Ordering};
+                                        // `w!` literals are 'static; PCWSTR isn't Sync,
+                                        // so the table is a local (only the counter is
+                                        // a static, and AtomicUsize is Sync).
+                                        let moons: [PCWSTR; 4] =
+                                            [w!("Io"), w!("Europa"), w!("Ganymede"), w!("Callisto")];
+                                        static NEXT: AtomicUsize = AtomicUsize::new(0);
+                                        let i = NEXT.fetch_add(1, Ordering::Relaxed) % moons.len();
+                                        qt.list_box_add(list_box, option::Item::new(moons[i]));
+                                    }
+                                }),
+                            },
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap_or_default();
+
                 let tree_view_label = section(w!("Tree view"));
                 let tree_view = qt
                     .create_tree_view(
@@ -1592,7 +1624,8 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
                                 Stack::vertical()
                                     .gap(gap_s)
                                     .add(list_box_label)
-                                    .add(list_box),
+                                    .add(list_box)
+                                    .add(add_list_item),
                             )
                             .add_stack(
                                 Stack::vertical()
