@@ -5,6 +5,44 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-07-19
+
+### Added
+
+- **`Grid` layout** — a reposition-only table sibling to `Stack`: cells line up
+  into columns across rows (a column's width is its widest natural cell), placed
+  with `SWP_NOSIZE` like `Stack` so no control is ever resized. Build with
+  `Grid::new().col_gap(..).row_gap(..).row(vec![..])` and nest via
+  `Stack::add_grid`.
+- **Disabled state for `Input` and `Button`.** A `disabled` flag on `Props`
+  drives `EnableWindow`, so the OS handles input/focus/tab-skip natively; painting
+  reads `IsWindowEnabled` and applies the Fluent disabled tokens
+  (`colorNeutralForegroundDisabled`, `colorNeutralBackgroundDisabled`,
+  `colorNeutralStrokeDisabled`).
+- **`background` prop on `Input`** — the page surface color behind the field, so a
+  field over a non-default surface composites correctly.
+- **Runtime item mutation for `ListBox`** — `list_box_add` / `list_box_insert` /
+  `list_box_remove` / `list_box_clear`, the Fluent analogue of `LB_ADDSTRING`,
+  `LB_INSERTSTRING`, `LB_DELETESTRING`, and `LB_RESETCONTENT`, with selection
+  bookkeeping preserved across each edit.
+- **Full Fluent spacing ramp exposed** on `Theme::tokens` — the previously missing
+  `spacing_{horizontal,vertical}_*` steps (`s_nudge`, `m_nudge`, `l`, `xl`, …) are
+  now public, plus `color_neutral_background_disabled` and
+  `color_neutral_stroke_disabled`.
+- **Sample: a "Theme" tab** visualizing the spacing ramp as two `Grid` tables
+  (vertical / horizontal families).
+
+### Changed
+
+- **Release builds use the Windows GUI subsystem** (`windows_subsystem =
+  "windows"`), so a released binary no longer spawns a console window; debug
+  builds keep the console for logging.
+- **Windows 7 support is now applied at link time.** The one Win8+ import in
+  `windows-core`'s COM runtime (`combase.dll`) is redirected to its Windows 7 home
+  (`ole32.dll`) via a small vendored `windows-link` (`vendor/windows-link/`)
+  applied through `[patch.crates-io]` and gated to the `win7` target — replacing
+  the previous post-build patch step. Non-Win7 builds are unaffected.
+
 ## [0.4.0] - 2026-07-16
 
 ### Added
@@ -136,6 +174,7 @@ input, link, menu, menu_bar, option, progress_bar, radio, slider, spin_button,
 spinner, switch, tab_list, text, textarea, and tooltip, plus a shared `scroll`
 helper.
 
+[0.5.0]: https://github.com/wuweiran/quelthalas/releases/tag/v0.5.0
 [0.4.0]: https://github.com/wuweiran/quelthalas/releases/tag/v0.4.0
 [0.3.0]: https://github.com/wuweiran/quelthalas/releases/tag/v0.3.0
 [0.2.1]: https://github.com/wuweiran/quelthalas/releases/tag/v0.2.1
