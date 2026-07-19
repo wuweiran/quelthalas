@@ -30,6 +30,8 @@ enum Item {
     /// vertical stack). Used for a header-style control (e.g. a Fill-width TabList).
     FillControl(HWND),
     Stack(Stack),
+    /// A nested table — columns line up across rows (see `Grid`).
+    Grid(Grid),
     Spacer(f32),
     Spring,
 }
@@ -102,6 +104,11 @@ impl Stack {
         self
     }
 
+    pub fn add_grid(mut self, grid: Grid) -> Self {
+        self.items.push(Item::Grid(grid));
+        self
+    }
+
     pub fn spacer(mut self, dips: f32) -> Self {
         self.items.push(Item::Spacer(dips));
         self
@@ -125,6 +132,7 @@ impl Stack {
             match item {
                 Item::Control(hwnd) | Item::FillControl(hwnd) => out.push(*hwnd),
                 Item::Stack(s) => s.collect_controls(out),
+                Item::Grid(g) => g.collect_controls(out),
                 Item::Spacer(_) | Item::Spring => {}
             }
         }
@@ -156,6 +164,7 @@ impl Stack {
         let (w, h) = match item {
             Item::Control(hwnd) | Item::FillControl(hwnd) => window_size(*hwnd),
             Item::Stack(s) => s.measure(scale),
+            Item::Grid(g) => g.measure(scale),
             Item::Spacer(dips) => {
                 let s = (dips * scale) as i32;
                 match self.orientation {
@@ -290,9 +299,145 @@ impl Stack {
                     };
                     s.arrange_scaled(child_rect, scale)?;
                 }
+                Item::Grid(g) => {
+                    let (x, y) = match self.orientation {
+                        Orientation::Vertical => (inner.left, cursor),
+                        Orientation::Horizontal => (cursor, inner.top),
+                    };
+                    g.arrange_scaled(x, y, scale)?;
+                }
                 Item::Spacer(_) | Item::Spring => {}
             }
             cursor += this_main + gap;
+        }
+        Ok(())
+    }
+}
+
+/// A **reposition-only table**: cells line up into columns across rows. A column's
+/// width is the widest natural cell in it; a row's height is the tallest cell in it.
+/// Like `Stack`, it never resizes controls — it only places each cell at its column
+/// x / row y (`SWP_NOSIZE`). Add it to a `Stack` with `add_grid`.
+pub struct Grid {
+    col_gap: f32,
+    row_gap: f32,
+    /// Vertical placement of each cell within its (possibly taller) row.
+    align: Align,
+    rows: Vec<Vec<HWND>>,
+}
+
+impl Default for Grid {
+    fn default() -> Self {
+        Grid::new()
+    }
+}
+
+impl Grid {
+    pub fn new() -> Self {
+        Grid { col_gap: 0.0, row_gap: 0.0, align: Align::Center, rows: Vec::new() }
+    }
+
+    pub fn col_gap(mut self, dips: f32) -> Self {
+        self.col_gap = dips;
+        self
+    }
+
+    pub fn row_gap(mut self, dips: f32) -> Self {
+        self.row_gap = dips;
+        self
+    }
+
+    pub fn align(mut self, align: Align) -> Self {
+        self.align = align;
+        self
+    }
+
+    /// Append a row of cells (left to right). Rows may differ in length; a column's
+    /// width is the max over the rows that reach it.
+    pub fn row(mut self, cells: Vec<HWND>) -> Self {
+        self.rows.push(cells);
+        self
+    }
+
+    fn collect_controls(&self, out: &mut Vec<HWND>) {
+        for row in &self.rows {
+            out.extend(row.iter().copied());
+        }
+    }
+
+    /// Per-column widths (px) — the max natural cell width in each column.
+    fn col_widths(&self) -> Vec<i32> {
+        let mut widths: Vec<i32> = Vec::new();
+        for row in &self.rows {
+            for (c, &hwnd) in row.iter().enumerate() {
+                let w = window_size(hwnd).0;
+                if c >= widths.len() {
+                    widths.push(w);
+                } else {
+                    widths[c] = widths[c].max(w);
+                }
+            }
+        }
+        widths
+    }
+
+    /// Per-row heights (px) — the max natural cell height in each row.
+    fn row_heights(&self) -> Vec<i32> {
+        self.rows
+            .iter()
+            .map(|row| row.iter().map(|&h| window_size(h).1).max().unwrap_or(0))
+            .collect()
+    }
+
+    fn measure(&self, scale: f32) -> (i32, i32) {
+        let cols = self.col_widths();
+        let rows = self.row_heights();
+        let col_gap = (self.col_gap * scale) as i32;
+        let row_gap = (self.row_gap * scale) as i32;
+        let mut w: i32 = cols.iter().sum();
+        if cols.len() > 1 {
+            w += col_gap * (cols.len() as i32 - 1);
+        }
+        let mut h: i32 = rows.iter().sum();
+        if rows.len() > 1 {
+            h += row_gap * (rows.len() as i32 - 1);
+        }
+        (w, h)
+    }
+
+    /// Position every cell relative to the top-left (`ox`, `oy`) in parent px. Cells
+    /// keep their natural size; only their origin moves.
+    fn arrange_scaled(&self, ox: i32, oy: i32, scale: f32) -> Result<()> {
+        let cols = self.col_widths();
+        let row_h = self.row_heights();
+        let col_gap = (self.col_gap * scale) as i32;
+        let row_gap = (self.row_gap * scale) as i32;
+
+        let mut y = oy;
+        for (r, row) in self.rows.iter().enumerate() {
+            let rh = row_h[r];
+            let mut x = ox;
+            for (c, &hwnd) in row.iter().enumerate() {
+                let ch = window_size(hwnd).1;
+                let cross_off = match self.align {
+                    Align::Start => 0,
+                    Align::Center => (rh - ch) / 2,
+                    Align::End => rh - ch,
+                };
+                unsafe {
+                    SetWindowPos(
+                        hwnd,
+                        None,
+                        x,
+                        y + cross_off,
+                        0,
+                        0,
+                        SWP_NOSIZE | SWP_NOZORDER | SWP_NOCOPYBITS,
+                    )?;
+                }
+                x += cols.get(c).copied().unwrap_or(0) + col_gap;
+            }
+            y += rh + row_gap;
         }
         Ok(())
     }

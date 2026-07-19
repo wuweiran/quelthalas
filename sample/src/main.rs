@@ -26,7 +26,7 @@ use quelthalas::component::{
     task_dialog, text, textarea, toolbar, tree_view,
 };
 use quelthalas::icon::Icon;
-use quelthalas::layout::Stack;
+use quelthalas::layout::{Grid, Stack};
 use quelthalas::{MouseEvent, QT, Theme};
 
 #[derive(Copy, Clone, PartialEq, Eq)]
@@ -202,6 +202,15 @@ const fn gray(v: u8) -> D2D1_COLOR_F {
         r: v as f32 / 255.0,
         g: v as f32 / 255.0,
         b: v as f32 / 255.0,
+        a: 1.0,
+    }
+}
+
+const fn rgb(r: u8, g: u8, b: u8) -> D2D1_COLOR_F {
+    D2D1_COLOR_F {
+        r: r as f32 / 255.0,
+        g: g as f32 / 255.0,
+        b: b as f32 / 255.0,
         a: 1.0,
     }
 }
@@ -1545,6 +1554,7 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
                                 w!("Menus & toolbars"),
                                 w!("Dialogs & flyouts"),
                                 w!("Other"),
+                                w!("Theme"),
                             ],
                             selected_index: active,
                             mouse_event: tab_list::MouseEvent {
@@ -1879,6 +1889,77 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
                             .add(calendar),
                     );
 
+                // Theme tab — the Fluent spacing ramp as two tables (vertical /
+                // horizontal families). Each row: token name | value | a bar whose
+                // length is the token value. The bar is an `image` with empty `src`
+                // (a solid colored rectangle); the `Grid` lines the columns up.
+                let spacing_bar = |w: f32, h: f32, color: D2D1_COLOR_F| {
+                    qt.create_image(
+                        window,
+                        0,
+                        0,
+                        image::Props {
+                            width: w.max(1.0) * scale,
+                            height: h.max(1.0) * scale,
+                            background: Some(color),
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap_or_default()
+                };
+                let cell = |t: PCWSTR| {
+                    qt.create_body1(
+                        window,
+                        0,
+                        0,
+                        text::PresetProps { text: t, background: Some(palette.canvas), ..Default::default() },
+                    )
+                    .unwrap_or_default()
+                };
+                // (vertical field, horizontal field, value, px). Fluent's
+                // `spacing{V,H}None` (0) is omitted — in imperative layout you express
+                // "no gap" by adding no spacer.
+                let spacing_scale: [(PCWSTR, PCWSTR, PCWSTR, f32); 10] = [
+                    (w!("spacing_vertical_xxs"), w!("spacing_horizontal_xxs"), w!("2px"), 2.0),
+                    (w!("spacing_vertical_xs"), w!("spacing_horizontal_xs"), w!("4px"), 4.0),
+                    (w!("spacing_vertical_s_nudge"), w!("spacing_horizontal_s_nudge"), w!("6px"), 6.0),
+                    (w!("spacing_vertical_s"), w!("spacing_horizontal_s"), w!("8px"), 8.0),
+                    (w!("spacing_vertical_m_nudge"), w!("spacing_horizontal_m_nudge"), w!("10px"), 10.0),
+                    (w!("spacing_vertical_m"), w!("spacing_horizontal_m"), w!("12px"), 12.0),
+                    (w!("spacing_vertical_l"), w!("spacing_horizontal_l"), w!("16px"), 16.0),
+                    (w!("spacing_vertical_xl"), w!("spacing_horizontal_xl"), w!("20px"), 20.0),
+                    (w!("spacing_vertical_xxl"), w!("spacing_horizontal_xxl"), w!("24px"), 24.0),
+                    (w!("spacing_vertical_xxxl"), w!("spacing_horizontal_xxxl"), w!("32px"), 32.0),
+                ];
+                let magenta = rgb(0xc4, 0x00, 0x78);
+                let green = rgb(0x00, 0xcc, 0x6a);
+                let mut vertical_grid = Grid::new().col_gap(gap_m).row_gap(gap_s);
+                let mut horizontal_grid = Grid::new().col_gap(gap_m).row_gap(gap_s);
+                for (v_name, h_name, value, px) in spacing_scale {
+                    vertical_grid = vertical_grid.row(vec![
+                        cell(v_name),
+                        cell(value),
+                        spacing_bar(280.0, px, magenta),
+                    ]);
+                    horizontal_grid = horizontal_grid.row(vec![
+                        cell(h_name),
+                        cell(value),
+                        spacing_bar(px, 28.0, green),
+                    ]);
+                }
+                let vertical_col = Stack::vertical()
+                    .gap(gap_s)
+                    .add(section(w!("Vertical")))
+                    .add_grid(vertical_grid);
+                let horizontal_col = Stack::vertical()
+                    .gap(gap_s)
+                    .add(section(w!("Horizontal")))
+                    .add_grid(horizontal_grid);
+                let theme_tokens = Stack::horizontal()
+                    .gap(gap_section)
+                    .add_stack(vertical_col)
+                    .add_stack(horizontal_col);
+
                 // Each page's own controls (for show/hide) — the strip + Close are
                 // always visible, so they're not in these lists.
                 let page_contents = [
@@ -1890,6 +1971,7 @@ fn build_ui(qt: QT, window: HWND, theme: AppTheme, active: usize) -> AppState {
                     menus_toolbars,
                     dialogs_flyouts,
                     other,
+                    theme_tokens,
                 ];
                 let pages: Vec<Page> = page_contents
                     .into_iter()
